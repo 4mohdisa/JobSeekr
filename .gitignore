@@ -1,0 +1,43 @@
+# Runtime data — never commit
+data/
+!data/.gitkeep
+
+# Secrets
+.env
+.env.local
+*.pem
+*credentials*.json
+*token*.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.out
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Playwright
+test-results/
+playwright-report/
+
+# OS
+.DS_Store
+Thumbs.db
