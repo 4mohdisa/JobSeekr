@@ -628,3 +628,81 @@ text (every one of these files legitimately *discusses* the rule in prose):
 - `backend/apply/answers.py` imports no Playwright
 - nothing anywhere sets `allow_live_submit` true, including `.env.example`
 - no hardcoded `time.sleep` in the apply layer outside `pacing.py`
+
+---
+
+## Block E — API and dashboard
+
+### Stack as actually installed
+
+Vite 8, React 19, TypeScript 6, **Tailwind v4.3** and react-router 7. Tailwind v4 is
+CSS-first: there is no `tailwind.config.js` and no PostCSS config — the theme lives in
+`src/index.css` behind `@theme`, and the build uses the `@tailwindcss/vite` plugin.
+Anyone expecting the v3 layout will go looking for files that should not exist.
+
+**Data fetching is a 30-line `useAsync` hook, not a query library.** This dashboard talks
+to a FastAPI process on the same machine: there is no network latency to paper over and
+no cache-invalidation problem worth a dependency. Everything shared —
+date/salary/score formatting, clipboard, the elapsed timer — lives in `src/lib/hooks.ts`
+so no page grows its own.
+
+Two TypeScript-6 defaults in the Vite template caught real code:
+- `erasableSyntaxOnly` rejects constructor parameter properties, so `ApiError` declares
+  and assigns its fields separately.
+- React 19 passes `ref` as an ordinary prop, but it still has to be declared on the
+  component's props type.
+
+### Shared components, built once
+
+- `DataTable` — sorting, filtering, pagination, expandable rows. Used by Jobs,
+  Applications and the Answer bank. Missing values always sort last, in both
+  directions: a blank is not a small number, and floating blanks to the top buries
+  the real rows.
+- `DynamicFieldList` / `StringList` — add, remove and reorder rows of any sub-form.
+  The Profile page uses it five times over; Campaigns uses `StringList` for terms,
+  locations, work types and both exclusion lists.
+- `StatusBadge` / `ScoreBadge` — the single source of truth for status colour. When
+  colour lives in each page, "failed" ends up red on one screen and grey on another and
+  the operator learns to distrust it.
+- `TemplateEditor` — ONE editor for all three kinds, selected by a tab. Three editors
+  would mean three autocomplete lists drifting from the one the backend enforces.
+
+Verified: no page calls `fetch()` directly; everything goes through `src/lib/api.ts`.
+
+### The 90-second queue
+
+`Queue.tsx` is designed around the stopwatch rather than around REST:
+
+- **one card at a time** — nothing to scan past
+- **one API call per card**, carrying the job link, both document ids, the cover letter
+  text and every answer-bank value. A second round trip to fetch the letter is exactly
+  the pause that makes manual applying feel like work.
+- **every answer is a copy chip with a visible copied-state**. Without the confirmation
+  there is no way to tell a successful copy from a missed tap, and re-checking costs
+  more time than the copy saved.
+- **keyboard first**: `o` opens the ad, `Enter` marks done, `s` skips, `j`/`k` move.
+  Done and Skip advance automatically.
+- **a live timer against the 90-second target**, which turns amber past it. A target you
+  cannot see is not a target.
+
+Unanswered questions are surfaced on the card itself, because a blank answer is why the
+job was parked in the first place.
+
+### Analytics greys out what it cannot support
+
+Every bucket carries `sufficient_data` and its `n` from the backend. Below the minimum
+(`ANALYTICS_MIN_SAMPLE`, default 8) the row is dimmed, the rate is replaced with
+"not enough data", and the raw `n` is shown instead. A 100% interview rate from one
+application is not an encouraging number, it is a wrong one, and rendering it invites a
+real decision to be made on noise. Both interview rate and any-reply rate are reported,
+broken out by campaign, platform, score decile and rubric version — separately, because
+scores from different rubrics are not comparable.
+
+### Two security properties, both tested
+
+- `GET /api/documents/{id}/file` resolves the path and refuses anything outside
+  `documents_dir` with a 404. The machine running this holds a live authenticated
+  browser profile, so a traversal here leaks session cookies, not a resume.
+- `ALLOW_LIVE_SUBMIT` is exposed **read-only**. It is absent from `SettingsIn`, so no
+  code path can set it, and the Settings page renders it as an indicator with an
+  explanation rather than as a toggle.
