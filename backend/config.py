@@ -63,6 +63,39 @@ class Settings(BaseSettings):
     llm_max_retries: int = 3
     llm_timeout_seconds: int = 90
 
+    # ------------------------------------------------------------- discovery
+    # Seek's search endpoint is NOT a documented public API. These are settings
+    # rather than constants precisely because the contract can change without
+    # notice: run ``python -m backend.discovery.verify_seek`` to confirm what
+    # actually works from your machine, then correct these in .env without
+    # touching code. See NOTES.md.
+    seek_search_url: str = "https://www.seek.com.au/api/chalice-search/v5/search"
+    seek_search_url_fallback: str = "https://www.seek.com.au/api/chalice-search/v4/search"
+    seek_html_search_url: str = "https://www.seek.com.au/jobs"
+    seek_site_key: str = "AU-Main"
+    seek_source_system: str = "houston"
+    seek_locale: str = "en-AU"
+    seek_page_size: int = 20
+
+    discovery_max_pages: int = 5
+    # Politeness delay between paged requests to one board.
+    discovery_request_delay_seconds: float = 1.5
+    # Default incremental window; the 4-hourly schedule overlaps deliberately.
+    discovery_default_hours_old: int = 8
+
+    # --------------------------------------------------------------- scoring
+    # Stage 2 (the expensive one) only ever sees this many jobs per campaign.
+    scoring_stage1_top_n: int = 40
+    # Characters of an ad fed to the embedding model. The tail of a job ad is
+    # boilerplate (EEO statements, "about us"); paying to embed it is the
+    # difference between hitting the cost target and missing it.
+    scoring_embedding_char_budget: int = 1400
+    scoring_embedding_batch_size: int = 96
+    # Characters of an ad fed to the stage-2 rubric prompt.
+    scoring_prompt_char_budget: int = 3500
+    # Below this many observations a bucket's rate is not reported at all.
+    analytics_min_sample: int = 8
+
     # --------------------------------------------------------------- browser
     browser_channel: str = "chrome"
     # Defaults to ``data_dir / "browser_profile"`` — filled in by the validator

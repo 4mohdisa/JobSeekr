@@ -345,6 +345,19 @@ class Job(SQLModel, table=True):
     description: str | None = None
     salary_min: int | None = None
     salary_max: int | None = None
+
+    salary_basis: str | None = None
+    """What the advertiser actually stated: annual, hourly, daily, monthly.
+
+    ``salary_min``/``salary_max`` are always annualised so a campaign salary
+    floor can filter on one scale. This field, with ``salary_is_estimated``,
+    keeps the system honest about the difference — an ad quoting "$60/hr" must
+    never be reported as though the employer stated an annual figure.
+    """
+
+    salary_is_estimated: bool = False
+    """True when the annualised figures were derived rather than stated."""
+
     posted_at: datetime | None = None
     discovered_at: datetime = Field(default_factory=utcnow)
     dedupe_hash: str
