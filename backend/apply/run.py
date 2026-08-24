@@ -50,12 +50,16 @@ __all__ = ["build_appliers", "eligible_jobs", "run_apply_pass"]
 
 
 def build_appliers() -> list[Any]:
-    """The platforms that can be applied to.
+    """The platforms that can be applied to, in the order they are tried.
 
-    Adding one is a new adapter file plus a line here — the flow itself never
-    learns about platforms.
+    Job boards first — they own the listing and their quick-apply flows are the
+    cheapest path. External ATS adapters follow in Australian priority order
+    (JobAdder and PageUp lead; Workday is last because it wants an account per
+    employer). The flow itself never learns about any of them.
     """
-    return [SeekApplier(), LinkedInApplier()]
+    from backend.ats.adapters import build_ats_appliers
+
+    return [SeekApplier(), LinkedInApplier(), *build_ats_appliers()]
 
 
 def _latest_score(session: Session, job_id: int) -> float | None:

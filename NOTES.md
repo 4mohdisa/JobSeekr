@@ -805,3 +805,85 @@ makes historical scores incomparable, so it is the user's call.
 `notify.register_hooks()` fills in. The safety-critical modules therefore never import
 Telegram, stay unit-testable without a bot token, and a notification failure can never
 take down the thing it was reporting on.
+
+---
+
+## Block G — external ATS and form maps
+
+### Australian priority, not the US default
+
+`ATS_REGISTRY` is ordered for the Australian market rather than for what US
+scraping guides assume:
+
+1. **JobAdder** — the leading AU/NZ-native ATS, and what most small and mid-size
+   Australian employers actually run.
+2. **PageUp** — an Australian company; government, universities, large enterprise.
+3. **SmartRecruiters** — common in the AU mid-market.
+4. **Greenhouse / Lever** — over-represented in US guidance, under-represented here
+   outside startups.
+5. **Workday last**, and flagged `requires_account=True`. Not because it is rare but
+   because it demands a separate account per employer, making it the most expensive
+   flow to automate and the least worth doing first.
+
+Plus Google Forms, Typeform and JotForm: a great many "bespoke" careers pages are one
+of those in an iframe, and `detect_from_html` follows the iframe rather than giving up.
+
+Detection is URL patterns first (free and unambiguous), HTML fingerprint second — the
+fallback exists because PageUp and JobAdder are usually white-labelled onto
+`careers.employer.com.au` with nothing in the URL to give them away.
+
+### The form map cache
+
+**Fingerprint = sha256 of the sorted set of (name, label, type).** Not the URL and not
+the company, so two employers on one ATS with the same form share a map and the second
+costs nothing. Sorted, so DOM order changing between renders does not invalidate it.
+Labels are whitespace- and case-normalised.
+
+**Semantic identity, never CSS selectors.** A map records the label a human reads;
+`selector` exists as a last resort and is normally unset. Class names change with every
+ATS release, the question does not. `fill_field` tries `get_by_label`, then
+`get_by_role`, then the selector.
+
+**WHERE, never WHAT.** `save_map` raises if a mapping ever carries a value attribute,
+and a test greps the serialised JSON for answer-shaped content. This is not tidiness:
+a map that accumulated answers would turn a *shared platform-tier file* into one
+containing the user's personal data, and would let a stale answer be replayed months
+later without passing through the answer bank.
+
+**Two tiers, merged field by field.** `platform/*.json` is shared; `company/{fp}.json`
+overrides. Field-by-field so one employer's odd question does not force re-learning the
+whole form — and an unresolved override never blanks out a resolved platform field.
+
+**Partial relearn.** `relearn_targets` returns only the fields the cache does not
+already know, so a form that gained one question costs one small call rather than a
+full re-learn.
+
+**Trust graduation.** Three *consecutive* clean successes. A failure resets the streak
+rather than decrementing it — three successes must be consecutive to mean the mapping
+generalised — and a trusted map that fails loses its trust immediately.
+
+### Generic filling uses the accessibility tree
+
+`page.accessibility.snapshot()` rather than raw HTML: a few hundred tokens instead of
+tens of thousands, and semantically better input, because the accessible name of a
+field *is* the label a human reads.
+
+The abstain rule is the answer bank's, for the same reason. The mapping schema has no
+value field at all — the model says where a value comes from and never what it is —
+and `confident=false` makes a field unusable. A field skipped by the model becomes
+`unknown` rather than being silently dropped.
+
+**CAPTCHA is a hard stop.** The job is parked and the user notified. No solving
+services, no third-party bypass: a CAPTCHA is the site asking for a human, and the
+correct response is to fetch one.
+
+### Manual queue requires a HIGHER score than auto-apply
+
+`queueing.py`, and it looks backwards until you count what each path costs. An
+automated application costs a fraction of a cent and four minutes nobody is watching.
+A manual one costs ninety seconds of the user's attention — the genuinely scarce
+resource in a job search, the thing that runs out at 9pm after a day of work.
+
+So the manual floor is `score_auto_apply + 8`. A job good enough to auto-apply to is
+*not* automatically good enough to interrupt someone for; if it is not worth their
+attention it is skipped rather than queued.
