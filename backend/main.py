@@ -54,7 +54,7 @@ _FEATURE_ROUTERS: tuple[tuple[str, str], ...] = (
     ("backend.scoring.routes", "feat/discovery"),
     ("backend.documents.routes", "feat/documents"),
     ("backend.apply.routes", "feat/apply"),
-    ("backend.api.dashboard", "feat/frontend"),
+    ("backend.api", "feat/frontend"),
 )
 
 
