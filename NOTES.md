@@ -549,3 +549,82 @@ A failed gate marks the job failed with the full report attached. There is no
 path that reaches for a previously built document: a stale resume that passes the
 gate is the wrong document sent confidently, and the downstream filename readback
 cannot catch what was never rebuilt.
+
+---
+
+## Block D — apply engine
+
+### Selectors are UNVERIFIED. Read this before enabling live submit.
+
+`seek.com.au` and `linkedin.com` are both unreachable from the environment this
+was built in (blocked by network policy — the same block that stopped the Seek
+endpoint being confirmed in Block B). **No selector in `backend/apply/seek.py` or
+`backend/apply/linkedin.py` was tested against the live site.** Each carries a
+confidence note in the source; the `data-automation` (Seek) and `aria-label`
+(LinkedIn) hooks are the most durable and lead each candidate list, with CSS
+fallbacks behind them.
+
+**Verification procedure — do this before turning `ALLOW_LIVE_SUBMIT` on:**
+
+```
+uv run python -m backend.apply.session login --platform linkedin
+uv run python -m backend.apply.har record --platform linkedin --variant two_step
+uv run python -m backend.apply.har list        # shows what is still missing
+uv run python -m backend.apply.run --dry-run   # walks everything, submits nothing
+```
+
+`har.py` names the seven variants worth capturing (2-step, 5-step, with and
+without a cover-letter slot, an off-site redirect, Seek quick apply, Seek
+screening step) because each exercises a different adapter branch. Once
+recorded, `replay()` serves them back offline so the adapters are pinned by
+tests instead of by hope. `canary.py` then checks daily for markup drift and
+**warns without halting** — a renamed CSS class should not stop the pipeline;
+a real failure mid-application is what trips the circuit breaker.
+
+### Design decisions
+
+- **Sync Playwright, not async.** A single-user desktop tool that applies to one
+  job at a time gains nothing from async, and the sync API composes directly with
+  the rest of this synchronous codebase (SQLModel sessions, the flow, the
+  guardrails) without colouring every caller.
+- **Fuzzy threshold 88, ambiguity margin 6.** Screening questions are short and
+  share most of their words, so ordinary similarity between two genuinely
+  different questions is already high — "forklift licence" vs "driver's licence"
+  scores in the seventies. 88 is strict enough that a near-miss is a different
+  question, and the margin means two candidates within 6 points that *disagree*
+  abstain rather than letting the top one win.
+- **Polarity pairs are handled explicitly.** "Do you require visa sponsorship?"
+  and "Do you have full working rights?" share vocabulary but have opposite
+  correct answers. Fuzzy matching alone conflates them, and leaking an answer
+  across that pair misstates the user's right to work — so a polarity check
+  blocks it outright rather than relying on the threshold.
+- **Warm-up ramp: 3, 6, 10, 15, 20 per day by week, ceiling 25.** A new account
+  submitting thirty applications on day one is the pattern platforms act on.
+- **Circuit breaker persists to `data/circuit_breaker.json`.** A file rather
+  than a table, because it is operational state rather than user data and it
+  must survive a restart without a migration. If it later wants to be queryable
+  from the dashboard, it belongs in the DB — noted, not done.
+- **Daily caps count the user's LOCAL day**, not UTC. Adelaide is UTC+9:30, so
+  a UTC-midnight cap would roll over mid-evening and let a second day's
+  allowance out before the user's day ended.
+- **`--dry-run` is the default** for `backend.apply.run`. `--live` is the
+  explicit opt-in, and even then every guardrail still applies.
+
+### What the safety suite actually proves
+
+`tests/test_apply_safety.py` is the file to read first. It builds one flawless
+application — score 97, three gate-passed documents, zero abstentions,
+authenticated session, inside the window, under every cap, breaker closed — and
+asserts that under default settings the *only* failing check is
+`allow_live_submit`. Then it flips that single setting and asserts the same
+application goes through. That pairing is what proves the switch is the sole
+gate and nothing else was quietly failing underneath it.
+
+It also enforces, repository-wide and by parsing the AST rather than grepping
+text (every one of these files legitimately *discusses* the rule in prose):
+
+- `check_can_submit` is called from exactly one place — `backend/apply/flow.py`
+- neither adapter imports or calls the guardrails
+- `backend/apply/answers.py` imports no Playwright
+- nothing anywhere sets `allow_live_submit` true, including `.env.example`
+- no hardcoded `time.sleep` in the apply layer outside `pacing.py`
