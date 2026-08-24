@@ -1,0 +1,116 @@
+% ---------------------------------------------------------------------------
+% JobSeekr resume template — single column, A4, pdflatex.
+%
+% DO NOT "IMPROVE" THE FOLLOWING. Each is a deliberate decision (Claude.md)
+% and every one of them is something an ATS parser breaks on:
+%
+%   * pdflatex, NOT xelatex/lualatex/tectonic. XeTeX output breaks ATS text
+%     extraction. Consequently: no fontspec, no unicode-math.
+%   * lmodern + T1 fontenc. T1 encodes accented characters as single glyphs
+%     and keeps fi/fl ligatures extractable — with the default OT1 encoding
+%     "efficient" can extract as "e cient". The parse gate asserts exactly
+%     that word survives, so changing the font encoding will fail the build.
+%   * a4paper. The LaTeX default is US Letter, which is wrong for Australia.
+%   * ONE COLUMN. Two-column resumes parse catastrophically: extractors read
+%     straight across the page and interleave the columns into nonsense.
+%   * Contact details in the BODY, never in a header/footer. Many parsers
+%     skip headers entirely, and a resume whose phone number is invisible to
+%     the ATS is a resume that gets no callback.
+%   * No fontawesome/icons. They extract as garbage or as nothing.
+%   * Section headers are plain words on their own line, in source order.
+% ---------------------------------------------------------------------------
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=1.8cm]{geometry}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\usepackage{titlesec}
+
+% Tight, predictable list spacing. label={} keeps bullets as plain text lines
+% so an extractor sees sentences rather than stray glyphs.
+\setlist[itemize]{leftmargin=1.2em, itemsep=1pt, parsep=0pt, topsep=2pt, partopsep=0pt}
+
+% Section headings: uppercase words with a rule. Plain text to the extractor.
+\titleformat{\section}{\large\bfseries\uppercase}{}{0em}{}[\vspace{-0.6em}\rule{\linewidth}{0.6pt}]
+\titlespacing{\section}{0pt}{1.0em}{0.4em}
+
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+
+\begin{document}
+
+% --- Contact block. FIRST thing in the body, never a header. ---------------
+{\LARGE\bfseries \VAR{profile.name}}\\[0.3em]
+\BLOCK{if profile.headline}
+\VAR{profile.headline}\\[0.2em]
+\BLOCK{endif}
+\VAR{profile.email}
+\BLOCK{if profile.phone} $\cdot$ \VAR{profile.phone}\BLOCK{endif}
+\BLOCK{if profile.location} $\cdot$ \VAR{profile.location}\BLOCK{endif}
+\BLOCK{if profile.linkedin} $\cdot$ \href{\VAR{profile.linkedin|url}}{\VAR{profile.linkedin}}\BLOCK{endif}
+\BLOCK{if profile.website} $\cdot$ \href{\VAR{profile.website|url}}{\VAR{profile.website}}\BLOCK{endif}
+
+\BLOCK{if profile.summary}
+\section{Summary}
+\VAR{profile.summary}
+\BLOCK{endif}
+
+\BLOCK{if profile.skills}
+\section{Skills}
+\VAR{profile.skills|join_latex(', ')}
+\BLOCK{endif}
+
+\BLOCK{if profile.experience}
+\section{Experience}
+\BLOCK{for role in profile.experience}
+\textbf{\VAR{role.title}} \hfill \VAR{role.start} -- \VAR{role.end}\\
+\textit{\VAR{role.company}}\BLOCK{if role.location}, \VAR{role.location}\BLOCK{endif}
+\BLOCK{if role.highlights}
+\begin{itemize}
+\BLOCK{for highlight in role.highlights}
+  \item \VAR{highlight}
+\BLOCK{endfor}
+\end{itemize}
+\BLOCK{endif}
+\vspace{0.5em}
+\BLOCK{endfor}
+\BLOCK{endif}
+
+\BLOCK{if profile.projects}
+\section{Projects}
+\BLOCK{for project in profile.projects}
+\textbf{\VAR{project.name}}\BLOCK{if project.stack} \textit{(\VAR{project.stack})}\BLOCK{endif}
+\BLOCK{if project.description}\\
+\VAR{project.description}
+\BLOCK{endif}
+\vspace{0.4em}
+\BLOCK{endfor}
+\BLOCK{endif}
+
+\BLOCK{if profile.education}
+\section{Education}
+\BLOCK{for entry in profile.education}
+\textbf{\VAR{entry.qualification}} \hfill \VAR{entry.year}\\
+\textit{\VAR{entry.institution}}
+\vspace{0.4em}
+\BLOCK{endfor}
+\BLOCK{endif}
+
+\BLOCK{if profile.certifications}
+\section{Certifications}
+\begin{itemize}
+\BLOCK{for cert in profile.certifications}
+  \item \VAR{cert.name}\BLOCK{if cert.issuer} --- \VAR{cert.issuer}\BLOCK{endif}\BLOCK{if cert.year} (\VAR{cert.year})\BLOCK{endif}
+\BLOCK{endfor}
+\end{itemize}
+\BLOCK{endif}
+
+\BLOCK{if profile.work_rights}
+\section{Work Rights}
+\VAR{profile.work_rights}
+\BLOCK{endif}
+
+\end{document}

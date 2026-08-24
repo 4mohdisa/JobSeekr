@@ -1,0 +1,25 @@
+% ---------------------------------------------------------------------------
+% Outbound email body — plain text, rendered through the SAME engine as the
+% LaTeX templates (same delimiters, same placeholder vocabulary). Rendered
+% with latex=False so no escaping is applied.
+%
+% This is only ever sent to an address the ADVERTISER PUBLISHED IN THEIR OWN
+% AD, and only after the user approves the draft. See backend/discovery/
+% contacts.py for the Spam Act boundary.
+% ---------------------------------------------------------------------------
+Subject: \VAR{job.title} - application from \VAR{profile.name}
+
+Dear Hiring Team,
+
+\VAR{ai.opening_hook}
+
+\VAR{ai.skills_bridge}
+
+I have attached my resume and cover letter for the \VAR{job.title} role\BLOCK{if job.company} at \VAR{job.company}\BLOCK{endif}.
+
+\VAR{ai.closing}
+
+Kind regards,
+\VAR{profile.name}
+\VAR{profile.email}\BLOCK{if profile.phone}
+\VAR{profile.phone}\BLOCK{endif}

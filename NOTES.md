@@ -470,3 +470,82 @@ planning aid only — real spend always comes from the `llm_spend` table.
 - Two bugs the tests caught: `"South Australia"` was being destroyed by the country strip
   in `canonical_suburb`, and `"$120 - $140 per annum"` was read as an hourly rate
   (annualising to $237k). Both fixed, both now regression-tested.
+
+---
+
+## Block C — documents & parse gate
+
+### No existing .tex resume was found
+
+The spec says to locate the user's existing `.tex` resume and audit it for
+ATS-killers. There is none: the repository contained only `Claude.md` at the start
+of this work, and a search of the filesystem and the full git history found no
+`.tex` file. So `templates/resume.tex.j2` was built from scratch, single-column A4,
+with every constraint the audit would have enforced applied up front and commented
+in the template header so nobody "improves" them later:
+
+- pdflatex only — no `fontspec`, no `unicode-math` (they do not compile under pdflatex)
+- `lmodern` + `T1` fontenc — OT1 lets "efficient" extract as "e cient"
+- `a4paper` — the LaTeX default is US Letter, wrong for Australia
+- one column — two-column resumes extract as interleaved nonsense
+- contact details in the **body**, never a header — many parsers skip headers
+- no `fontawesome` icons (also not installed here; they extract as garbage)
+
+**If the user has an existing `.tex` resume, drop it in and re-run the parse gate
+against it** — the gate is what the audit would have been, and it is automated.
+
+### Template engine
+
+One Jinja2 environment for all three artifact kinds, with the LaTeX-safe delimiters
+the spec fixes (`\BLOCK{}`, `\VAR{}`, `\#{}`, `%%` line statements).
+
+`escape_latex` is applied automatically to every substituted value through a
+`finalize` hook, so a template author cannot forget it. It uses a sentinel for the
+backslash: replacing `\` with `\textbackslash{}` first means the braces that form
+introduces get escaped by the later `{`/`}` rules (producing
+`\textbackslash\{\}`), and replacing it last means every other rule's backslash
+gets mangled. A sentinel containing no special character sidesteps both. This was
+a real bug the tests caught.
+
+**Gotcha for anyone editing the shipped templates:** LaTeX comments must use a
+single `%`. `%%` is Jinja's `line_statement_prefix` and is parsed as a tag —
+a `%%`-prefixed comment block fails with `TemplateSyntaxError: tag name expected`.
+
+### Anti-fabrication is enforced, not requested
+
+`backend/documents/fabrication.py` validates generated narrative against the
+profile rather than trusting the prompt. It flags unsupported years, metrics,
+organisations and credential words. On violation the slot regenerates **once**
+with the specific problems fed back; a second failure fails the build loudly and
+produces **no document at all** (verified by a test that feeds in "Certified AWS
+Solutions Architect since 2019 … increased revenue 340% … Acme Corporation").
+
+Organisation matching is per significant token rather than whole-phrase: "Python
+and SQL" is two real skills that never appear as one contiguous string in the
+profile, while "Acme Corporation" and "Stanford University" are still caught
+because the distinctive word is simply absent.
+
+### Parse gate
+
+Nine checks (the spec's eight plus two-column detection). Adversarial suite in
+`tests/test_parse_gate.py` generates each broken PDF for real with pdflatex and
+asserts rejection: two-column, image-only, header-only contact details, 4-page
+resume, missing SKILLS section, unmet claimed keywords, truncated byte stream,
+missing file, and a cover letter over one page. A clean single-column resume
+passes all nine.
+
+**Two-column detection was calibrated against real output, not guessed.** The
+first implementation histogrammed word *start* positions and missed the fixture
+entirely — wrapping scatters the starts across each column. The working version
+looks for a vertical band that no word *overlaps*. Measured: a clean
+single-column resume's widest empty band is 3pt (the ragged edge around
+right-aligned dates); a `multicol` two-column one is 9pt, because LaTeX's default
+`\columnsep` is 10pt. The threshold is 8pt, sitting between them — a 24pt
+threshold picked for "looks like a column gap" detected nothing.
+
+### No fallback to an older PDF, ever
+
+A failed gate marks the job failed with the full report attached. There is no
+path that reaches for a previously built document: a stale resume that passes the
+gate is the wrong document sent confidently, and the downstream filename readback
+cannot catch what was never rebuilt.

@@ -1,0 +1,48 @@
+% ---------------------------------------------------------------------------
+% JobSeekr cover letter — single column, A4, pdflatex, ONE page.
+% Same deliberate constraints as resume.tex.j2; see the header there.
+% The parse gate enforces the one-page limit, so the AI slots are word-capped.
+% ---------------------------------------------------------------------------
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage[hidelinks]{hyperref}
+
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.8em}
+
+\begin{document}
+
+% Contact details in the body, never a header — parsers skip headers.
+{\large\bfseries \VAR{profile.name}}\\
+\VAR{profile.email}
+\BLOCK{if profile.phone} $\cdot$ \VAR{profile.phone}\BLOCK{endif}
+\BLOCK{if profile.location} $\cdot$ \VAR{profile.location}\BLOCK{endif}
+
+\VAR{today.long}
+
+\BLOCK{if job.company}
+Hiring Team\\
+\VAR{job.company}
+\BLOCK{endif}
+
+\textbf{Re: \VAR{job.title}}
+
+Dear Hiring Team,
+
+\VAR{ai.opening_hook}
+
+\VAR{ai.skills_bridge}
+
+\VAR{ai.why_company}
+
+\VAR{ai.closing}
+
+Kind regards,\\
+\VAR{profile.name}
+
+\end{document}
