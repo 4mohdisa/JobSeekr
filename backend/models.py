@@ -57,7 +57,15 @@ def _enum_column(enum_type: type[Enum]) -> Column:
     shared between tables.
     """
     return Column(
-        SAEnum(enum_type, native_enum=False, values_callable=_enum_values),
+        SAEnum(
+            enum_type,
+            native_enum=False,
+            values_callable=_enum_values,
+            # SQLAlchemy otherwise lets an unrecognised *string* through to the
+            # database unchecked, which is exactly the typo this module exists to
+            # prevent. Valid values still work as plain strings.
+            validate_strings=True,
+        ),
         nullable=False,
     )
 
@@ -188,9 +196,10 @@ class Profile(SQLModel, table=True):
     """
 
     __tablename__ = "profile"
+    __table_args__ = (UniqueConstraint("version", name="uq_profile_version"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    version: int = Field(unique=True)
+    version: int
     identity: dict[str, Any] = Field(
         default_factory=dict, sa_column=Column(JSON, nullable=False)
     )
@@ -421,9 +430,10 @@ class Application(SQLModel, table=True):
     """
 
     __tablename__ = "application"
+    __table_args__ = (UniqueConstraint("job_id", name="uq_application_job_id"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    job_id: int = Field(foreign_key="job.id", unique=True)
+    job_id: int = Field(foreign_key="job.id")
     applied_at: datetime = Field(default_factory=utcnow)
     resume_doc_id: int | None = Field(default=None, foreign_key="document.id")
     cover_letter_doc_id: int | None = Field(default=None, foreign_key="document.id")
@@ -476,9 +486,10 @@ class FormMap(SQLModel, table=True):
     """
 
     __tablename__ = "form_map"
+    __table_args__ = (UniqueConstraint("fingerprint", name="uq_form_map_fingerprint"),)
 
     id: int | None = Field(default=None, primary_key=True)
-    fingerprint: str = Field(unique=True)
+    fingerprint: str
     tier: FormMapTier = Field(sa_column=_enum_column(FormMapTier))
     platform: str | None = None
     path: str
