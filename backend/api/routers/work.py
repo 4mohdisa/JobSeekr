@@ -191,9 +191,16 @@ def get_queue(
     for job, score in scored[:limit]:
         documents = list(session.exec(select(Document).where(Document.job_id == job.id)).all())
 
-        def document_id(kind: DocumentKind) -> int | None:
+        def document_id(kind: DocumentKind, *, available=documents) -> int | None:
+            """Id of a gate-passed document of this kind, if there is one.
+
+            ``available`` is bound by value: a bare closure over the loop
+            variable would resolve against whichever job the loop had reached
+            by the time it ran, which is how a card ends up pointing at another
+            job's resume.
+            """
             match = next(
-                (d for d in documents if d.kind == kind and d.parse_check_passed), None
+                (d for d in available if d.kind == kind and d.parse_check_passed), None
             )
             return match.id if match else None
 

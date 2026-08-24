@@ -36,3 +36,19 @@ dev = [
     "respx>=0.23.1",
     "ruff>=0.16.4",
 ]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency injection REQUIRES these calls in argument defaults —
+# `def handler(session: Session = Depends(get_session))` is the documented
+# idiom, not the mutable-default bug B008 exists to catch. Listing them here
+# keeps the check on for genuine cases instead of scattering noqa comments
+# across every endpoint.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Header",
+    "fastapi.Form",
+    "fastapi.File",
+]
