@@ -365,3 +365,108 @@ Also verified, beyond the required list:
   to `allow_origins=['http://localhost:5173']`, `allow_credentials=True`.
 - `pyproject.toml`, `.env.example`, `.gitignore` and `uv.lock` are unmodified — mtimes
   predate this session. No `uv add`, no git commands run.
+
+---
+
+## Block B — discovery & scoring
+
+### The Seek endpoint could not be verified here (blocked host)
+
+The spec says: *find the real endpoint by inspecting network traffic from a seek.com.au
+search — do NOT guess it.* **That was not possible in this build environment.**
+`www.seek.com.au` is blocked by the network's egress policy; every request returns
+`CONNECT tunnel failed, response 403` at the proxy. `linkedin.com` and `au.indeed.com`
+are blocked the same way. `github.com` and PyPI are reachable.
+
+So the instruction was honoured in the only way available — by making the guess
+*correctable and self-checking* rather than buried:
+
+1. Every request parameter (`SEEK_SEARCH_URL`, site key, source system, locale, page
+   size) is a setting. Correcting it is an `.env` edit, not a code change.
+2. `uv run python -m backend.discovery.verify_seek --terms "..." --where "..."` runs on
+   **your** machine, probes each candidate in turn, reports status codes and the observed
+   JSON keys, prints a sample record, and prints the exact `.env` lines to paste.
+   **Run this before the first real discovery pass.**
+3. `seek_source.py` tries three strategies in order — JSON API → server-rendered page
+   state (`SEEK_REDUX_DATA` / `__INITIAL_STATE__` / `__NEXT_DATA__`) → JSON-LD
+   `JobPosting` — so one contract change degrades discovery instead of killing it.
+4. Field reads go through an alias table and never raise; an unmappable record is logged
+   and skipped.
+
+### What inspecting the installed jobspy actually showed
+
+`python-jobspy==1.1.82` (pinned). Verified by reading the package, not assumed:
+
+- Supported sites are `linkedin, indeed, zip_recruiter, glassdoor, google, bayt, naukri,
+  bdjobs`. **Seek is not among them** — it genuinely needs its own adapter.
+- `scrape_jobs` returns a `pandas.DataFrame`. Real columns include `job_url_direct`,
+  `emails`, `interval`/`min_amount`/`max_amount`, `listing_type`. Missing values arrive
+  as `NaN`, so every read goes through a NaN-safe accessor.
+- `job_url_direct` pointing off Indeed is the off-site-redirect signal → `apply_type='external'`.
+- **There is no per-row "is Easy Apply" column.** LinkedIn exposes `easy_apply` only as a
+  *search filter*. Claiming `easy_apply` without evidence would send the apply engine into
+  a modal that is not there, so it is claimed only when the search itself filtered for it;
+  otherwise `unknown`, and the apply layer confirms.
+
+### Salary: two columns added to `job`
+
+`salary_basis` and `salary_is_estimated` (migration `4980eb9af6bf`). The spec's schema had
+no place to record what the advertiser actually said, and the normalisation requirement
+("never silently claim an annual salary that was stated hourly") cannot be honoured
+without it. `salary_min`/`salary_max` are always annualised so one filter works on one
+scale; these two columns keep the claim honest.
+
+**Ads that state no salary are KEPT, not dropped**, even under a salary floor — most
+Australian ads omit salary, so dropping them would discard the majority of the market to
+enforce a floor that was never tested. Opt in to the strict behaviour per campaign with
+`exclusions.drop_unstated_salary = true`.
+
+### Cost target: the honest numbers
+
+Target: 200 jobs discovered and scored for **under $0.15**. Discovery is plain HTTP and
+free, so this is entirely a scoring budget. Projections from
+`backend.scoring.run.estimate_cost` (priced from `LLM_PRICES_PER_M_TOKENS`):
+
+| Configuration | stage 1 | stage 2 | total | meets target |
+|---|---|---|---|---|
+| **Default — Opus 5, top 40** | $0.0015 | $0.4300 | **$0.4315** | no |
+| Opus 5, top 10 | $0.0015 | $0.1075 | $0.1090 | yes |
+| Haiku 4.5, top 40 | $0.0015 | $0.0860 | $0.0875 | yes |
+
+**The target is not reachable at the default model while scoring 40 jobs, and no amount of
+prefilter tuning fixes that.** Claude Opus 5 is $5/$25 per 1M tokens; the
+schema-constrained score object is ~220 output tokens, so stage 2 costs ~$0.0055 per job
+on *output alone* — 40 jobs exceed $0.15 before a single prompt token is counted.
+
+The spec says to tune the prefilter rather than the model, and that was done as far as it
+goes: descriptions are truncated to 1400 chars for embedding and 2400 for the rubric
+prompt, embeddings are batched and cached to disk so re-runs cost nothing, and stage 1 is
+~$0.0015 per 200 jobs. Stage 1 is not the problem; the stage-2 fan-out is.
+
+**Choosing the model is left to the user, deliberately.** `LLM_MODEL_SCORING` still
+defaults to `anthropic/claude-opus-5` rather than being quietly downgraded to make a
+number go green. Instead the code is loud about it: `estimate_cost` returns
+`meets_target` plus concrete `levers`, and every scoring run logs
+`scoring_cost_over_target` with the projection before spending. Pick a lever:
+
+- keep Opus 5 and set `SCORING_STAGE1_TOP_N=10`, or
+- set `LLM_MODEL_SCORING=anthropic/claude-haiku-4-5` and keep 40, or
+- raise `SCORING_COST_TARGET_USD`.
+
+Prices live in `LLM_PRICES_PER_M_TOKENS` so a price change is an `.env` edit. They are a
+planning aid only — real spend always comes from the `llm_spend` table.
+
+### Other decisions
+
+- **Dedupe fuzzy matching is scoped to one canonical company.** A missed duplicate wastes
+  one score; a false duplicate silently deletes a real job the user would have applied to.
+  Titles are normalised harder instead (a trailing " - Adelaide" is stripped, a trailing
+  " - Backend" is not) so the >0.9 threshold can stay strict.
+- **`contacts.py` reads only what the advertiser published in their own ad.** The Spam Act
+  boundary is in the module docstring: no harvesting, no address-pattern guessing, no
+  address reuse. Platform/ATS senders and no-reply addresses are rejected.
+- **`final` score** = stage 2 when it ran, else stage 1 similarity rescaled to 0-100, so a
+  threshold means one thing regardless of which stages ran.
+- Two bugs the tests caught: `"South Australia"` was being destroyed by the country strip
+  in `canonical_suburb`, and `"$120 - $140 per annum"` was read as an hourly rate
+  (annualising to $237k). Both fixed, both now regression-tested.

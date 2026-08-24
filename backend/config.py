@@ -92,7 +92,26 @@ class Settings(BaseSettings):
     scoring_embedding_char_budget: int = 1400
     scoring_embedding_batch_size: int = 96
     # Characters of an ad fed to the stage-2 rubric prompt.
-    scoring_prompt_char_budget: int = 3500
+    scoring_prompt_char_budget: int = 2400
+
+    # The project's stated cost target: 200 jobs discovered AND scored for
+    # under this. Discovery is free (plain HTTP), so this is a scoring budget.
+    # backend.scoring.run.estimate_cost checks the CONFIGURED models against
+    # it and warns loudly when they do not fit — see NOTES.md, which shows the
+    # arithmetic and the levers.
+    scoring_cost_target_usd: float = 0.15
+
+    # Published USD per 1M tokens, used only to PROJECT spend before a run.
+    # Real cost always comes from the llm_spend table, which records what the
+    # provider actually charged. Kept in config so a price change or a new
+    # model is an .env edit, not a code change.
+    llm_prices_per_m_tokens: dict[str, dict[str, float]] = {
+        "anthropic/claude-opus-5": {"input": 5.00, "output": 25.00},
+        "anthropic/claude-sonnet-5": {"input": 3.00, "output": 15.00},
+        "anthropic/claude-haiku-4-5": {"input": 1.00, "output": 5.00},
+        "openai/text-embedding-3-small": {"input": 0.02, "output": 0.0},
+        "openai/text-embedding-3-large": {"input": 0.13, "output": 0.0},
+    }
     # Below this many observations a bucket's rate is not reported at all.
     analytics_min_sample: int = 8
 
