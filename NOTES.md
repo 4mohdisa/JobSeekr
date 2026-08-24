@@ -706,3 +706,102 @@ scores from different rubrics are not comparable.
 - `ALLOW_LIVE_SUBMIT` is exposed **read-only**. It is absent from `SettingsIn`, so no
   code path can set it, and the Settings page renders it as an indicator with an
   explanation rather than as a toggle.
+
+---
+
+## Block F — Telegram, inbound mail, outbound drafts, scheduler
+
+### Escalation parks the job; it never holds the browser
+
+When an adapter abstains, the flow closes the browser, marks the job
+`needs_answer`, and returns. Telegram then asks the question. **Nothing waits on the
+reply.** Holding a session pinned on a job board for twenty minutes while the user is
+asleep is exactly the pattern that gets an account flagged, and a timeout mid-form
+leaves an application half-submitted.
+
+The loop is park → ask → **save to the answer bank** → re-queue. Saving rather than
+just using the answer is what makes the bank self-populating: `save_answer` fills the
+matching blank row instead of creating a duplicate, so a seeded question is answered
+once and never asked again.
+
+### Matching inbound mail is the hard part
+
+**ATS mail does not come from the employer.** A rejection for a university job arrives
+from `no-reply@pageuppeople.com`; a JobAdder acknowledgement from `noreply@jobadder.com`.
+Domain matching therefore fails on exactly the mail that matters.
+
+So `matching.py` scores several weak signals and requires a threshold (55):
+
+| Signal | Points | Why |
+|---|---|---|
+| Sender is the contact address published in the ad | 50 | The only *direct* identity link, so it clears alone |
+| Source job id or reference in the message | 45 | Explicit, ATS-generated |
+| Employer named anywhere | 25 | Strong, but generic on its own |
+| Title matches the subject (≥85%) | 25 / 12 | Weak alone — half the market says "Software Engineer" |
+| Within 14 / 45 days of applying | 10 / 4 | Replies cluster |
+| Sender domain mentions the platform | 8 | Corroborating |
+
+It **returns None rather than a best guess** when the top score is below the threshold
+*or* when the top two candidates are within 12 points and cannot be separated. A wrong
+match writes "rejected" onto a live application or "interview" onto a dead one, and
+every number on the Analytics page is then built on fiction. An unmatched email costs
+the user one glance at their inbox.
+
+Classification is an LLM call because keyword rules misread the two cases that matter:
+"we were very impressed, however…" is a rejection that reads positive, and "we'd like
+to arrange a time" is an interview request containing none of the obvious words.
+
+### Gmail: two auth methods, one interface
+
+- **Personal @gmail.com** → IMAP with an App Password.
+- **Google Workspace** → App Passwords were disabled for Workspace accounts in 2025,
+  so OAuth via the Gmail API is the only route. **An OAuth app left in *Testing* status
+  expires refresh tokens every 7 days** — publishing the app (even privately) is what
+  stops weekly re-authorisation. The refresh failure logs that hint explicitly.
+
+Scope is `gmail.readonly`, not `modify`: this module has no business changing the
+mailbox. There is no send path in `gmail.py` at all.
+
+### Outbound is draft-only, and the constraint is legal
+
+`outbound.py` carries the Spam Act boundary in its docstring. Three properties are
+load-bearing and all three are tested:
+
+1. **The address came from the ad.** `draft_for_job` reads `ad_contact_email` and takes
+   **no recipient parameter** — a test asserts the signature has none, because a
+   recipient argument is how a draft-only path becomes a mail merge.
+2. **A human approves each message.** `send_draft` requires an `approved_by` token and
+   refuses without one. There is no auto-send and no scheduled caller.
+3. **No follow-ups.** One message per job. A test greps for `send_bulk`,
+   `schedule_followup` and `harvest` and fails if any appears.
+
+It also refuses to attach a document that did not pass the parse gate — the same rule
+as the apply path.
+
+### Scheduler
+
+APScheduler with a SQLAlchemy job store so the schedule survives the reboots a desktop
+actually has. `coalesce=True` and `max_instances=1` so a laptop waking from sleep does
+not fire five missed discovery runs at once.
+
+**The two daily apply passes are jittered by up to 45 minutes.** Applications arriving
+at exactly 14:00:00 every weekday is a machine signature that no amount of per-submit
+pacing hides.
+
+The scheduled apply pass follows the master switch: with `ALLOW_LIVE_SUBMIT` off it runs
+end to end as a dry run and reports what it *would* have sent, which is what makes it
+safe to leave the scheduler enabled while evaluating the system.
+
+Nightly backup uses `sqlite3.Connection.backup`, not a file copy: the database is in WAL
+mode and being written to, and a plain copy can capture a torn state that reads fine and
+is missing the last transactions. Fourteen days are retained.
+
+The weekly rubric review **proposes only**. Changing a rubric creates a new version and
+makes historical scores incomparable, so it is the user's call.
+
+### Notification hooks, not imports
+
+`guardrails`, `session` and `canary` each expose a plain callable hook that
+`notify.register_hooks()` fills in. The safety-critical modules therefore never import
+Telegram, stay unit-testable without a bot token, and a notification failure can never
+take down the thing it was reporting on.
