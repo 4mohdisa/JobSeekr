@@ -182,10 +182,17 @@ def build_environment(searchpath: Path | None = None) -> Environment:
         undefined=StrictUndefined,
         keep_trailing_newline=True,
     )
-    env.filters["latex"] = escape_latex
-    env.filters["url"] = latex_safe_url
-    env.filters["join_latex"] = lambda items, sep=", ": sep.join(
-        escape_latex(item) for item in (items or [])
+    # Every one of these filters RETURNS ALREADY-ESCAPED LaTeX, so each must be
+    # marked RawLatex or the finalize hook escapes it a second time. That second
+    # pass turns the escape itself into content: a skill of "C#" is escaped to
+    # "C\#", escaped again to "C\textbackslash{}\#", and typesets as the literal
+    # text "C\#". The PDF looks almost right, the parse gate passes, and an ATS
+    # searching for "C#" finds nothing — which is the precise failure this whole
+    # pipeline exists to prevent.
+    env.filters["latex"] = lambda value: RawLatex(escape_latex(value))
+    env.filters["url"] = lambda value: RawLatex(latex_safe_url(value))
+    env.filters["join_latex"] = lambda items, sep=", ": RawLatex(
+        sep.join(escape_latex(item) for item in (items or []))
     )
     return env
 

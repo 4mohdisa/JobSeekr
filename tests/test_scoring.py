@@ -261,31 +261,46 @@ def test_cost_scales_with_the_stage2_cap_not_the_discovery_volume():
     assert large["total_usd"] < small["total_usd"] * 1.5
 
 
-def test_the_target_is_reachable_and_the_config_that_reaches_it_is_documented():
-    """The $0.15 / 200-job target, and what it actually costs to hit it.
+def test_the_shipped_default_meets_the_cost_target():
+    """The $0.15 / 200-job target, met by the configuration as shipped.
 
-    At the default Claude Opus 5 scoring model the target is NOT reachable
-    while scoring 40 jobs: ~220 output tokens x $25/1M is already ~$0.005 per
-    job before a single prompt token, so 40 jobs cost more than $0.15 on
-    output alone. That is arithmetic, not tuning.
+    Stage 2 is constrained classification against a fixed schema — exactly the
+    work a small model does well — so it is routed to Gemini Flash-Lite while
+    cover letters stay on a strong model. That single change moved the
+    projection from ~$0.43 to ~$0.025 for 200 jobs.
 
-    The model stays the user's decision (Opus 5 remains the default). What the
-    code must do is be honest about the trade, so this test pins both halves:
-    the default configuration reports itself as over target with usable
-    levers, and the documented budget configuration genuinely meets it.
+    The earlier version of this test pinned the opposite property: at Claude
+    Opus 5 the target was unreachable, because ~220 output tokens x $25/1M is
+    ~$0.005 per job before a single prompt token, so 40 jobs exceeded $0.15 on
+    output alone. That was arithmetic rather than tuning, and the fix was to
+    stop paying Opus rates for classification.
     """
     default = estimate_cost(200)
-    assert default["scoring_model"] == "anthropic/claude-opus-5"
-    assert default["meets_target"] is False
-    assert default["levers"], "an over-target projection must say what to change"
 
-    # Lever 1: keep Opus, score fewer jobs.
-    fewer = estimate_cost(200, top_n=10)
-    assert fewer["meets_target"] is True, fewer
+    assert default["scoring_model"].startswith("gemini/")
+    assert default["meets_target"] is True, default
+    assert default["total_usd"] < 0.15
+    assert not default["levers"], "a projection under target needs no levers"
 
-    # Lever 2: keep 40 jobs, choose a cheaper scoring model. The user's call.
-    cheaper = estimate_cost(200, scoring_model="anthropic/claude-haiku-4-5")
-    assert cheaper["meets_target"] is True, cheaper
+
+def test_the_expensive_model_still_reports_itself_as_over_target():
+    """The honesty machinery must keep working for whoever changes the model."""
+    expensive = estimate_cost(200, scoring_model="anthropic/claude-opus-5")
+
+    assert expensive["meets_target"] is False
+    assert expensive["levers"], "an over-target projection must say what to change"
+    assert expensive["total_usd"] > 0.15
+
+
+def test_writing_stays_on_a_strong_model():
+    """Cost pressure must not quietly reach the prose sent to an employer.
+
+    A mis-scored job is re-scored; a cover letter is not recalled.
+    """
+    from backend.config import settings
+
+    assert settings.llm_model_writing.startswith("anthropic/")
+    assert settings.llm_model_writing != settings.llm_model_scoring
 
 
 def test_an_unpriced_model_warns_rather_than_crashing_a_run():

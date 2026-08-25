@@ -51,9 +51,24 @@ class Settings(BaseSettings):
 
     # LiteLLM-style "<provider>/<model>" identifiers. These are the ONLY place
     # a model name may appear; every call site reads them from here.
-    llm_model_scoring: str = "anthropic/claude-opus-5"
+    #
+    # The split is by consequence-of-being-wrong, not by prestige:
+    #
+    #   scoring / classify -> cheap. Both are constrained classification over a
+    #       fixed schema, they run on every job and every inbound email, and a
+    #       mistake is recoverable — a mis-scored job is re-scored, a
+    #       mis-classified email is one wrong status the user can correct. This
+    #       is where the volume is and where the money goes.
+    #   writing -> strong. Cover letters and resume bullets are prose that goes
+    #       to an employer under the user's name and cannot be recalled. It runs
+    #       once per application, so the unit cost barely registers.
+    #   formmap -> strong. A mis-mapped field puts a false answer on a real
+    #       application. The abstain rule catches low confidence, but the cheap
+    #       failure here is silent and unrecoverable, so it stays on the strong
+    #       model until there is evidence it can be moved.
+    llm_model_scoring: str = "gemini/gemini-3.1-flash-lite"
+    llm_model_classify: str = "gemini/gemini-3.1-flash-lite"
     llm_model_writing: str = "anthropic/claude-opus-5"
-    llm_model_classify: str = "anthropic/claude-opus-5"
     llm_model_formmap: str = "anthropic/claude-opus-5"
     llm_model_embedding: str = "openai/text-embedding-3-small"
 
@@ -109,6 +124,12 @@ class Settings(BaseSettings):
         "anthropic/claude-opus-5": {"input": 5.00, "output": 25.00},
         "anthropic/claude-sonnet-5": {"input": 3.00, "output": 15.00},
         "anthropic/claude-haiku-4-5": {"input": 1.00, "output": 5.00},
+        # Default for scoring and classification.
+        "gemini/gemini-3.1-flash-lite": {"input": 0.25, "output": 1.50},
+        # Cheaper, but Google retires it on 2026-10-16 — see NOTES.md before
+        # switching to it for a saving that expires.
+        "gemini/gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
+        "gemini/gemini-3.1-flash": {"input": 0.50, "output": 3.00},
         "openai/text-embedding-3-small": {"input": 0.02, "output": 0.0},
         "openai/text-embedding-3-large": {"input": 0.13, "output": 0.0},
     }

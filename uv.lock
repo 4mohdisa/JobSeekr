@@ -1277,6 +1277,7 @@ dependencies = [
     { name = "sqlmodel" },
     { name = "structlog" },
     { name = "tenacity" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1313,6 +1314,7 @@ requires-dist = [
     { name = "sqlmodel", specifier = ">=0.0.39" },
     { name = "structlog", specifier = ">=26.1.0" },
     { name = "tenacity", specifier = ">=9.1.4" },
+    { name = "tzdata", marker = "sys_platform == 'win32'", specifier = ">=2025.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.52.4" },
 ]
 

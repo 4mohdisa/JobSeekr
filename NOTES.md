@@ -887,3 +887,203 @@ resource in a job search, the thing that runs out at 9pm after a day of work.
 So the manual floor is `score_auto_apply + 8`. A job good enough to auto-apply to is
 *not* automatically good enough to interrupt someone for; if it is not worth their
 attention it is skipped rather than queued.
+
+---
+
+# Windows bring-up attempt — 2026-08-25
+
+## The headline: this did not run on Windows
+
+The session that was asked to do the Windows bring-up **was not on Windows.** It
+was the same Linux container the project was originally built in:
+
+```
+platform.system() -> Linux        os.name -> posix        os.sep -> '/'
+pdflatex          -> /usr/bin/pdflatex   (TeX Live 2023, NOT MiKTeX)
+powershell.exe / cmd.exe / miktex-console -> absent
+```
+
+There is no path from that container to a Windows desktop, so **every
+Windows-specific claim in this file is unverified on Windows.** Phases 1 and 4
+were re-scoped to the work that genuinely transfers; Phase 2 was blocked
+outright; Phase 3 was fully completed.
+
+Nothing below should be read as "works on Windows". It should be read as
+"the Windows-specific defects that could be found without Windows have been
+found and fixed".
+
+## Phase 1 — Windows portability (re-scoped: static audit, not a live run)
+
+Could not be done: verifying Python/uv/node/MiKTeX/Playwright on the target
+machine, `uv sync` + `npm install` + `alembic upgrade head` on Windows, or
+running the suite there.
+
+Done instead: a systematic audit for the defect classes that only bite on
+Windows, plus `tests/test_windows_portability.py` (19 tests) that encodes them
+as rules failing on Linux too, so a regression is caught here rather than on
+the desktop.
+
+**Three real bugs found and fixed:**
+
+1. **`subprocess.run(..., text=True)` on the pdflatex call.** `text=True` alone
+   decodes with the locale encoding — cp1252 on a typical Windows install. One
+   non-cp1252 byte in a pdflatex log (an em-dash in a path, a package banner)
+   raises `UnicodeDecodeError`, and the build then fails with a decoding error
+   instead of the LaTeX error that actually happened. Now pinned to
+   `encoding="utf-8", errors="replace"`.
+
+2. **Aux cleanup could discard a good build.** `aux.unlink()` was unguarded. On
+   Windows an on-access virus scanner holds a just-written file open for a
+   moment and `unlink` raises `PermissionError` — losing a PDF that had already
+   compiled correctly. Cleanup is now best-effort and logs at debug.
+
+3. **`tzdata` reached Windows only by accident.** Windows ships no tz database,
+   so `ZoneInfo("Australia/Adelaide")` raises `ZoneInfoNotFoundError` without
+   it — which would crash the guardrails' business-hours check, the daily cap's
+   local-day boundary and the scheduler. It was arriving transitively via
+   pandas' `sys_platform == 'win32'` marker, i.e. it would have vanished the day
+   jobspy was swapped out. Now declared explicitly with a Windows marker.
+
+Audited and found already clean: no `open`/`read_text`/`write_text` without an
+explicit encoding, no `/tmp` or other POSIX-absolute paths, no path building by
+string concatenation, no `shell=True`, all settings paths are `pathlib.Path`,
+no Windows reserved filenames generated.
+
+**Still unverified on Windows and needing you:** MiKTeX's `pdflatex` (this used
+TeX Live), `channel="chrome"` launching real Chrome, SQLite WAL behaviour (WAL
+does not work on network drives — keep `data/` on a local disk), the 260-char
+path limit under a deep user profile, and Task Scheduler at login.
+
+## Phase 2 — BLOCKED. Seek, LinkedIn and Indeed are still unreachable
+
+Re-tested at the start of this session, not assumed:
+
+| Host | Result |
+|---|---|
+| `www.seek.com.au` | CONNECT fails — proxy 403 |
+| `au.indeed.com` | CONNECT fails — proxy 403 |
+| `www.linkedin.com` | CONNECT fails — proxy 403 |
+| `generativelanguage.googleapis.com` | reachable (404 on `/`, expected) |
+
+`uv run python -m backend.discovery.verify_seek` was run and reported
+`NOTHING WORKED`, with `ProxyError: 403 Forbidden` on all three strategies —
+the tool behaving exactly as designed, which is itself the one useful result.
+
+**So none of Phase 2 happened:** the endpoint is still unconfirmed, no real jobs
+were pulled, jobspy was not exercised against LinkedIn or Indeed, and dedupe is
+still tested only against fixtures, never real cross-board duplicates.
+
+**This needs you, on your machine, and it is the highest-value thing outstanding:**
+
+```
+uv run python -m backend.discovery.verify_seek --terms "python developer" --where "Adelaide SA"
+# paste the .env lines it prints, then:
+uv run python -m backend.discovery.run --limit 50
+uv run python -m backend.scoring.run --estimate 200
+```
+
+## Phase 3 — DONE. Scoring and classification moved to Gemini Flash-Lite
+
+The cost problem flagged in the PR is now solved:
+
+| Scoring model | Projected, 200 jobs | Meets the $0.15 target |
+|---|---|---|
+| `anthropic/claude-opus-5` (was) | **$0.4315** | no — 2.9x over |
+| `gemini/gemini-3.1-flash-lite` (now) | **$0.0252** | **yes — 6x under** |
+| `gemini/gemini-2.5-flash-lite` | $0.0092 | yes, but see below |
+
+Routing is split by consequence-of-being-wrong rather than by prestige:
+
+- **scoring, classify -> Gemini Flash-Lite.** Both are constrained
+  classification against a fixed schema, both run on every job/email, and both
+  are recoverable — a mis-scored job is re-scored, a mis-classified email is one
+  status the user corrects.
+- **writing -> Claude Opus 5, unchanged.** Cover letters and resume bullets go
+  to an employer under the user's name and cannot be recalled. One call per
+  application, so the unit cost is irrelevant.
+- **formmap -> Claude Opus 5, unchanged.** A mis-mapped field puts a false
+  answer on a real application. The abstain rule catches low confidence, but the
+  cheap failure here is silent and unrecoverable. Left strong deliberately; move
+  it only with evidence.
+
+**Decision you should know about: defaulted to 3.1, not 2.5.** Google retires
+`gemini-2.5-flash-lite` on **2026-10-16** — about seven weeks out — replaced by
+`gemini-3.1-flash-lite`. Pinning 2.5 would buy $0.016 per 200 jobs and hand you
+a forced migration next month. Both are priced in `llm_prices_per_m_tokens` if
+you want the cheaper rate short-term.
+
+**No `.env` exists, so no key was used and nothing was called live.** The wiring
+is complete and the projection is computed from the configured models. To
+actually use it: `GEMINI_API_KEY=...` in `.env`. The Gemini endpoint *is*
+reachable from here, so a live smoke test is possible the moment a key exists.
+
+## Phase 4 — DONE. Real templates, real pdflatex, real parse gate
+
+Compiled `templates/resume.tex.j2` and `cover_letter.tex.j2` with the real
+`pdflatex` using the **production context builders**, then merged and gated all
+three. Confirmed by inspection and by compiling: `a4paper`, single column, no
+`fontspec`, no `multicol`, no `fancyhdr`, no fontawesome, T1 + lmodern.
+
+Result: **resume 1 page / 803 chars, cover letter 1 page / 370 chars, combined
+2 pages / 1174 chars — all three pass every gate check**, including
+pypdf-vs-pdfplumber agreement at 99.9% and no column gutter detected.
+
+**Two real bugs found, both only visible by compiling for real:**
+
+1. **Every resume build failed for any profile created through the UI.** The
+   engine runs with `StrictUndefined` — deliberately, because that is what
+   catches `job.compnay` before a document reaches an employer — but that also
+   means `\BLOCK{if role.location}` *raises* when the key is absent rather than
+   evaluating false. The Profile page's experience editor has no location field
+   at all, so every profile it produces lacks that key and every build died.
+   Fixed by normalising rows in `_profile_context` to carry the full key set.
+
+2. **Double-escaping silently corrupted special characters.** The escaping
+   filters (`join_latex`, `latex`, `url`) returned plain `str`, so the finalize
+   hook escaped their output a second time and the escape became content. A
+   skill of `C#` typeset as the literal text `C\#`.
+
+   This is the worst kind of failure this project can have: the PDF looked
+   almost right, **the parse gate passed**, and an ATS searching for "C#" or
+   "R&D" found nothing. It survived because the gate's `claimed_keywords` check
+   happened to be given only Python/SQL/FastAPI — none containing a special
+   character. Fixed by returning `RawLatex` from all three filters, with
+   regression tests in `tests/test_engine.py`.
+
+Extracted text from the real compiled PDF, after the fixes:
+
+```
+Jordan Fitzgerald
+Backend Engineer
+jordan.fitzgerald@example.com · +61 412 345 678· Adelaide SA 5000· linkedin.com/in/jordanfitzgerald
+SUMMARY
+Backend engineer building efficient, financial-grade data pipelines.
+SKILLS
+Python, SQL, FastAPI, PostgreSQL, C#, R&D tooling
+EXPERIENCE
+Senior Developer 2022 – Present
+Wattle & Finch Pty Ltd
+• Rebuilt the financial reconciliation service end to end
+...
+```
+
+Contact details land in the body and in the first 200 characters; sections
+appear as plain words in source order; `efficient`, `financial` and
+`certification` all survive extraction intact (the fi/fl ligature check);
+`C#`, `R&D`, `100%` and `Wattle & Finch` now all round-trip correctly.
+
+Caveat that matters: this was **TeX Live 2023 on Linux, not MiKTeX on Windows**.
+The LaTeX is portable and the packages used are all in a basic MiKTeX install,
+but MiKTeX's on-the-fly package installation prompts on first use — run one
+build manually before relying on a scheduled one.
+
+## What needs you
+
+1. **Run the whole thing on Windows.** Nothing here proves it works there.
+2. **Phase 2 in full** — the `verify_seek` command above. Highest value
+   outstanding: discovery is the top of the funnel and is entirely unproven
+   against a live site.
+3. **Add `GEMINI_API_KEY`** to `.env` if you want the new routing used.
+4. **Decide on 2.5 vs 3.1 Flash-Lite** before 2026-10-16.
+5. **Dismiss GitGuardian incident 36579249** (dummy placeholder, already
+   emptied at the branch tip).

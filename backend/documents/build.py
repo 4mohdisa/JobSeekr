@@ -85,6 +85,39 @@ class BuildResult:
 # --------------------------------------------------------------------------
 
 
+# Optional per-row fields the templates reference. The engine runs with
+# StrictUndefined — deliberately, because it is what catches a typo like
+# `job.compnay` before a document reaches an employer — but that strictness
+# also means `\BLOCK{if role.location}` RAISES when the key is simply absent
+# rather than evaluating false. Every row is therefore normalised to carry the
+# full key set, so an optional field that the user left blank stays optional.
+#
+# Found by compiling the real template against a profile shaped the way the
+# Profile page actually produces one: its experience editor has no location
+# field at all, so before this every resume build failed outright.
+_ROW_DEFAULTS: dict[str, tuple[str, ...]] = {
+    "experience": ("title", "company", "start", "end", "location", "highlights"),
+    "projects": ("name", "stack", "description"),
+    "education": ("qualification", "institution", "year"),
+    "certifications": ("name", "issuer", "year"),
+}
+
+
+def _normalise_rows(rows: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Give every row the full key set, so absent optionals read as empty."""
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        filled = {key: row.get(key, "") for key in keys}
+        # Preserve anything extra the user stored; templates ignore it.
+        filled.update({k: v for k, v in row.items() if k not in filled})
+        if "highlights" in keys and not filled.get("highlights"):
+            filled["highlights"] = []
+        out.append(filled)
+    return out
+
+
 def _profile_context(profile: Profile) -> dict[str, Any]:
     """Flatten the profile's JSON into the template vocabulary.
 
@@ -103,10 +136,12 @@ def _profile_context(profile: Profile) -> dict[str, Any]:
         "linkedin": identity.get("linkedin", ""),
         "website": identity.get("website", ""),
         "work_rights": work_rights.get("statement", ""),
-        "experience": profile.experience or [],
-        "projects": profile.projects or [],
-        "education": profile.education or [],
-        "certifications": profile.certifications or [],
+        "experience": _normalise_rows(profile.experience, _ROW_DEFAULTS["experience"]),
+        "projects": _normalise_rows(profile.projects, _ROW_DEFAULTS["projects"]),
+        "education": _normalise_rows(profile.education, _ROW_DEFAULTS["education"]),
+        "certifications": _normalise_rows(
+            profile.certifications, _ROW_DEFAULTS["certifications"]
+        ),
         "skills": profile.skills or [],
     }
 
@@ -263,6 +298,14 @@ def render_pdf(tex_source: str, out_dir: Path, stem: str) -> Path:
                 ],
                 capture_output=True,
                 text=True,
+                # Decode pdflatex's output as UTF-8 explicitly. Without this,
+                # `text=True` uses the locale encoding — cp1252 on a typical
+                # Windows install — and one non-cp1252 byte in the log (an
+                # em-dash in a filename, a package's copyright line) raises
+                # UnicodeDecodeError. The build would then fail with a decoding
+                # error instead of the LaTeX error that actually happened.
+                encoding="utf-8",
+                errors="replace",
                 timeout=120,
                 check=False,
             )
@@ -292,8 +335,16 @@ def render_pdf(tex_source: str, out_dir: Path, stem: str) -> Path:
 
     for suffix in _AUX_SUFFIXES:
         aux = out_dir / f"{stem}{suffix}"
-        if aux.exists():
-            aux.unlink()
+        try:
+            aux.unlink(missing_ok=True)
+        except OSError as exc:
+            # Tidying up must never fail a build that already produced a valid
+            # PDF. On Windows this is a real intermittent case rather than a
+            # theoretical one: Defender (and every other on-access scanner)
+            # holds a just-written file open for a moment, and unlink then
+            # raises PermissionError. The stale .aux is harmless; the lost
+            # document would not be.
+            log.debug("aux_cleanup_skipped", path=str(aux), error=str(exc)[:120])
     return pdf_path
 
 
