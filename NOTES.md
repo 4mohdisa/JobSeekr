@@ -1264,6 +1264,130 @@ adding a newly-suspect string is one list entry:
 Each was confirmed to fail with its fix reverted, so none of them passes
 vacuously. Full suite: **410 passed**.
 
+## Hardening — Phase 3: the resolver answered 14 questions it should have refused
+
+Screening answers are the most dangerous output in the system: a wrong one is a
+false statement about work rights, licences or salary, made to an employer under
+your name, with no undo. So the rule for this phase was that **any case where it
+answers instead of abstaining is a bug in the resolver**.
+
+Fifty-three adversarial cases in the first round. Fourteen came back wrong.
+
+| class | asked | stored | answered |
+| --- | --- | --- | --- |
+| qualifier | "available for **part-time** work?" | "available for **full-time** work?" | Yes (89) |
+| negation | "Do you **NOT** require visa sponsorship?" | "Do you require visa sponsorship?" | No (94) |
+| negation | "Do you **not** require **no** visa sponsorship?" | same | No (90) |
+| negation | "Are you **unable** to work full-time?" | "Are you **able** to work full-time?" | Yes (93) |
+| negation | "Do you have **no** criminal convictions?" | "Do you have **any** criminal convictions?" | No (94) |
+| negation | "Can you **not** start immediately?" | "Can you start immediately?" | Yes (93) |
+| negation | "Do you **lack** full working rights?" | "Do you **have** full working rights?" | Yes (90) |
+| unit | "How many **months** of Python experience?" | "How many **years** ...?" | 5 (89) |
+| unit | "How many **years** ...?" | "How many **months** ...?" | 60 (89) |
+| unit | "How many **days** notice?" | "How many **weeks** notice?" | 4 (89) |
+| duplicate | two fuzzy rows, one verbatim | 5 and 7 | 5 (100) |
+| duplicate | two EXACT rows, same pattern | 2 weeks and 4 weeks | 2 weeks (100) |
+| duplicate | a regex row and a fuzzy row | 120000 and 140000 | 140000 (100) |
+| degenerate | a form label of `"a"` | any question | Yes (100) |
+
+A second round found three more: a compound question ("What is your notice
+period, **and** what is your salary expectation?") answered from an entry
+covering only the first half, and two substituted subjects — "**Ruby**" for
+"Python" at 91, "**Master's**" for "Bachelor's" at 90.
+
+### Why raising the threshold would not have worked
+
+Every one of those scored **above** the 88 fuzzy threshold. They are not weak
+matches, they are confident wrong ones — screening questions are short and share
+most of their words, so the wrong question is already 90% similar to the right
+one. Raising the threshold to 95 would have discarded the misspellings the fuzzy
+tier exists to absorb and still let "part-time"/"full-time" through at 88.9 only
+by accident of that one pair's arithmetic.
+
+So the fix disqualifies a row outright rather than scoring it lower. Four
+checks, in `backend/apply/answers.py`:
+
+**Negation count.** Counted, not parity-checked: "not require no sponsorship" is
+grammatically a double negative, but treating it as the plain form means
+answering a question nobody can reliably parse. Any difference in count
+disqualifies the row. Word boundaries matter — "notice" must not read as "no".
+
+**Qualifier families.** Eight sets of mutually exclusive terms (employment basis,
+time unit, rate basis, licence class, shift, distance unit, bound, work
+eligibility). Naming a different member of the same family is a different
+question. This generalises the two hardcoded polarity pairs that were already
+there. It is a curated list and therefore incomplete by construction — it is the
+second line of defence, not the first.
+
+**Clause count.** How many questions are being asked at once, counted by segment
+rather than by opener: "How many years of Python experience **do you have**?"
+contains two interrogative openers and is one question, while "... in Australia?
+Please attach evidence." is one question followed by an instruction.
+
+**Substitution.** The general case, which no curated list reaches. An *addition*
+is fine — "...working rights **in Australia**?" against a stored "...working
+rights?" is the same question with more words. A *substitution* is not: when each
+side has content words the other lacks and those leftovers are not spellings of
+one another, the two questions are about different things. "licence"/"license"
+scores 86 and "austrlia"/"australia" 94; "ruby"/"python" scores 18. The gap is
+wide enough for one threshold.
+
+### The tiering also had to go
+
+The exact tier used to short-circuit: **any** row whose text happened to equal
+the question — including a row the user never declared EXACT — was promoted to
+tier 1 and returned immediately, so a second, contradictory entry was never
+consulted. Two contradictory entries mean the bank is wrong, and answering from
+it puts a stale number on a real application.
+
+Now there is one candidate pool. Regex hits and fuzzy hits compete together, and
+if the candidates within `AMBIGUITY_MARGIN` of the winner disagree, it abstains.
+The one remaining short-circuit is a row the user explicitly declared
+`MatchType.EXACT` — that is a deliberate override, and it wins over a
+disagreeing fuzzy row but not over another EXACT row.
+
+Two smaller fixes in the same area: a row scoped to a **different** campaign is
+now discarded rather than merely outranked (ranking it equal made two unrelated
+campaigns look like a contradiction), and a question shorter than 8 characters or
+2 words is rejected before the fuzzy tier, because `partial_ratio` scores any
+substring at 100 and a form label of "a" matched a full question perfectly.
+`partial_ratio` itself is kept: a stored pattern of "notice period" shares only
+23% of its length with "What is your notice period if you were to accept an
+offer?" and must still match.
+
+### What the guards cost — measured, not assumed
+
+Thirty-four realistic phrasings of the shipped seed questions, taken from how
+Seek and LinkedIn actually word them:
+
+```
+guards off  ->  28/34 answered (82%)
+guards on   ->  26/34 answered (76%)
+```
+
+The two it newly abstains on are synonym swaps: "commence" for "start", "living"
+for "residing". Structurally those are identical to "Ruby" for "Python" —
+each side has a content word the other lacks and they are not spellings of one
+another — so no rule that catches the second can pass the first.
+
+That is the accepted cost, and it is a self-correcting one: an abstention parks
+the job, asks you once over Telegram, saves the answer, and the phrasing resolves
+exactly from then on. A guess is not recoverable. All 21 seeded questions still
+resolve against their own patterns, and the seeded visa/sponsorship pair still
+refuses to answer from each other.
+
+### Regression tests
+
+`tests/test_answers_adversarial.py`, 107 tests — every case above, plus the
+surface-noise cases that must NOT abstain (casing, whitespace, numbering,
+bullets, typos, HTML tags, curly apostrophes) and the degenerate ones that must
+(empty, whitespace, `None`, a single character, 5000 characters of noise, French,
+Chinese, Arabic, emoji, fullwidth Latin). It is a separate file from
+`test_answers.py` on purpose: that one shows the resolver working, this one tries
+to make it lie.
+
+Full suite: **517 passed**.
+
 ## What needs you
 
 1. **Run the whole thing on Windows.** Nothing here proves it works there.
