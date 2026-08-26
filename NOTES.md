@@ -1092,9 +1092,11 @@ triggered the re-scan, which came back **success**.
 
 Two things had changed under the Phase 1 plan while it was blocked:
 
-* **PR #2 was closed, not merged.** Its head `fix/windows-bringup` (725e207) was
-  already an ancestor of PR #1's head, so its work was in PR #1 — GitHub closed it
-  when its base branch absorbed the commits. There was no second PR to merge.
+* **PR #2 merged itself.** Its base was `claude/job-agent-core-setup-07xswl`, so
+  the moment the hardening push landed on that branch, its head `fix/windows-bringup`
+  (725e207) became reachable from its base and GitHub marked it merged —
+  `merged_at: 2026-08-26T12:45:57Z`, the same second as the push. There was no
+  second PR left to merge by hand.
 * **PR #1 carried all four phases.** The designated branch for this work is
   `claude/job-agent-core-setup-07xswl`, which *is* PR #1's head, so the hardening
   commits could not land anywhere else. The diff being merged was no longer the
@@ -1103,7 +1105,15 @@ Two things had changed under the Phase 1 plan while it was blocked:
 I put that to you rather than assuming, and you chose to merge. PR #1 was marked
 ready and merged into `main` as `70756bc` — 133 files, 19 commits, four phases.
 
+**Correction to what I first told you.** I said PR #2 was "closed, not merged".
+That was what the API returned when I queried it, but I queried it *before* the
+push — `merged:false` was true at 12:38 and false by 12:45:57. The webhook that
+arrived afterwards said `outcome: merged`, I re-checked against the API, and the
+API now agrees. So both PRs merged; only the branch deletion below is
+outstanding.
+
 **One thing did not get done: `fix/windows-bringup` is still on the remote.**
+It is the head of a merged PR, so it is safe to remove.
 Deleting a branch over `git push` fails in this container — the proxy drops the
 connection on a delete-ref (`send-pack: unexpected disconnect while reading
 sideband packet`), and it failed on both attempts. `feat/core` is already gone.
