@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.apply.draft import FormField
+from backend.apply.session import has_restriction_notice
 from backend.logging_setup import get_logger
 from backend.models import ApplyType, Document, Job
 
@@ -97,12 +98,6 @@ SELECTORS: dict[str, tuple[str, ...]] = {
         "[data-test-modal] :text('Done')",
     ),
     # confidence: medium — the most serious thing this file can detect
-    "restriction_notice": (
-        "text=/account has been restricted/i",
-        "text=/we've restricted your account/i",
-        "text=/unusual activity/i",
-        "text=/please verify your identity/i",
-    ),
 }
 
 
@@ -182,8 +177,12 @@ class LinkedInApplier:
         Reported to the flow, which trips the global halt through guardrails —
         never handled locally, because the correct response is stopping
         everything, not skipping one job.
+
+        The selectors live in the board registry, not here: session checking
+        and applying both need them, and the two copies had already drifted
+        apart on the wording of the identity-verification notice.
         """
-        return _first_visible(page, "restriction_notice", timeout_ms=1200) is not None
+        return has_restriction_notice(page, self.platform)
 
     def detect_redirect(self, page: Any) -> bool:
         """A listing that claims Easy Apply and then sends you off-site.

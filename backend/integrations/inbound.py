@@ -22,6 +22,7 @@ from sqlmodel import select
 
 from backend.config import settings
 from backend.db import session_scope
+from backend.integrations.gmail import default_since
 from backend.integrations.matching import InboundEmail, match_email
 from backend.integrations.notify import Priority, notify
 from backend.llm.client import LLMBudgetExceeded, llm
@@ -134,7 +135,7 @@ def run_inbound_sweep(
 ) -> Run:
     """Read recent mail, attach what matches, and record the run."""
     started = datetime.now(UTC)
-    since = since or (started - timedelta(days=7))
+    since = since or default_since()
     counts = {"fetched": 0, "matched": 0, "unmatched": 0, "irrelevant": 0, "interviews": 0}
     errors: list[dict[str, Any]] = []
 

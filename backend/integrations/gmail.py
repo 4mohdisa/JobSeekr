@@ -19,7 +19,6 @@ and requires explicit approval.
 
 from __future__ import annotations
 
-import email as email_lib
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -216,35 +215,6 @@ def build_reader() -> MailReader:
 
 # Kept as an alias so callers read naturally.
 GmailReader = build_reader
-
-
-def parse_rfc822(raw: bytes) -> InboundEmail:
-    """Parse a raw message. Used by tests and by any future import path."""
-    message = email_lib.message_from_bytes(raw)
-    body = ""
-    if message.is_multipart():
-        for part in message.walk():
-            if part.get_content_type() == "text/plain":
-                body = part.get_payload(decode=True).decode("utf-8", errors="replace")
-                break
-    else:
-        payload = message.get_payload(decode=True)
-        body = payload.decode("utf-8", errors="replace") if payload else ""
-
-    received = datetime.now(UTC)
-    if message.get("date"):
-        parsed = email_lib.utils.parsedate_to_datetime(message["date"])
-        if parsed:
-            received = parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-
-    return InboundEmail(
-        message_id=message.get("message-id", ""),
-        subject=message.get("subject", ""),
-        from_address=message.get("from", ""),
-        body=body,
-        received_at=received,
-        in_reply_to=message.get("in-reply-to"),
-    )
 
 
 def default_since() -> datetime:

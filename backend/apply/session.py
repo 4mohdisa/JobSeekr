@@ -19,9 +19,9 @@ from __future__ import annotations
 import argparse
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
+from backend.boards import BoardSession, session_boards
 from backend.config import settings
 from backend.logging_setup import configure_logging, get_logger
 
@@ -29,7 +29,6 @@ log = get_logger(__name__)
 
 __all__ = [
     "PLATFORMS",
-    "PlatformSelectors",
     "SessionExpired",
     "ensure_logged_in",
     "is_logged_in",
@@ -58,49 +57,10 @@ class SessionExpired(RuntimeError):
         self.platform = platform
 
 
-@dataclass(frozen=True)
-class PlatformSelectors:
-    """Everything session handling needs to know about one platform.
-
-    A registry entry, not code — adding a platform is a data change here plus
-    an adapter file, never an edit to the logic below.
-    """
-
-    login_url: str
-    home_url: str
-    #: Selectors that only exist once signed in. Any one matching is enough.
-    logged_in: tuple[str, ...]
-    #: Selectors for account-restriction interstitials. Any match halts everything.
-    restriction_notice: tuple[str, ...] = ()
-
-
-PLATFORMS: dict[str, PlatformSelectors] = {
-    "linkedin": PlatformSelectors(
-        login_url="https://www.linkedin.com/login",
-        home_url="https://www.linkedin.com/feed/",
-        logged_in=(
-            "img.global-nav__me-photo",
-            "button.global-nav__primary-link-me-menu-trigger",
-            "[data-control-name='identity_welcome_message']",
-            "div.global-nav__me",
-        ),
-        restriction_notice=(
-            "text=/account has been restricted/i",
-            "text=/unusual activity/i",
-            "text=/we've restricted your account/i",
-            "text=/verify your identity/i",
-        ),
-    ),
-    "seek": PlatformSelectors(
-        login_url="https://www.seek.com.au/oauth/login/",
-        home_url="https://www.seek.com.au/",
-        logged_in=(
-            "[data-automation='profile-menu']",
-            "[data-automation='signed-in-nav']",
-            "button[data-automation='navigation-account']",
-        ),
-        restriction_notice=("text=/account has been suspended/i",),
-    ),
+# The session view of the board registry. ``backend.boards`` owns the data —
+# adding a platform is an entry there, not an edit here.
+PLATFORMS: dict[str, BoardSession] = {
+    entry.key: entry.session for entry in session_boards() if entry.session
 }
 
 
@@ -240,7 +200,10 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
 
     login_parser = sub.add_parser("login", help="sign in manually in a visible browser")
     login_parser.add_argument(
-        "--platform", default="linkedin", choices=sorted(PLATFORMS), help="platform to sign in to"
+        "--platform",
+        default=next(iter(PLATFORMS), None),
+        choices=sorted(PLATFORMS),
+        help="platform to sign in to",
     )
     login_parser.add_argument("--timeout", type=int, default=600)
 

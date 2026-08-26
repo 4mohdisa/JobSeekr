@@ -161,10 +161,6 @@ export function formatSalary(
   return estimated ? `${range} (est. from ${basis})` : range;
 }
 
-export function formatScore(value: number | null | undefined): string {
-  return value === null || value === undefined ? "—" : value.toFixed(0);
-}
-
 export function formatPercent(value: number | null | undefined): string {
   return value === null || value === undefined ? "—" : `${(value * 100).toFixed(0)}%`;
 }

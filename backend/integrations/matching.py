@@ -30,6 +30,7 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
+from backend.boards import is_platform_domain
 from backend.discovery.normalize import canonical_company
 from backend.logging_setup import get_logger
 
@@ -62,23 +63,6 @@ _REFERENCE_PATTERNS = (
     re.compile(r"\bposition\s+(?:id|number)\s*[:#]?\s*(\d{4,10})\b", re.IGNORECASE),
 )
 
-_ATS_DOMAINS = (
-    "pageuppeople.com",
-    "jobadder.com",
-    "smartrecruiters.com",
-    "greenhouse.io",
-    "lever.co",
-    "myworkdayjobs.com",
-    "workday.com",
-    "taleo.net",
-    "icims.com",
-    "seek.com.au",
-    "linkedin.com",
-    "indeed.com",
-    "recruitee.com",
-    "workable.com",
-    "jobvite.com",
-)
 
 
 @dataclass
@@ -100,8 +84,7 @@ class InboundEmail:
 
     @property
     def from_ats(self) -> bool:
-        domain = self.sender_domain
-        return any(domain == ats or domain.endswith("." + ats) for ats in _ATS_DOMAINS)
+        return is_platform_domain(self.sender_domain)
 
     @property
     def haystack(self) -> str:

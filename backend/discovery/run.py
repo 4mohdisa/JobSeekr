@@ -20,12 +20,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from backend.base import RawJob, Source
+from backend.boards import source_boards
 from backend.config import settings
 from backend.db import session_scope
 from backend.discovery.dedupe import find_duplicate
-from backend.discovery.jobspy_source import JobSpySource
 from backend.discovery.normalize import normalize_job
-from backend.discovery.seek_source import SeekSource
 from backend.logging_setup import configure_logging, get_logger
 from backend.models import Campaign, Job, Run, RunPhase
 
@@ -35,16 +34,12 @@ __all__ = ["build_sources", "discover", "run_discovery"]
 
 
 def build_sources() -> list[Source]:
-    """The boards discovery reads.
+    """The boards discovery reads, from the one registry that defines them.
 
-    Adding one is a new file plus a line here — never a change to the runner's
-    logic, which stays source-agnostic on purpose.
+    Adding a board is an entry in ``backend.boards`` plus an adapter file —
+    never a change to the runner's logic, which stays source-agnostic.
     """
-    return [
-        SeekSource(),
-        JobSpySource("linkedin", easy_apply_only=True),
-        JobSpySource("indeed"),
-    ]
+    return [entry.make_source() for entry in source_boards()]
 
 
 def _search_safely(

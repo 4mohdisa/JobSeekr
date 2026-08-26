@@ -482,10 +482,19 @@ def run_apply(
 
 
 def _restricted(adapter: Adapter, page: Any) -> bool:
+    """Whether the platform is showing an account-restriction interstitial.
+
+    An adapter may override the check; when it does not, the board registry's
+    selectors are used. Before that fallback existed, Seek had restriction
+    selectors defined and nothing that ever looked at them, so a suspended Seek
+    account would have kept receiving applications.
+    """
+    from backend.apply.session import has_restriction_notice
+
     detector = getattr(adapter, "detect_restriction", None)
-    if detector is None:
-        return False
     try:
+        if detector is None:
+            return has_restriction_notice(page, adapter.platform)
         return bool(detector(page))
     except Exception:  # noqa: BLE001
         return False

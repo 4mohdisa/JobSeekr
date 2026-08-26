@@ -30,7 +30,6 @@ from pathlib import Path
 from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateSyntaxError
-from jinja2 import meta as jinja_meta
 
 from backend.documents.latex import escape_latex, latex_safe_url
 from backend.logging_setup import get_logger
@@ -116,7 +115,6 @@ SLOT_SPECS: dict[str, AISlot] = {
 
 
 _VAR_RE = re.compile(r"\\VAR\{\s*([^}]+?)\s*\}")
-_BLOCK_RE = re.compile(r"\\BLOCK\{\s*([^}]+?)\s*\}")
 # A stray Jinja-default placeholder: almost always a typo by someone who forgot
 # this project's delimiters. Reported rather than silently rendered as text.
 _STRAY_MUSTACHE_RE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
@@ -327,12 +325,3 @@ def validate_placeholders(body: str) -> list[PlaceholderIssue]:
             )
 
     return issues
-
-
-def undeclared_variables(body: str) -> set[str]:
-    """Variables a template reads — used to build a minimal render context."""
-    try:
-        env = build_environment()
-        return jinja_meta.find_undeclared_variables(env.parse(body))
-    except TemplateSyntaxError:
-        return set()

@@ -16,8 +16,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.apply import linkedin, seek
 from backend.apply.session import PLATFORMS, launch_context
+from backend.boards import BOARDS
 from backend.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
@@ -29,26 +29,22 @@ __all__ = ["CANARY_PAGES", "CanaryResult", "run_canary"]
 on_drift: Callable[[str, list[str]], None] | None = None
 
 
-# Canary URLs are data rather than logic: pointing them at a different listing
-# is an edit here, not a code change. A search results page is used rather than
-# a specific job because job postings expire.
+# Both tables come from the board registry: a canary page is data, and the
+# selectors it watches are the adapter's own, sampled rather than re-listed.
+# Re-listing them was how the canary came to watch selectors an adapter had
+# already renamed.
 CANARY_PAGES: dict[str, str] = {
-    "seek": "https://www.seek.com.au/jobs?keywords=developer&where=Adelaide+SA",
-    "linkedin": "https://www.linkedin.com/jobs/search/?keywords=developer&location=Adelaide",
+    entry.key: entry.canary_url for entry in BOARDS if entry.canary_url
 }
 
-# The selector groups that, if they vanish, mean an adapter is about to fail.
 WATCHED: dict[str, dict[str, tuple[str, ...]]] = {
-    "seek": {
-        key: seek.SELECTORS[key]
-        for key in ("apply_button", "submit_button", "confirmation")
-        if key in seek.SELECTORS
-    },
-    "linkedin": {
-        key: linkedin.SELECTORS[key]
-        for key in ("easy_apply_button", "modal", "submit_button", "confirmation")
-        if key in linkedin.SELECTORS
-    },
+    entry.key: {
+        key: entry.selectors()[key]
+        for key in entry.canary_selectors
+        if key in entry.selectors()
+    }
+    for entry in BOARDS
+    if entry.canary_url and entry.selectors
 }
 
 

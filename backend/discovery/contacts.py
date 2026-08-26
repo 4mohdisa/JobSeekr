@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 
+from backend.boards import is_platform_domain
 from backend.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -43,29 +44,9 @@ _EMAIL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Platform plumbing, not the employer. Writing to these reaches a robot at
-# best and an unrelated ATS vendor at worst.
-_BLOCKED_DOMAINS = (
-    "seek.com.au",
-    "linkedin.com",
-    "indeed.com",
-    "au.indeed.com",
-    "glassdoor.com",
-    "ziprecruiter.com",
-    "pageuppeople.com",
-    "jobadder.com",
-    "smartrecruiters.com",
-    "greenhouse.io",
-    "lever.co",
-    "myworkdayjobs.com",
-    "workday.com",
-    "bamboohr.com",
-    "applytojob.com",
-    "recruitee.com",
-    "workable.com",
-    "jobvite.com",
-    "taleo.net",
-    "icims.com",
+# Hosts that are noise rather than either a platform or an employer: analytics
+# and site-builder domains that appear in scraped page HTML.
+_NOISE_DOMAINS = (
     "example.com",
     "sentry.io",
     "wixpress.com",
@@ -110,7 +91,9 @@ def _clean(local: str, domain: str) -> str | None:
 def _is_usable(address: str, *, source_host: str | None) -> bool:
     local, _, domain = address.partition("@")
 
-    if any(domain == blocked or domain.endswith("." + blocked) for blocked in _BLOCKED_DOMAINS):
+    if is_platform_domain(domain) or any(
+        domain == noise or domain.endswith("." + noise) for noise in _NOISE_DOMAINS
+    ):
         return False
     if any(local.startswith(blocked) for blocked in _BLOCKED_LOCALS):
         return False

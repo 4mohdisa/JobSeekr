@@ -32,6 +32,7 @@ from zoneinfo import ZoneInfo
 
 from sqlmodel import Session, select
 
+from backend.boards import BOARDS
 from backend.config import settings
 from backend.discovery.normalize import canonical_company
 from backend.logging_setup import get_logger
@@ -284,11 +285,11 @@ def _within_window(now: datetime, platform: str) -> tuple[bool, str]:
     return True, f"{local:%a %H:%M} {settings.timezone}"
 
 
+# Which platforms are restricted to business days. Read from the board
+# registry rather than restated here, so a new board cannot silently inherit
+# the permissive default because somebody forgot this table.
 _WINDOW_POLICY: dict[str, dict[str, Any]] = {
-    # LinkedIn is the account most costly to lose, so it gets the strictest
-    # pattern: weekdays, business hours only.
-    "linkedin": {"weekdays_only": True},
-    "seek": {"weekdays_only": False},
+    **{entry.key: {"weekdays_only": entry.weekdays_only} for entry in BOARDS},
     "_default": {"weekdays_only": False},
 }
 

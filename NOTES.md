@@ -1388,13 +1388,148 @@ to make it lie.
 
 Full suite: **517 passed**.
 
+## Hardening — Phase 4: DRY and dead code
+
+### Adding a job board took seven files
+
+That was the specific complaint, and it was accurate. A board's identity was
+spread across:
+
+| file | what it held |
+| --- | --- |
+| `discovery/run.py` | `build_sources()` — which boards are searched |
+| `apply/session.py` | `PLATFORMS` — login URLs and signed-in selectors |
+| `apply/run.py` | `build_appliers()` — which boards are applied to |
+| `apply/canary.py` | `CANARY_PAGES` — the daily drift check's URLs |
+| `apply/canary.py` | `WATCHED` — which selectors that check samples |
+| `apply/guardrails.py` | `_WINDOW_POLICY` — weekdays-only or not |
+| `apply/har.py` | `VARIANTS` — flow shapes worth recording |
+| `discovery/contacts.py` | domains that are the board, not the employer |
+| `integrations/matching.py` | the same list again |
+
+Nine sites, in seven files. Every one of them fails **quietly** when missed: a
+board that discovers jobs and never applies to them, an apply pass running
+LinkedIn's strict weekday policy against Seek, a canary watching selectors that
+no longer exist.
+
+Now there is `backend/boards.py`, and a board is one entry there plus its
+adapter file. Every table above is derived from it. `tests/test_architecture.py`
+parses the AST of every backend module and fails if a board key appears outside
+the registry and the adapters — parsing rather than grepping, because several of
+these files legitimately discuss board names in prose, and `"linkedin"` is also
+a **profile field** (the URL on the resume), which is why the documents layer is
+exempt by name.
+
+The factories in the registry import lazily, and that is load-bearing rather
+than stylistic: discovery is HTTP only and must never pull the apply layer —
+which touches a live browser session — into its import graph. Two tests pin it,
+one on the discovery package's imports and one that imports `backend.boards` in
+a subprocess and asserts no `backend.apply` module was loaded.
+
+### The two domain lists had already drifted
+
+`discovery/contacts.py` and `integrations/matching.py` each kept a hand-written
+list of "domains that belong to a platform rather than an employer", plus an
+identical `domain == x or domain.endswith("." + x)` check. The lists were not
+the same: the contact scraper knew about BambooHR, Glassdoor, ZipRecruiter and
+applytojob; the reply matcher did not.
+
+That is not a tidiness problem. The same address was platform plumbing in one
+module and a real employer in the other, which is how an outbound cover letter
+gets addressed to an ATS robot.
+
+Both now call `boards.is_platform_domain()`, which assembles the list from the
+two registries that already hold the data — `BOARDS` and `ATS_REGISTRY` — plus a
+short explicit list of vendors we recognise but have no adapter for. A
+parametrised test asserts both modules agree on twenty domains, and another
+asserts every ATS the detector can identify is also recognised in mail.
+
+### A safety check that was defined and never called
+
+`session.has_restriction_notice()` existed, `BoardSession.restriction_notice`
+held selectors for both boards, and nothing ever called either. LinkedIn's
+applier had its own `detect_restriction` with its own copy of the selectors —
+already drifted on the wording of the identity-verification notice — and Seek's
+applier had no restriction check at all.
+
+**A suspended Seek account would have kept receiving applications.**
+
+`flow._restricted()` now falls back to the registry when an adapter defines no
+detector, and LinkedIn's detector reads the registry rather than a second copy.
+One list of selectors, one implementation, both boards covered.
+
+### Removed
+
+| what | why |
+| --- | --- |
+| `documents/engine.py::_BLOCK_RE` | compiled, never used |
+| `documents/engine.py::undeclared_variables` | no caller in backend, tests or frontend |
+| `ats/detect.py::platform_by_key` | no caller |
+| `integrations/notify.py::describe_job` | no caller |
+| `integrations/gmail.py::parse_rfc822` | a **third** message parser; neither reader used it — IMAP goes through imap-tools, OAuth through the Gmail API payload |
+| `frontend/src/lib/hooks.ts::formatScore` | `ScoreBadge` already owns null-handling and formatting |
+| `email-validator` | no `EmailStr` anywhere |
+| `python-multipart` | no `UploadFile`, `File(...)` or `Form(...)` endpoint |
+| `pytest-asyncio` | no async test, no `asyncio_mode` setting |
+| `respx` | never imported; the HTTP tests stub at the client |
+
+`tzdata`, `uvicorn` and `ruff` are unimported by design — a Windows-only data
+package, a server entry point and a linter — and `lxml` is BeautifulSoup's
+parser backend. All kept.
+
+### Wired instead of removed
+
+Two functions were dead because a duplicate of them existed inline:
+
+* `gmail.default_since()` — `inbound.py` restated `timedelta(days=7)` itself
+* `har.missing_recordings()` — the `har list` CLI recomputed the same thing
+
+### The blocker: the form-map cache is not connected
+
+The whole of `backend/ats/formmaps.py` — fingerprinting, the platform/company
+tiers, `merge_maps`, the trust-after-three-successes rule — is built, tested and
+called by **nothing outside its own test file**. `save_map` has no production
+caller. `ats/generic.py` asks the LLM to map the form on every single
+application instead of consulting the cache, which is the cost saving the tier
+system exists to deliver.
+
+`SHAREABLE_PLATFORMS` in `ats/adapters.py` is the tier policy for that unwired
+path. It is left in place deliberately: deleting it would erase the decision
+about which platforms are safe to share a learned map for, and the code that
+should read it does not exist yet.
+
+Connecting it means changing `generic.py` to fingerprint the form, load a
+trusted map, fall back to the LLM on a miss, and save what it learns — against
+an ATS this container cannot reach. That is a feature, not a cleanup, so it is
+reported rather than guessed at. **Your call whether it is worth doing before
+the first real run.**
+
+### Also noted, not changed
+
+`npx oxlint src` reports four pre-existing `set-state-in-effect` warnings
+(Settings, Campaigns, Profile, Templates). All four are the same shape: a form
+draft initialised from fetched data. Not errors, not touched here.
+
+### Verification
+
+```
+uv run ruff check backend tests   All checks passed!
+uv run pytest -q                  545 passed
+npx tsc --noEmit                  clean
+npx oxlint src                    0 errors, 5 pre-existing warnings
+```
+
 ## What needs you
 
-1. **Run the whole thing on Windows.** Nothing here proves it works there.
-2. **Phase 2 in full** — the `verify_seek` command above. Highest value
+1. **Clear PR #1's stale GitGuardian check** so the merge can proceed — re-run
+   it from the Checks tab, or merge with admin override. Dismissing the
+   incident did not update the check run; see the Phase 1 section above.
+2. **Run the whole thing on Windows.** Nothing here proves it works there.
+3. **Verify Seek discovery** — the `verify_seek` command above. Highest value
    outstanding: discovery is the top of the funnel and is entirely unproven
    against a live site.
-3. **Add `GEMINI_API_KEY`** to `.env` if you want the new routing used.
-4. **Decide on 2.5 vs 3.1 Flash-Lite** before 2026-10-16.
-5. **Dismiss GitGuardian incident 36579249** (dummy placeholder, already
-   emptied at the branch tip).
+4. **Decide whether to connect the form-map cache** before the first real run —
+   see the Phase 4 blocker above. Every application currently pays for a fresh
+   LLM form-mapping call.
+5. **Add `GEMINI_API_KEY`** to `.env` if you want the new routing used.
+6. **Decide on 2.5 vs 3.1 Flash-Lite** before 2026-10-16.

@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import Enum
-from typing import Any
 
 from backend.logging_setup import get_logger
 
@@ -88,6 +87,3 @@ def register_hooks() -> None:
     log.info("notify_hooks_registered")
 
 
-def describe_job(job: Any) -> str:
-    """A one-line job description used in several messages."""
-    return f"{getattr(job, 'title', '?')} at {getattr(job, 'company', '?')}"

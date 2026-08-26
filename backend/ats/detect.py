@@ -251,5 +251,3 @@ def detect(url: str, html: str | None = None) -> Detection:
     return Detection(platform=None, confidence="none")
 
 
-def platform_by_key(key: str) -> AtsPlatform | None:
-    return _BY_KEY.get(key)

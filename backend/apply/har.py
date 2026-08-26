@@ -24,12 +24,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from backend.boards import BOARDS
 from backend.config import settings
 from backend.logging_setup import configure_logging, get_logger
 
 log = get_logger(__name__)
 
-__all__ = ["VARIANTS", "Variant", "har_path", "list_recordings", "record", "replay"]
+__all__ = [
+    "VARIANTS",
+    "Variant",
+    "har_path",
+    "list_recordings",
+    "missing_recordings",
+    "record",
+    "replay",
+]
 
 
 @dataclass(frozen=True)
@@ -41,45 +50,13 @@ class Variant:
     description: str
 
 
-# The shapes that actually change adapter behaviour. Recording all of these
-# covers the branches that would otherwise only be exercised in production.
-VARIANTS: tuple[Variant, ...] = (
-    Variant(
-        "two_step",
-        "linkedin",
-        "Short Easy Apply: contact details then submit. The common case.",
-    ),
-    Variant(
-        "five_step",
-        "linkedin",
-        "Long Easy Apply with screening questions across several steps — "
-        "proves the step loop terminates on Submit rather than a step count.",
-    ),
-    Variant(
-        "with_cover_letter",
-        "linkedin",
-        "Two upload slots: resume and cover letter uploaded separately.",
-    ),
-    Variant(
-        "without_cover_letter",
-        "linkedin",
-        "One upload slot: combined.pdf is used instead.",
-    ),
-    Variant(
-        "offsite_redirect",
-        "linkedin",
-        "Claims Easy Apply then redirects off-site — must be marked manual_only.",
-    ),
-    Variant(
-        "quick_apply",
-        "seek",
-        "Seek Quick Apply: resume upload plus the editable cover-letter textarea.",
-    ),
-    Variant(
-        "screening_step",
-        "seek",
-        "Seek with screening questions on their own separate step.",
-    ),
+# The shapes that actually change adapter behaviour, from the board registry.
+# Recording all of them covers the branches that would otherwise only be
+# exercised in production.
+VARIANTS: tuple[Variant, ...] = tuple(
+    Variant(key, entry.key, description)
+    for entry in BOARDS
+    for key, description in entry.har_variants
 )
 
 
@@ -189,16 +166,16 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
         record(args.platform, args.variant, url=args.url)
         return 0
 
-    recorded = list_recordings()
+    missing = {(v.platform, v.key) for v in missing_recordings()}
     for variant in VARIANTS:
-        have = variant.key in recorded.get(variant.platform, [])
         log.info(
             "har_variant",
             platform=variant.platform,
             variant=variant.key,
-            recorded=have,
+            recorded=(variant.platform, variant.key) not in missing,
             description=variant.description,
         )
+    log.info("har_coverage", recorded=len(VARIANTS) - len(missing), total=len(VARIANTS))
     return 0
 
 

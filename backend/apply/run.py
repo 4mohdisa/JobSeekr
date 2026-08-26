@@ -24,11 +24,10 @@ from sqlmodel import Session, select
 
 from backend.apply import guardrails
 from backend.apply.flow import RestrictionDetected, run_apply
-from backend.apply.linkedin import LinkedInApplier
 from backend.apply.pacing import sleep_between_submits
-from backend.apply.seek import SeekApplier
 from backend.apply.session import SessionExpired, is_logged_in, launch_context
 from backend.base import ApplyOutcome
+from backend.boards import applier_boards
 from backend.config import settings
 from backend.db import session_scope
 from backend.logging_setup import configure_logging, get_logger
@@ -59,7 +58,7 @@ def build_appliers() -> list[Any]:
     """
     from backend.ats.adapters import build_ats_appliers
 
-    return [SeekApplier(), LinkedInApplier(), *build_ats_appliers()]
+    return [entry.make_applier() for entry in applier_boards()] + build_ats_appliers()
 
 
 def _latest_score(session: Session, job_id: int) -> float | None:
