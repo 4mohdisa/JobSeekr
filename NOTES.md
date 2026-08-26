@@ -1077,6 +1077,193 @@ The LaTeX is portable and the packages used are all in a basic MiKTeX install,
 but MiKTeX's on-the-fly package installation prompts on first use — run one
 build manually before relying on a scheduled one.
 
+## Hardening — Phase 1: merge and tidy. BLOCKED, git untouched.
+
+Both PRs were checked before anything was merged, and the merge did not happen.
+
+* **PR #2** (`fix/windows-bringup` → `main`): mergeable, all checks green.
+* **PR #1** (`feat/core` → `main`): `mergeable_state: unstable`. The GitGuardian
+  check run `97745798725` is still `conclusion: failure`, timestamped
+  `2026-08-25T09:03:02Z` — **before** the incident was dismissed. There is
+  exactly one run on that head (`total_count: 1`); no re-scan has happened.
+
+Dismissing an incident in the GitGuardian dashboard resolves the *incident*. It
+does not rewrite a check run that already completed on GitHub — GitHub only
+learns of a new conclusion when GitGuardian re-scans and posts one. So the PR is
+red for a finding that is no longer open, and will stay red until something
+re-runs it.
+
+The instruction was to report and stop touching git if either PR still failed,
+so nothing was merged and no branch was deleted. Two ways to clear it, both
+yours to make:
+
+1. **Re-run the check** — PR #1 → Checks tab → GitGuardian → *Re-run*. The scan
+   passes on the current head (PR #2 is based on the same tree minus the
+   pre-history and already passes the identical check), so this should turn it
+   green and let the merge proceed normally.
+2. **Merge with admin override**, since the finding is a dismissed dummy value.
+
+Once #1 is green: merge #1, then #2, then delete `feat/core` and
+`fix/windows-bringup`.
+
+## Hardening — Phase 2: the parse gate now checks facts, not a keyword list
+
+### What was actually wrong
+
+The gate used to be handed `claimed_keywords = profile.skills[:12]` and nothing
+else. Its entire coverage was *the first twelve skills*. That is why a resume
+shipped with `C#` typeset as the literal `C\#`: the keywords in play contained
+no character the escaper could corrupt, so the check passed on a document an ATS
+could not read.
+
+Assuming more blind spots existed turned out to be right. A hostile profile —
+`C++ C# .NET F# R&D AT&T`, `50% $80k 30% ~5 years`, ampersands in employers,
+em/en dashes, curly quotes, `José Müller`, `Ångström`, `data_pipeline_v2`,
+`issue #42`, `config{nested}`, a 250-character wrapping bullet — was compiled
+through the real template with real pdflatex, extracted with **both** extractors,
+and every intended string diffed against the extracted text. Three bugs fell out.
+
+### Bug 1 — ASCII apostrophes were retyped as curly quotes
+
+LaTeX's `'` ligature produces U+2019. Typographically correct; for a resume it
+is a corruption, because the profile is the source of truth for facts and an ATS
+matching `Dan Murphy's` against `Dan Murphy’s` finds nothing.
+
+### Bug 2 — hyphen runs were retyped as dashes
+
+`--` becomes an en dash, `---` an em dash. Same failure: `2020--2024` extracts
+with a character the user never typed.
+
+Both fixed in `backend/documents/latex.py` by pinning ASCII through sentinels
+applied **before** `_UNICODE_FIXUPS`, so the deliberate asymmetry survives: a
+real U+2019 or U+2014 pasted from Word is still mapped into ligature source and
+still round-trips back to itself. Only ASCII the user typed is held to the
+letter.
+
+Before and after, same profile, same template, same pdflatex:
+
+```
+BEFORE                                       AFTER
+------------------------------------------   ------------------------------------------
+said "hello" plainly                         said "hello" plainly
+it’s a plain apostrophe                 <--  it's a plain apostrophe
+a < b and c > d                              a < b and c > d
+100% ^ 2 ~ 3                                 100% ^ 2 ~ 3
+back\slash literal                           back\slash literal
+a_b^c                                        a_b^c
+flow off finally                             flow off finally
+10 – 20 and 30 — 40                     <--  10 -- 20 and 30 --- 40
+```
+
+Two of eight strings were silently different before the fix; zero after.
+
+### Bug 3 — ligature canaries were harvested from LaTeX comments
+
+`no_ligature_corruption` scans the rendered `.tex` for canary words and asserts
+they survive extraction. It scanned the whole file, including comments — and the
+shipped `resume.tex.j2` explains the ligature rule in a comment containing the
+word *efficient*. A comment never typesets, so the gate was asking every
+document to contain a word that no correct build could produce.
+
+**Every real resume would have failed this check.** The suite never caught it
+because its fixture profile was written around the canary list ("Efficient
+financial reporting and certification workflow design") rather than the other
+way round — the fixture satisfied the bug instead of exposing it.
+
+Fixed with `_strip_latex_comments` in `verify.py`, applied to `source_text`
+before the canary harvest. Escaped `\%` is content and is preserved.
+
+### The main change — the gate checks the actual intended strings
+
+`ParseExpectations` gained `verbatim: list[str]`, checked by a new
+`verbatim_facts_present` check, and `expected_verbatim(profile)` in `build.py`
+harvests it from the profile rather than from anyone's memory: skills,
+employers, role titles, institutions, qualifications, certifications, issuers,
+project names, plus any token inside a highlight bullet carrying a character the
+escaper can mangle (`&#%$_~^{}+<>'"\`). Wired into the RESUME and COMBINED
+expectations.
+
+Whole bullets are deliberately *not* asserted verbatim — LaTeX may hyphenate a
+wrapped line, which is formatting, not corruption. Tokens are.
+
+Old gate versus new gate, on one PDF whose underscore escaping is doubled so
+`data_pipeline_v2` typesets as the literal `data\_pipeline\_v2`:
+
+```
+OLD GATE (claimed_keywords = profile.skills[:12]) -> report passed=True
+                                                     "all 8 present"
+NEW GATE (24 harvested facts)                     -> report passed=False
+   verbatim_facts_present: stated in the profile but not extractable:
+   ['data_pipeline_v2']
+```
+
+No skill contains an underscore, so the keyword list saw nothing wrong and
+signed off on a broken document. That is the failure mode the harvest removes.
+
+### Extracted text, hostile profile, after all three fixes
+
+```
+José Müller-Ångström
+C++ / C# Engineer
+jose.muller@example.com · +61 412 345 678· Adelaide SA 5000· linkedin.com/in/josemuller
+SUMMARY
+Built .NET and C++ systems; 50% faster, 30% uplift, ~5 years in R&D.
+SKILLS
+C++, C#, .NET, F#, R&D, AT&T systems, 50% automation, $80k budgets
+EXPERIENCE
+Senior Engineer — Platform 2022 – Present
+Smith & Wesson Pty Ltd , Adelaide SA
+• Cut latency 50% and delivered 30% uplift across the C++ core
+• Owned data_pipeline_v2 and closed issue #42 with config{nested} overrides
+• Negotiated $80k of tooling spend over ~5 years — em—dash, en–dash, curly’quote inside
+• A deliberately very long single-line bullet that runs on and on to force LaTeX to wrap it across
+multiple lines in the output so that we can confirm the extractor still returns the whole sentence
+intact without dropping or reordering any of the words in the middle of the wrapped region
+Engineer 2019 – 2022
+Ångström Labs
+• Shipped F# services for AT&T integrations
+PROJECTS
+data_pipeline_v2 (C# / .NET)
+Handles curly“double”quote and config{nested} shapes at 50% cost.
+EDUCATION
+BSc Computer Science 2019
+José Müller & Co Institute
+CERTIFICATIONS
+• AWS Certified — Developer — AT&T Training (2023)
+WORK RIGHTS
+Australian citizen — full working rights.
+```
+
+All 20 intended strings present, in both pypdf and pdfplumber. The long bullet
+comes back word-for-word once line breaks are collapsed.
+
+One thing in that output is *not* a bug: `2022 – Present` uses an en dash
+because the template itself writes `--` between the dates. That is
+template-authored typography, not profile data — the profile says `2022` and
+`Present`, and both survive as themselves.
+
+### Regression tests
+
+`tests/test_hostile_documents.py`, 44 tests. Both corpora are kept as data, so
+adding a newly-suspect string is one list entry:
+
+* escaping in isolation, fast, no pdflatex — apostrophes, hyphen runs, Unicode
+  round-trip, and a tripwire asserting that double-escaping stays *visible*
+  (if a second pass ever became a no-op, the C# class of bug would stop being
+  detectable)
+* a parametrised check that no escaped fact leaks a raw `& % $ # _`
+* compile-and-diff for both corpora, against both extractors, every string
+* the wrapped bullet, checked for reordering and truncation
+* the harvester's contents and determinism
+* the gate catching the exact `C#` bug that shipped, and the curled-apostrophe
+  bug, and the underscore bug the old keyword list waved through
+* comment-stripping, including that `\%` is content
+* a profile that never uses a canary word still passing the gate — Bug 3's
+  regression
+
+Each was confirmed to fail with its fix reverted, so none of them passes
+vacuously. Full suite: **410 passed**.
+
 ## What needs you
 
 1. **Run the whole thing on Windows.** Nothing here proves it works there.

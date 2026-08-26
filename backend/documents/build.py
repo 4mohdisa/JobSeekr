@@ -63,7 +63,13 @@ from backend.models import (
 
 log = get_logger(__name__)
 
-__all__ = ["BuildResult", "build_documents", "generate_ai_slots", "render_pdf"]
+__all__ = [
+    "BuildResult",
+    "build_documents",
+    "expected_verbatim",
+    "generate_ai_slots",
+    "render_pdf",
+]
 
 
 class DocumentBuildError(RuntimeError):
@@ -116,6 +122,71 @@ def _normalise_rows(rows: Any, keys: tuple[str, ...]) -> list[dict[str, Any]]:
             filled["highlights"] = []
         out.append(filled)
     return out
+
+
+# Characters whose escaping can silently corrupt a fact on its way into the PDF.
+# Any highlight token containing one of these is worth asserting verbatim.
+_RISKY_CHARS = frozenset("&#%$_~^{}+<>'\"\\")
+
+# Bounds on a harvested fact. Too short and it matches by accident; too long and
+# LaTeX may hyphenate it across a line break, which is a formatting artefact
+# rather than a corruption.
+_VERBATIM_MIN = 2
+_VERBATIM_MAX = 60
+
+
+def expected_verbatim(profile: Profile) -> list[str]:
+    """Every fact the resume asserts, for the gate to confirm survived extraction.
+
+    Harvested rather than hand-listed. The gate previously took a
+    ``claimed_keywords`` list supplied by the caller, which meant its coverage
+    was only as good as whoever wrote that list: a resume shipped with "C#"
+    typeset as the literal "C\\#" and passed, because the keywords that day
+    happened to be Python, SQL and FastAPI — none containing a character the
+    escaper could corrupt.
+
+    Anything an ATS would search for goes in: skills, employers, institutions,
+    certifications, project names, and any highlight token carrying a character
+    that escaping can mangle.
+    """
+    facts: list[str] = []
+
+    def add(value: object) -> None:
+        text = str(value or "").strip()
+        if _VERBATIM_MIN <= len(text) <= _VERBATIM_MAX and "\n" not in text:
+            facts.append(text)
+
+    for skill in profile.skills or []:
+        add(skill)
+
+    for role in profile.experience or []:
+        if isinstance(role, dict):
+            add(role.get("company"))
+            add(role.get("title"))
+            # Individual tokens, not whole bullets: a wrapped sentence can be
+            # hyphenated by LaTeX, which is formatting rather than corruption.
+            for highlight in role.get("highlights") or []:
+                for token in str(highlight).split():
+                    stripped = token.strip(".,;:()[]")
+                    if set(stripped) & _RISKY_CHARS:
+                        add(stripped)
+
+    for row in profile.education or []:
+        if isinstance(row, dict):
+            add(row.get("institution"))
+            add(row.get("qualification"))
+
+    for row in profile.certifications or []:
+        if isinstance(row, dict):
+            add(row.get("name"))
+            add(row.get("issuer"))
+
+    for row in profile.projects or []:
+        if isinstance(row, dict):
+            add(row.get("name"))
+
+    # Stable order, no duplicates — the report reads better and is diffable.
+    return list(dict.fromkeys(facts))
 
 
 def _profile_context(profile: Profile) -> dict[str, Any]:
@@ -481,6 +552,7 @@ def build_documents(
         if isinstance(role, dict) and role.get("company")
     ]
     claimed = [str(skill) for skill in (profile.skills or [])][:12]
+    verbatim = expected_verbatim(profile)
 
     expectations = {
         DocumentKind.RESUME: ParseExpectations(
@@ -489,6 +561,7 @@ def build_documents(
             phone=profile_ctx["phone"],
             employers=employers,
             claimed_keywords=claimed,
+            verbatim=verbatim,
             section_order=["Experience", "Education"],
             source_text=resume_tex,
         ),
@@ -501,6 +574,8 @@ def build_documents(
             name=profile_ctx["name"],
             email=profile_ctx["email"],
             employers=employers,
+            claimed_keywords=claimed,
+            verbatim=verbatim,
             source_text=resume_tex + letter_tex,
         ),
     }

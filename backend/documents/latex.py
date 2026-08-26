@@ -25,6 +25,25 @@ __all__ = ["escape_latex", "latex_safe_url"]
 # special character sidesteps both.
 _BACKSLASH_SENTINEL = "\x00BACKSLASH\x00"
 
+# LaTeX's own ligatures rewrite ASCII the user typed literally: ' becomes a
+# curly U+2019 and -- becomes an en-dash. Typographically that is correct, and
+# for prose it is what we want. For a resume it is a liability: an employer
+# named "Dan Murphy's" extracts as "Dan Murphy’s", and a date range written
+# "2020--2024" extracts with an en-dash, so an ATS searching the literal string
+# finds nothing. The profile is the source of truth for facts, so ASCII the
+# user typed must extract as ASCII.
+#
+# Note the deliberate asymmetry with _UNICODE_FIXUPS below: a real U+2019 or
+# U+2014 in the input is mapped INTO LaTeX ligature source, so it round-trips
+# back to the same character. Only ASCII is pinned. These sentinels are
+# restored last because their replacements contain braces and backslashes that
+# the escaping rules would otherwise mangle.
+_APOSTROPHE_SENTINEL = "\x00APOS\x00"
+_HYPHEN_BREAK_SENTINEL = "\x00HYPHENBREAK\x00"
+
+_ASCII_APOSTROPHE = re.compile(r"'")
+_ASCII_HYPHEN_RUN = re.compile(r"-{2,}")
+
 _REPLACEMENTS: tuple[tuple[str, str], ...] = (
     ("\\", _BACKSLASH_SENTINEL),
     ("&", r"\&"),
@@ -73,11 +92,22 @@ def escape_latex(value: object) -> str:
     text = value if isinstance(value, str) else str(value)
 
     text = _CONTROL_CHARS.sub("", text)
+
+    # Pin ASCII apostrophes and hyphen runs BEFORE the Unicode fixups, which
+    # deliberately produce ligature source of their own.
+    text = _ASCII_APOSTROPHE.sub(_APOSTROPHE_SENTINEL, text)
+    text = _ASCII_HYPHEN_RUN.sub(
+        lambda match: _HYPHEN_BREAK_SENTINEL.join("-" * len(match.group())), text
+    )
+
     for source, target in _UNICODE_FIXUPS:
         text = text.replace(source, target)
     for source, target in _REPLACEMENTS:
         text = text.replace(source, target)
-    return text.replace(_BACKSLASH_SENTINEL, r"\textbackslash{}")
+    text = text.replace(_BACKSLASH_SENTINEL, r"\textbackslash{}")
+    # \textquotesingle is the upright U+0027; {} merely breaks the -- ligature.
+    text = text.replace(_APOSTROPHE_SENTINEL, r"\textquotesingle{}")
+    return text.replace(_HYPHEN_BREAK_SENTINEL, "{}")
 
 
 def latex_safe_url(value: object) -> str:

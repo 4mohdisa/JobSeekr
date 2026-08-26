@@ -44,7 +44,8 @@ NAME_WITHIN_CHARS = 200
 PAGE_LIMITS = {"resume": 2, "cover_letter": 1, "combined": 3}
 
 # Words whose extraction proves the fi/fl ligature handling is intact. These
-# are checked only when they appear in the source document.
+# are checked only when they appear in the source document — and only in the
+# part of it that actually typesets. See _strip_latex_comments.
 LIGATURE_CANARIES = (
     "efficient",
     "financial",
@@ -71,6 +72,21 @@ class ParseExpectations(BaseModel):
     phone: str | None = None
     employers: list[str] = Field(default_factory=list)
     claimed_keywords: list[str] = Field(default_factory=list)
+
+    verbatim: list[str] = Field(default_factory=list)
+    """Facts that must survive extraction EXACTLY as the profile states them.
+
+    This exists because ``claimed_keywords`` was a hand-picked list, and a
+    hand-picked list only catches what whoever wrote it happened to think of.
+    A resume once shipped with the skill "C#" typeset as the literal text
+    "C\\#" — the PDF looked right and this gate passed, because the keywords
+    supplied that day were Python, SQL and FastAPI, none of which contain a
+    character the escaper could corrupt.
+
+    ``expected_verbatim`` harvests these from the profile automatically, so
+    coverage no longer depends on anybody remembering.
+    """
+
     section_order: list[str] = Field(default_factory=list)
     source_text: str | None = None
     """The rendered source, used to know which canary words to expect."""
@@ -94,6 +110,21 @@ class ParseReport(BaseModel):
         return f"{self.kind} FAILED: " + "; ".join(
             f"{c.name} ({c.detail})" for c in self.failures
         )
+
+
+# A LaTeX comment runs from an unescaped % to end of line and never reaches the
+# page. Harvesting a canary from one asks the gate to find a word that no
+# correct build could contain: the shipped resume template explains the
+# ligature rule in a comment that contains the word "efficient", so every
+# profile that did not happen to use that word failed no_ligature_corruption.
+# The suite missed it because its fixture profile was written around the canary
+# list ("Efficient financial reporting...") rather than the other way round.
+_LATEX_COMMENT = re.compile(r"(?<!\\)%.*")
+
+
+def _strip_latex_comments(source: str) -> str:
+    """Drop the parts of a .tex that will never appear in the PDF."""
+    return _LATEX_COMMENT.sub("", source)
 
 
 def _normalise(text: str) -> str:
@@ -276,7 +307,7 @@ def verify_pdf(
     )
 
     # 3 — ligatures survived
-    source = _normalise(expect.source_text or "")
+    source = _normalise(_strip_latex_comments(expect.source_text or ""))
     canaries = [word for word in LIGATURE_CANARIES if word in source] if source else []
     canaries += [_normalise(e) for e in expect.employers if e]
     if expect.name:
@@ -362,6 +393,26 @@ def verify_pdf(
         )
 
     # 8 — claimed keywords actually made it in
+    # 8b — every fact the profile states survived extraction character for
+    # character. Whitespace is collapsed and case folded so a line wrap or a
+    # small-caps heading does not fail it, but punctuation is preserved: that
+    # is what catches an escaping regression such as "C#" typesetting as "C\\#".
+    if expect.verbatim:
+        missing_verbatim = [
+            fact for fact in expect.verbatim if _normalise(fact) not in normalised
+        ]
+        checks.append(
+            CheckResult(
+                name="verbatim_facts_present",
+                passed=not missing_verbatim,
+                detail=(
+                    f"stated in the profile but not extractable: {missing_verbatim[:12]}"
+                    if missing_verbatim
+                    else f"all {len(expect.verbatim)} profile facts survived extraction"
+                ),
+            )
+        )
+
     if expect.claimed_keywords:
         missing_keywords = [
             kw for kw in expect.claimed_keywords if _normalise(kw) not in normalised
