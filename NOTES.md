@@ -1077,7 +1077,7 @@ The LaTeX is portable and the packages used are all in a basic MiKTeX install,
 but MiKTeX's on-the-fly package installation prompts on first use — run one
 build manually before relying on a scheduled one.
 
-## Hardening — Phase 1: merge and tidy. Resolved by the push, not by a merge.
+## Hardening — Phase 1: merge and tidy. Done, but not the way it was planned.
 
 When I checked at the start of this session, PR #1 was still red: the
 GitGuardian check run `97745798725` was `conclusion: failure`, timestamped
@@ -1087,24 +1087,45 @@ not rewrite a check run that already completed. GitHub only learns of a new
 conclusion when GitGuardian re-scans and posts one.
 
 The instruction was to report and stop touching git if either PR still failed,
-so nothing was merged. Pushing this session's three hardening commits triggered
-that re-scan, and it came back **success** — the blocker is gone, not by anything
-I decided, but because a new head finally got scanned.
+so nothing was merged at that point. Pushing this session's hardening commits
+triggered the re-scan, which came back **success**.
 
-Two things changed under the Phase 1 plan while it was blocked, and they are
-worth knowing before merging:
+Two things had changed under the Phase 1 plan while it was blocked:
 
-* **PR #2 is closed, not merged.** Its head `fix/windows-bringup` (725e207) is
-  already an ancestor of PR #1's head, so its work is in PR #1 — GitHub closed it
-  when its base branch absorbed the commits. There is no second PR to merge.
-* **PR #1 now carries all four phases.** The designated branch for this work is
+* **PR #2 merged itself.** Its base was `claude/job-agent-core-setup-07xswl`, so
+  the moment the hardening push landed on that branch, its head `fix/windows-bringup`
+  (725e207) became reachable from its base and GitHub marked it merged —
+  `merged_at: 2026-08-26T12:45:57Z`, the same second as the push. There was no
+  second PR left to merge by hand.
+* **PR #1 carried all four phases.** The designated branch for this work is
   `claude/job-agent-core-setup-07xswl`, which *is* PR #1's head, so the hardening
-  commits could not land anywhere else. The diff you would be merging is no
-  longer the one that existed when Phase 1 was written.
+  commits could not land anywhere else. The diff being merged was no longer the
+  one that existed when Phase 1 was written.
 
-So: PR #1 is green and mergeable, and it is still a draft carrying three
-commits nobody has reviewed. Marking it ready and merging it into `main` is
-yours to press.
+I put that to you rather than assuming, and you chose to merge. PR #1 was marked
+ready and merged into `main` as `70756bc` — 133 files, 19 commits, four phases.
+
+**Correction to what I first told you.** I said PR #2 was "closed, not merged".
+That was what the API returned when I queried it, but I queried it *before* the
+push — `merged:false` was true at 12:38 and false by 12:45:57. The webhook that
+arrived afterwards said `outcome: merged`, I re-checked against the API, and the
+API now agrees. So both PRs merged; only the branch deletion below is
+outstanding.
+
+**One thing did not get done: `fix/windows-bringup` is still on the remote.**
+It is the head of a merged PR, so it is safe to remove.
+Deleting a branch over `git push` fails in this container — the proxy drops the
+connection on a delete-ref (`send-pack: unexpected disconnect while reading
+sideband packet`), and it failed on both attempts. `feat/core` is already gone.
+Both remaining branches are fully contained in `main`, verified with
+`git merge-base --is-ancestor`, so deleting them loses nothing:
+
+```
+fix/windows-bringup                 fully contained in main
+claude/job-agent-core-setup-07xswl  fully contained in main
+```
+
+Delete them from the GitHub branches page when convenient.
 
 ## Hardening — Phase 2: the parse gate now checks facts, not a keyword list
 
@@ -1521,9 +1542,9 @@ npx oxlint src                    0 errors, 5 pre-existing warnings
 
 ## What needs you
 
-1. **Clear PR #1's stale GitGuardian check** so the merge can proceed — re-run
-   it from the Checks tab, or merge with admin override. Dismissing the
-   incident did not update the check run; see the Phase 1 section above.
+1. **Delete `fix/windows-bringup` and `claude/job-agent-core-setup-07xswl`** from
+   the GitHub branches page. Both are fully merged into `main`; branch deletion
+   over `git push` is blocked in the build container.
 2. **Run the whole thing on Windows.** Nothing here proves it works there.
 3. **Verify Seek discovery** — the `verify_seek` command above. Highest value
    outstanding: discovery is the top of the funnel and is entirely unproven
