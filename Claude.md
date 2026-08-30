@@ -19,6 +19,13 @@ Runs in the user's logged-in desktop session. No cloud, no auth, no deployment.
 
 ---
 
+## Working style
+
+Never schedule recurring check-ins. If something is waiting on the user, say so
+once and stop. Do not poll.
+
+---
+
 ## Code rules
 
 - **Never duplicate logic.** Used twice → extract to a shared helper, hook, or service.
