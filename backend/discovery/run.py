@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, select
+from sqlmodel import Session, func, select
 
 from backend.base import RawJob, Source
 from backend.boards import source_boards
@@ -160,6 +160,37 @@ def discover(
     return counts, errors
 
 
+def _window_for(session: Session, incremental_hours: int) -> int:
+    """Widen the window when there is nothing to be incremental *from*.
+
+    The 8-hour default is right for a populated database on a 4-hourly
+    schedule and actively misleading on an empty one: a first run asks three
+    boards what they posted in the last eight hours, stores a handful of ads,
+    and reports success. Nothing in the output says the window was the reason,
+    so the natural conclusion is that discovery is broken or the boards are
+    blocking — which is what happened on the first real machine.
+
+    An explicit ``--hours-old`` always wins; this only fills in the default.
+    """
+    existing = session.exec(select(func.count()).select_from(Job)).one()
+    if existing >= settings.discovery_backfill_threshold:
+        return incremental_hours
+
+    log.warning(
+        "discovery_backfilling",
+        reason="jobs table is below the backfill threshold",
+        jobs_in_db=existing,
+        threshold=settings.discovery_backfill_threshold,
+        incremental_hours=incremental_hours,
+        backfill_hours=settings.discovery_backfill_hours,
+        note=(
+            "widening the window for this run so the first population is not "
+            "limited to the incremental window; pass --hours-old to override"
+        ),
+    )
+    return settings.discovery_backfill_hours
+
+
 def run_discovery(
     *,
     campaign_id: int | None = None,
@@ -171,9 +202,12 @@ def run_discovery(
 ) -> Run:
     """Run discovery and record the ``Run`` row. Returns it, detached."""
     started = datetime.now(UTC)
-    hours_old = hours_old if hours_old is not None else settings.discovery_default_hours_old
+    explicit_window = hours_old is not None
+    hours_old = hours_old if explicit_window else settings.discovery_default_hours_old
 
     with session_factory() as session:
+        if not explicit_window:
+            hours_old = _window_for(session, hours_old)
         query = select(Campaign).where(Campaign.active == True)
         if campaign_id is not None:
             query = select(Campaign).where(Campaign.id == campaign_id)

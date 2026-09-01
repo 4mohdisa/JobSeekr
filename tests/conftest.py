@@ -37,6 +37,12 @@ os.environ["BROWSER_PROFILE_DIR"] = str(_TEST_DATA_DIR / "browser_profile")
 # who has genuinely turned live submit on in their shell or .env will see these
 # tests go red, which is the correct and deliberately loud outcome.
 os.environ.pop("ALLOW_LIVE_SUBMIT", None)
+# Off by default for the suite, on by default in production. The second-pass
+# form mapping calls an LLM the first time it sees a form shape, and there is
+# no API key here — every test with an abstention would otherwise spend the
+# retry budget failing to authenticate. The tests that exercise the mapping
+# turn it back on explicitly, which also keeps it visible which ones do.
+os.environ["APPLY_FORM_MAPPING_ENABLED"] = "false"
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -460,3 +460,194 @@ def test_profile_facts_do_not_come_from_the_answer_bank(session):
     adapter = FakeAdapter(steps=simple_steps())
     run(session, adapter)
     assert adapter.filled["name"] == "Jordan Fitzgerald"
+
+
+# =========================================================================
+# The form-map cache, through the real apply path
+# =========================================================================
+
+
+class CountingMapper:
+    """Stands in for the model and counts how often it was actually asked."""
+
+    def __init__(self, answers: dict[str, dict]):
+        self.answers = answers
+        self.calls = 0
+        self.asked: list[list[str]] = []
+
+    def __call__(self, prompt, **kwargs):
+        import re
+
+        self.calls += 1
+        asked = re.findall(r"id='([^']+)'", prompt)
+        self.asked.append(asked)
+        return {"fields": [self.answers[i] for i in asked if i in self.answers]}
+
+
+@pytest.fixture
+def mapping_on(monkeypatch):
+    monkeypatch.setattr(settings, "apply_form_mapping_enabled", True)
+
+
+# Labels the deterministic pass cannot place: no PROFILE_FIELD_HINTS substring
+# matches "Best way to reach you", and the answer bank holds the working-rights
+# question under different wording.
+UNPLACEABLE = [
+    FormField(identifier="reach", label="Best way to reach you"),
+    FormField(identifier="elig", label="Are you legally able to work here?"),
+]
+
+MAPPINGS = {
+    "reach": {
+        "identifier": "reach",
+        "source": "profile",
+        "profile_path": "profile.email",
+        "confident": True,
+    },
+    "elig": {
+        "identifier": "elig",
+        "source": "answer_bank",
+        "question": "Do you have full working rights in Australia?",
+        "confident": True,
+    },
+}
+
+
+def test_a_field_the_deterministic_pass_cannot_place_abstains_without_mapping(session):
+    """The behaviour being improved on: these fields park the job."""
+    job = session.get(Job, 1)
+    draft = flow.build_draft(session, job, platform="seek", fields=list(UNPLACEABLE))
+
+    # Abstain.question is the normalised form — casefolded, trailing
+    # punctuation dropped — which is what the answer bank compares on.
+    assert {a.question for a in draft.abstentions} == {
+        "best way to reach you",
+        "are you legally able to work here",
+    }
+
+
+def test_form_mapping_rescues_those_fields(session, monkeypatch, mapping_on):
+    """A field the system knows the answer to, but could not see that it knew."""
+    mapper = CountingMapper(MAPPINGS)
+    monkeypatch.setattr(flow.map_fields.__globals__["llm"], "complete_json", mapper)
+
+    job = session.get(Job, 1)
+    draft = flow.build_draft(session, job, platform="seek", fields=list(UNPLACEABLE))
+
+    assert draft.abstentions == [], f"still abstaining: {draft.abstentions}"
+    assert mapper.calls == 1
+
+    # Mapped, then resolved through the normal sources — not invented.
+    assert draft.answers["Best way to reach you"].value == "jordan@example.com"
+    assert draft.answers["Are you legally able to work here?"].value == "Yes"
+
+
+def test_the_second_application_to_the_same_form_makes_no_llm_call(
+    session, monkeypatch, mapping_on
+):
+    """The point of the cache, proven through the real apply path.
+
+    map_fields had no production caller, so the cache was provably correct and
+    never saved anything. This is the assertion that it now does.
+    """
+    mapper = CountingMapper(MAPPINGS)
+    monkeypatch.setattr(flow.map_fields.__globals__["llm"], "complete_json", mapper)
+    job = session.get(Job, 1)
+
+    first = flow.build_draft(session, job, platform="seek", fields=list(UNPLACEABLE))
+    assert mapper.calls == 1
+    assert first.abstentions == []
+
+    # A second job, same employer platform, identical form shape.
+    session.add(
+        Job(
+            id=2,
+            source="seek",
+            source_job_id="2",
+            url="https://example.com/2",
+            title="Developer II",
+            company="Globex",
+            location="Adelaide SA",
+            dedupe_hash="h2",
+            campaign_id=1,
+            status=JobStatus.DOCUMENTS_READY,
+        )
+    )
+    session.flush()
+
+    second = flow.build_draft(
+        session, session.get(Job, 2), platform="seek", fields=list(UNPLACEABLE)
+    )
+
+    assert mapper.calls == 1, (
+        f"the second application re-paid for a known form: {mapper.calls} calls"
+    )
+    assert second.abstentions == []
+    assert second.answers["Best way to reach you"].value == "jordan@example.com"
+
+
+def test_mapping_never_invents_a_screening_answer(session, monkeypatch, mapping_on):
+    """Hard rule 2 survives the mapping pass.
+
+    The model may say a field is a screening question. It may not say what the
+    answer is — that still has to come from the bank, and a question the bank
+    does not hold still abstains and still parks the job.
+    """
+    mapper = CountingMapper(
+        {
+            "elig": {
+                "identifier": "elig",
+                "source": "answer_bank",
+                "question": "Do you hold a current forklift licence?",
+                "confident": True,
+            }
+        }
+    )
+    monkeypatch.setattr(flow.map_fields.__globals__["llm"], "complete_json", mapper)
+
+    job = session.get(Job, 1)
+    draft = flow.build_draft(
+        session,
+        job,
+        platform="seek",
+        fields=[FormField(identifier="elig", label="Are you legally able to work here?")],
+    )
+
+    assert mapper.calls == 1
+    assert [a.question for a in draft.abstentions] == ["are you legally able to work here"]
+    assert draft.answers == {}
+
+
+def test_an_unconfident_mapping_still_parks_the_job(session, monkeypatch, mapping_on):
+    mapper = CountingMapper(
+        {
+            "reach": {
+                "identifier": "reach",
+                "source": "profile",
+                "profile_path": "profile.email",
+                "confident": False,
+            }
+        }
+    )
+    monkeypatch.setattr(flow.map_fields.__globals__["llm"], "complete_json", mapper)
+
+    job = session.get(Job, 1)
+    draft = flow.build_draft(
+        session, job, platform="seek", fields=[FormField(identifier="reach", label="Best way to reach you")]
+    )
+
+    assert draft.abstentions, "an unconfident mapping must not resolve a field"
+    assert draft.answers == {}
+
+
+def test_mapping_is_skipped_entirely_when_disabled(session, monkeypatch):
+    """The setting is the off switch for the whole second pass."""
+    mapper = CountingMapper(MAPPINGS)
+    monkeypatch.setattr(flow.map_fields.__globals__["llm"], "complete_json", mapper)
+    monkeypatch.setattr(settings, "apply_form_mapping_enabled", False)
+
+    job = session.get(Job, 1)
+    draft = flow.build_draft(session, job, platform="seek", fields=list(UNPLACEABLE))
+
+    assert mapper.calls == 0
+    assert len(draft.abstentions) == 2

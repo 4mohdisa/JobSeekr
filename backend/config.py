@@ -105,6 +105,14 @@ class Settings(BaseSettings):
     discovery_request_delay_seconds: float = 1.5
     # Default incremental window; the 4-hourly schedule overlaps deliberately.
     discovery_default_hours_old: int = 8
+    # First-run backfill. The incremental window above is correct for a
+    # database that is already populated and wrong for one that is empty: on a
+    # fresh install it asks three boards for the last eight hours and stores
+    # almost nothing, with no visible reason why. When the jobs table is below
+    # the threshold and no window was asked for explicitly, discovery widens to
+    # the backfill window once and says so in the log.
+    discovery_backfill_hours: int = 720
+    discovery_backfill_threshold: int = 25
 
     # --------------------------------------------------------------- scoring
     # Stage 2 (the expensive one) only ever sees this many jobs per campaign.
@@ -154,6 +162,14 @@ class Settings(BaseSettings):
     browser_headless: bool = False
 
     # ----------------------------------------------------------------- apply
+    # Second-pass form mapping. When the deterministic path cannot place a
+    # field — no profile hint matched, no answer-bank entry matched — ask the
+    # model where the field's value comes from, and cache that answer by form
+    # shape so a given form is only ever mapped once. Costs an LLM call the
+    # first time a new form shape is seen and nothing thereafter; turn it off
+    # to keep the apply path entirely deterministic and free.
+    apply_form_mapping_enabled: bool = True
+
     apply_window_start: str = "09:00"
     apply_window_end: str = "17:00"
     apply_min_interval_floor_seconds: int = 90
