@@ -35,7 +35,12 @@ DEFAULT_HEADERS: dict[str, str] = {
     ),
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-AU,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
+    # Only what httpx can actually decode. A real Chrome also advertises "br",
+    # but brotli support in httpx needs an optional dependency that is not
+    # installed here, so advertising it invites a body this client cannot read.
+    # Seek happens to answer gzip, which is why it never bit; a server that
+    # honoured "br" would have failed with an unreadable response.
+    "Accept-Encoding": "gzip, deflate",
     "Connection": "keep-alive",
 }
 

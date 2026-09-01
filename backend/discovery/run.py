@@ -203,6 +203,13 @@ def run_discovery(
         session.flush()
         session.refresh(run)
         summary = run.model_dump()
+        # Detach the loaded row before the scope commits. session_scope commits
+        # on exit, and a commit expires every instance it still tracks, so the
+        # caller's first attribute read (`run.ok` in main) would fire a lazy
+        # load against a closed session and raise DetachedInstanceError. The
+        # INSERT is already flushed, so expunging changes nothing that is
+        # persisted — it only stops SQLAlchemy expiring the values we just read.
+        session.expunge(run)
 
     log.info("discovery_complete", **{k: v for k, v in summary.items() if k != "errors"})
     if errors:

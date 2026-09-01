@@ -270,6 +270,52 @@ def test_adelaide_is_a_half_hour_offset_zone():
 # =========================================================================
 
 
+_SPAWNS_AND_HANGS = """
+import subprocess, sys, time
+
+# A child that outlives its parent and holds the stdout it inherited.
+subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(120)"],
+    stdout=sys.stdout,
+    stderr=subprocess.STDOUT,
+)
+time.sleep(120)
+"""
+
+
+def test_pdflatex_timeout_holds_when_a_child_outlives_the_process(tmp_path):
+    """The LaTeX timeout must fire even if pdflatex leaves a process behind.
+
+    A real regression, not a hypothetical: the first build on a cold MiKTeX
+    blocked for over ten minutes against a documented ``timeout=120``.
+    ``subprocess.run(capture_output=True, timeout=N)`` does kill pdflatex when
+    the timeout fires — but MiKTeX's package installer is a *grandchild* that
+    inherited the stdout pipe, and the follow-up ``communicate()`` takes no
+    timeout, so it waits forever for an EOF that cannot arrive while that
+    installer holds the write end.
+
+    The stand-in is that exact shape: a process that starts a longer-lived
+    child on its own stdout, then sleeps well past the timeout. It must raise
+    promptly rather than waiting the grandchild out.
+    """
+    import sys
+    import time
+
+    from backend.documents.build import DocumentBuildError, _run_pdflatex
+
+    stub = tmp_path / "spawns_and_hangs.py"
+    stub.write_text(_SPAWNS_AND_HANGS, encoding="utf-8")
+
+    started = time.monotonic()
+    with pytest.raises(DocumentBuildError, match="timed out"):
+        _run_pdflatex([sys.executable, str(stub)], timeout=5)
+    elapsed = time.monotonic() - started
+
+    # The grandchild sleeps 120s. Anything approaching that means the pipe
+    # deadlock is back; the fix returns in about the 5s timeout plus teardown.
+    assert elapsed < 60, f"timeout did not hold: took {elapsed:.1f}s"
+
+
 def test_latex_aux_cleanup_tolerates_a_locked_file(tmp_path, monkeypatch):
     """A successful build must not be lost to a failed tidy-up.
 
@@ -293,14 +339,11 @@ def test_latex_aux_cleanup_tolerates_a_locked_file(tmp_path, monkeypatch):
     monkeypatch.setattr(pathlib.Path, "unlink", locked_unlink)
 
     # Exercise only the cleanup loop, with pdflatex stubbed out entirely.
+    # Stubbed at _run_pdflatex rather than at subprocess: the runner owns the
+    # timeout and process-tree handling, and patching underneath it would let
+    # this test pass while really invoking pdflatex on a stub document.
     monkeypatch.setattr(build.settings, "latex_passes", 0)
-
-    class Completed:
-        returncode = 0
-        stdout = ""
-        stderr = ""
-
-    monkeypatch.setattr(build.subprocess, "run", lambda *a, **k: Completed())
+    monkeypatch.setattr(build, "_run_pdflatex", lambda *a, **k: (0, ""))
 
     result = build.render_pdf("\\documentclass{article}\\begin{document}x\\end{document}",
                               tmp_path, "resume")

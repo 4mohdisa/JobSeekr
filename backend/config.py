@@ -84,9 +84,17 @@ class Settings(BaseSettings):
     # notice: run ``python -m backend.discovery.verify_seek`` to confirm what
     # actually works from your machine, then correct these in .env without
     # touching code. See NOTES.md.
-    seek_search_url: str = "https://www.seek.com.au/api/chalice-search/v5/search"
-    seek_search_url_fallback: str = "https://www.seek.com.au/api/chalice-search/v4/search"
-    seek_html_search_url: str = "https://www.seek.com.au/jobs"
+    #
+    # Verified live from the user's machine on 2026-09-01. Seek has moved from
+    # www.seek.com.au to au.seek.com (the old host 308-redirects) and the old
+    # chalice-search paths now 404 on the new host. jobsearch/v5 is what the
+    # site's own front end calls, and it answers with the job array under
+    # ``data``. The fallback is the same endpoint on the legacy host, kept only
+    # so a re-run of verify_seek reports on it rather than losing the record.
+    seek_base_url: str = "https://au.seek.com"
+    seek_search_url: str = "https://au.seek.com/api/jobsearch/v5/search"
+    seek_search_url_fallback: str = "https://www.seek.com.au/api/jobsearch/v5/search"
+    seek_html_search_url: str = "https://au.seek.com/jobs"
     seek_site_key: str = "AU-Main"
     seek_source_system: str = "houston"
     seek_locale: str = "en-AU"
@@ -158,6 +166,10 @@ class Settings(BaseSettings):
     pdflatex_path: str = "pdflatex"
     # Two passes so LaTeX resolves its own references.
     latex_passes: int = 2
+    # Per-pass wall clock. Generous because a cold MiKTeX may legitimately be
+    # downloading a package on the first build; the timeout is enforced by
+    # killing the whole process tree, so overshooting it costs nothing.
+    latex_timeout_seconds: int = 180
 
     # -------------------------------------------------------------- telegram
     telegram_bot_token: str | None = None
