@@ -112,6 +112,7 @@ uv run python -m backend.scoring.run
 uv run python -m backend.documents.build --job-id N
 uv run python -m backend.apply.run --dry-run
 uv run python -m backend.apply.session login
+uv run python -m backend.rehearsal
 uv run pytest
 alembic upgrade head
 ```
