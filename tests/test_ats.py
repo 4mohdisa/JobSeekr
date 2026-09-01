@@ -8,6 +8,7 @@ another — so those properties are asserted directly rather than assumed.
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 from sqlalchemy.pool import StaticPool
@@ -217,6 +218,12 @@ def test_a_map_records_where_never_what(session):
             "kind",
             "source",
             "question",
+            # A pointer at a profile field ("profile.email"), not its value —
+            # the same class of thing as `source` and `question`, and resolved
+            # against the profile at fill time. Without it a cached map knows a
+            # field wants some profile value but not which, which is not a
+            # usable mapping.
+            "profile_path",
             "required",
             "step",
             "selector",
@@ -582,3 +589,177 @@ def test_an_automatable_job_never_reaches_the_manual_queue(campaign):
 
 def test_an_unscored_unautomatable_job_is_skipped(campaign):
     assert decide_queueing(campaign, None, automatable=False).action == "skip"
+
+
+# ---------------------------------------------------------- the cache is used
+
+
+@pytest.fixture(autouse=True)
+def _isolated_formmaps(tmp_path, monkeypatch):
+    """Every test in this module gets its own form-map cache.
+
+    map_fields persists what it learns, and conftest redirects DATA_DIR once
+    per *session* rather than per test. Without this, one test's saved map
+    would be a silent cache hit in the next, and a test asserting an LLM call
+    happened would pass while making none.
+    """
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+
+
+class CountingMapper:
+    """Stands in for the model and counts how often it was actually asked."""
+
+    def __init__(self, answers: dict[str, dict]):
+        self.answers = answers
+        self.calls = 0
+        self.asked: list[list[str]] = []
+
+    def __call__(self, prompt, **kwargs):
+        self.calls += 1
+        # The prompt names each field it wants mapped as id='...'.
+        asked = re.findall(r"id='([^']+)'", prompt)
+        self.asked.append(asked)
+        return {"fields": [self.answers[i] for i in asked if i in self.answers]}
+
+
+RESOLVED = {
+    "first_name": {
+        "identifier": "first_name",
+        "source": "profile",
+        "profile_path": "profile.first_name",
+        "confident": True,
+    },
+    "email": {
+        "identifier": "email",
+        "source": "profile",
+        "profile_path": "profile.email",
+        "confident": True,
+    },
+    "rights": {
+        "identifier": "rights",
+        "source": "answer_bank",
+        "question": "Do you have full working rights in Australia?",
+        "confident": True,
+    },
+}
+
+
+def test_the_same_form_shape_twice_makes_one_llm_call(monkeypatch, session):
+    """The whole point of the cache: pay for a form shape once, not per job.
+
+    Before this was wired, formmaps.py had no production caller and every
+    application re-paid for a mapping the system had already learned.
+    """
+    mapper = CountingMapper(RESOLVED)
+    monkeypatch.setattr(generic.llm, "complete_json", mapper)
+
+    shape = fields(
+        ("first_name", "First name", "text"),
+        ("email", "Email address", "text"),
+        ("rights", "Do you have full working rights in Australia?", "radio"),
+    )
+
+    first = generic.map_fields(shape, platform="greenhouse", session=session)
+    assert mapper.calls == 1, "the first form of a new shape must be learned"
+    assert all(m.usable for m in first)
+
+    second = generic.map_fields(shape, platform="greenhouse", session=session)
+    assert mapper.calls == 1, (
+        f"a cached form shape must cost zero LLM calls, made {mapper.calls - 1} extra"
+    )
+
+    # Served from cache, but identical to what was learned — a cache that
+    # returned something weaker would be worse than no cache.
+    assert [m.identifier for m in second] == [m.identifier for m in first]
+    assert all(m.usable for m in second)
+    by_id = {m.identifier: m for m in second}
+    assert by_id["email"].profile_path == "profile.email"
+    assert by_id["rights"].question == "Do you have full working rights in Australia?"
+    assert by_id["rights"].source == "answer_bank"
+
+
+def test_the_cache_survives_without_a_session(monkeypatch):
+    """The maps live on disk; the session only adds the index row."""
+    mapper = CountingMapper(RESOLVED)
+    monkeypatch.setattr(generic.llm, "complete_json", mapper)
+    shape = fields(("email", "Email address", "text"))
+
+    generic.map_fields(shape, platform="greenhouse")
+    generic.map_fields(shape, platform="greenhouse")
+
+    assert mapper.calls == 1
+
+
+def test_a_form_that_gains_a_field_is_a_new_form(monkeypatch, session):
+    """A changed shape is a cache miss, by design — and must stay one.
+
+    The fingerprint covers the whole form, so adding a question produces a
+    different fingerprint and the form is learned afresh. That is deliberate:
+    reusing a mapping across shapes would mean applying one form's field
+    positions to another, which is how a value lands in the wrong box. The cost
+    is that a site varying its questions per job re-learns per variant.
+
+    (Partial re-learning does exist, but within a single fingerprint — see
+    test_an_unconfident_mapping_is_never_served_from_cache.)
+    """
+    mapper = CountingMapper(RESOLVED)
+    monkeypatch.setattr(generic.llm, "complete_json", mapper)
+
+    two = fields(
+        ("first_name", "First name", "text"), ("email", "Email address", "text")
+    )
+    three = fields(
+        ("first_name", "First name", "text"),
+        ("email", "Email address", "text"),
+        ("rights", "Do you have full working rights in Australia?", "radio"),
+    )
+    assert fingerprint_fields(two) != fingerprint_fields(three)
+
+    generic.map_fields(two, platform="greenhouse", session=session)
+    assert mapper.calls == 1
+
+    generic.map_fields(three, platform="greenhouse", session=session)
+    assert mapper.calls == 2, "a new shape must be learned, not guessed from the old one"
+
+    # ...and each shape is independently cached from then on.
+    generic.map_fields(two, platform="greenhouse", session=session)
+    generic.map_fields(three, platform="greenhouse", session=session)
+    assert mapper.calls == 2
+
+
+def test_an_unconfident_mapping_is_never_served_from_cache(monkeypatch, session):
+    """The abstain rule has to survive the round trip through the cache.
+
+    A guess stored as resolved would be replayed on every later application
+    without anyone being asked again — exactly what the answer bank's abstain
+    rule exists to prevent.
+    """
+    mapper = CountingMapper(
+        {
+            "email": RESOLVED["email"],
+            "wwcc": {"identifier": "wwcc", "source": "answer_bank", "confident": False},
+        }
+    )
+    monkeypatch.setattr(generic.llm, "complete_json", mapper)
+    shape = fields(("email", "Email address", "text"), ("wwcc", "WWCC number", "text"))
+
+    generic.map_fields(shape, platform="greenhouse", session=session)
+    second = generic.map_fields(shape, platform="greenhouse", session=session)
+
+    assert mapper.calls == 2, "an unresolved field must be asked again, not replayed"
+    assert mapper.asked[1] == ["wwcc"], "only the unresolved field is re-asked"
+    by_id = {m.identifier: m for m in second}
+    assert by_id["wwcc"].usable is False
+    assert by_id["email"].usable is True
+
+
+def test_a_different_form_shape_is_a_different_cache_entry(monkeypatch, session):
+    """Fingerprint is the form's shape — two forms must not share a mapping."""
+    mapper = CountingMapper(RESOLVED)
+    monkeypatch.setattr(generic.llm, "complete_json", mapper)
+
+    generic.map_fields(fields(("email", "Email address", "text")), session=session)
+    generic.map_fields(
+        fields(("first_name", "First name", "text")), session=session
+    )
+    assert mapper.calls == 2

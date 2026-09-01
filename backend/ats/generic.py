@@ -23,10 +23,21 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
+from sqlmodel import Session
+
 from backend.apply.draft import FormField
+from backend.ats.formmaps import (
+    FieldMapping,
+    FormMapData,
+    fingerprint_fields,
+    load_map,
+    relearn_targets,
+    save_map,
+)
 from backend.config import settings
 from backend.llm.client import LLMBudgetExceeded, llm
 from backend.logging_setup import get_logger
+from backend.models import FormMapTier
 
 log = get_logger(__name__)
 
@@ -228,11 +239,145 @@ class MappedField:
         return self.confident and self.source != "unknown"
 
 
-def map_fields(fields: list[FormField], *, platform: str | None = None) -> list[MappedField]:
+def _cached_to_mapped(mapping: FieldMapping) -> MappedField:
+    """A stored mapping, as the runtime type.
+
+    ``confident=True`` is safe here because it is only ever reached for a
+    *resolved* entry, and :func:`_to_stored` refuses to store an unusable
+    mapping as resolved. A cache hit therefore cannot replay a guess the model
+    was unsure about — the abstain rule survives the round trip.
+    """
+    return MappedField(
+        identifier=mapping.identifier,
+        source=mapping.source,
+        profile_path=mapping.profile_path,
+        question=mapping.question or "",
+        confident=True,
+    )
+
+
+def _to_stored(form_field: FormField, mapped: MappedField) -> FieldMapping:
+    """One field's mapping, in the form the cache persists.
+
+    Where the field is and what it wants — never what goes in it; ``save_map``
+    rejects any mapping carrying a value. Anything the model was not confident
+    about is stored as ``unknown`` so the next run re-learns it rather than
+    inheriting a guess.
+    """
+    usable = mapped.usable
+    return FieldMapping(
+        identifier=form_field.identifier,
+        label=form_field.label or "",
+        kind=form_field.kind,
+        source=mapped.source if usable else "unknown",
+        question=(mapped.question or None) if usable else None,
+        profile_path=mapped.profile_path if usable else "",
+        required=bool(form_field.required),
+        step=form_field.step,
+    )
+
+
+def _remember(
+    session: Session | None,
+    fingerprint: str,
+    fields: list[FormField],
+    mapped: list[MappedField],
+    *,
+    platform: str | None,
+) -> None:
+    """Persist what was just learned, so the next form of this shape is free.
+
+    Saved at the platform tier: the fingerprint is the *form's* shape, so the
+    mapping generalises to every employer using that platform. Company-tier
+    overrides layer on top via ``merge_maps``. Always saved untrusted — trust
+    is earned by ``record_outcome`` over three clean submissions, not claimed
+    at learning time.
+    """
+    by_id = {m.identifier: m for m in mapped}
+    stored = [_to_stored(f, by_id[f.identifier]) for f in fields if f.identifier in by_id]
+    if not any(mapping.resolved for mapping in stored):
+        # Nothing was learned — a failed call or a form the model could not
+        # read. Writing an all-unknown map would add a file that teaches the
+        # next run nothing.
+        return
+
+    save_map(
+        session,
+        FormMapData(
+            fingerprint=fingerprint,
+            tier=FormMapTier.PLATFORM.value,
+            platform=platform,
+            fields=stored,
+        ),
+        trusted=False,
+    )
+
+
+def map_fields(
+    fields: list[FormField],
+    *,
+    platform: str | None = None,
+    session: Session | None = None,
+) -> list[MappedField]:
+    """Where each field's value comes from — asking the model only when needed.
+
+    The answer is cached by form-structure fingerprint, so the second
+    application to a form of the same shape costs nothing: same shape twice
+    means one LLM call, not two. Only the fields the cache cannot already
+    resolve are sent to the model, so a form that gains one field re-learns
+    that one field rather than the whole form.
+
+    ``session`` is optional. The maps themselves live on disk, so caching works
+    without one; the session only adds the index row that trust graduation and
+    the dashboard read.
+    """
+    if not fields:
+        return []
+
+    fingerprint = fingerprint_fields(fields)
+    cached, _trusted = load_map(session, fingerprint, platform=platform)
+    todo = relearn_targets(cached, fields)
+
+    if cached is not None and not todo:
+        known = cached.by_identifier()
+        log.info(
+            "form_map_cache_hit",
+            fingerprint=fingerprint,
+            platform=platform,
+            fields=len(fields),
+        )
+        return [_cached_to_mapped(known[f.identifier]) for f in fields]
+
+    log.info(
+        "form_map_cache_miss",
+        fingerprint=fingerprint,
+        platform=platform,
+        learning=len(todo),
+        reused=len(fields) - len(todo),
+    )
+
+    learned = _map_via_llm(todo, platform=platform)
+    learned_by_id = {m.identifier: m for m in learned}
+    known = cached.by_identifier() if cached is not None else {}
+
+    result: list[MappedField] = []
+    for form_field in fields:
+        if form_field.identifier in learned_by_id:
+            result.append(learned_by_id[form_field.identifier])
+        elif form_field.identifier in known:
+            result.append(_cached_to_mapped(known[form_field.identifier]))
+        else:  # pragma: no cover - relearn_targets covers every field
+            result.append(MappedField(identifier=form_field.identifier, source="unknown"))
+
+    _remember(session, fingerprint, fields, result, platform=platform)
+    return result
+
+
+def _map_via_llm(fields: list[FormField], *, platform: str | None = None) -> list[MappedField]:
     """Ask the model where each field's value comes from.
 
-    Only the fields passed in are mapped — on a partial failure the caller
-    passes just the unknown ones, so a form is never re-learned wholesale.
+    Only the fields passed in are mapped — the caller passes just the ones the
+    cache could not resolve, so a form is never re-learned wholesale.
     """
     if not fields:
         return []
