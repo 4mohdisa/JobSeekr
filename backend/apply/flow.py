@@ -49,6 +49,7 @@ from backend.apply.answers import (
     resolve_answer,
 )
 from backend.apply.draft import ApplicationDraft, FormField
+from backend.ats.formmaps import fingerprint_fields, record_outcome
 from backend.ats.generic import map_fields
 from backend.base import ApplyOutcome, ApplyResult
 from backend.config import settings
@@ -187,6 +188,7 @@ def build_draft(
     draft.answers.update(resolved)
 
     if abstentions and settings.apply_form_mapping_enabled:
+        draft.form_fingerprint = fingerprint_fields(screening)
         rescued, abstentions = _resolve_via_form_map(
             session,
             [f for f in screening if question_key(f) not in resolved],
@@ -332,6 +334,25 @@ def _record(
         )
     job.status = status
     session.add(job)
+
+    # Report back to the form-map cache. Trust graduation is the half of
+    # formmaps that stayed unwired after load/save were connected: without
+    # this, record_outcome is never called, no map ever reaches TRUST_THRESHOLD
+    # and every learned map stays a draft forever. A map is credited only for
+    # an application that actually went in; anything else resets its streak,
+    # because a map that produced a failure has not been shown to work.
+    if draft.form_fingerprint:
+        became_trusted = record_outcome(
+            session,
+            draft.form_fingerprint,
+            success=outcome is ApplicationOutcome.SUBMITTED,
+        )
+        if became_trusted:
+            log.info(
+                "form_map_trusted",
+                fingerprint=draft.form_fingerprint,
+                platform=draft.platform,
+            )
 
 
 def run_apply(

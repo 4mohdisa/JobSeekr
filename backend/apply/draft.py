@@ -62,6 +62,14 @@ class ApplicationDraft:
     screenshot_pre: str | None = None
     screenshot_post: str | None = None
 
+    form_fingerprint: str | None = None
+    """The form-map fingerprint this draft's fields hashed to, when one was used.
+
+    Carried so the outcome can be reported back to the cache: a map only earns
+    trust by producing clean submissions, and it cannot be credited for one
+    without knowing which map was in play.
+    """
+
     @property
     def answers_given(self) -> dict[str, str]:
         """Question -> answer actually entered, for the audit record."""

@@ -665,13 +665,25 @@ def build_documents(
         report = verify_pdf(path, kind=kind.value, expect=expectations[kind])
         result.reports[kind.value] = report
 
+        stored_report = report.model_dump()
+        if kind is DocumentKind.COVER_LETTER:
+            # The key three readers expect and nothing produced: the guardrail
+            # that checks the letter is real, the dashboard review screen, and
+            # Seek's cover-letter textarea all read
+            # parse_report["cover_letter_text"]. Nothing ever wrote it, so
+            # cover_letter_clean failed on every application and the textarea
+            # would have been filled with an empty string. The unit tests missed
+            # it because their fixtures set the key by hand, which encoded the
+            # expectation without ever checking the producer met it.
+            stored_report["cover_letter_text"] = report.extracted_text
+
         document = Document(
             job_id=job_id,
             kind=kind,
             path=str(path),
             sha256=_sha256(path),
             parse_check_passed=report.passed,
-            parse_report=report.model_dump(),
+            parse_report=stored_report,
             template_version=version,
         )
         session.add(document)

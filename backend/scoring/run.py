@@ -18,7 +18,7 @@ from typing import Any
 from sqlmodel import Session, select
 
 from backend.config import settings
-from backend.db import session_scope
+from backend.db import persist_detached, session_scope
 from backend.llm.client import LLMBudgetExceeded
 from backend.logging_setup import configure_logging, get_logger
 from backend.models import (
@@ -353,9 +353,7 @@ def run_scoring(
             errors=errors,
             ok=not errors,
         )
-        session.add(run)
-        session.flush()
-        session.refresh(run)
+        persist_detached(session, run)
 
     log.info("scoring_complete", campaigns=len(per_campaign), errors=len(errors))
     return run

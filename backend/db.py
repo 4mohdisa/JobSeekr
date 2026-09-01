@@ -84,3 +84,24 @@ def init_db() -> None:
     if path is not None:
         path.parent.mkdir(parents=True, exist_ok=True)
     log.info("db_initialised", database_url=settings.database_url)
+
+
+def persist_detached[T](session: Session, instance: T) -> T:
+    """Flush a row, load its values, and detach it so the caller can read it.
+
+    ``session_scope`` commits on the way out, and a commit expires every
+    instance the session still tracks. A caller that returns a row from inside
+    the scope and then reads any attribute of it therefore triggers a lazy load
+    against a closed session and gets ``DetachedInstanceError`` — which is
+    exactly what every runner did with its ``Run`` row, turning each successful
+    pass into a traceback and a non-zero exit at the moment it reported success.
+
+    The INSERT is already flushed by the time this returns, so expunging costs
+    nothing that is persisted; it only stops SQLAlchemy expiring the values that
+    were just read.
+    """
+    session.add(instance)
+    session.flush()
+    session.refresh(instance)
+    session.expunge(instance)
+    return instance

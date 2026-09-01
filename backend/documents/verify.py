@@ -98,6 +98,13 @@ class ParseReport(BaseModel):
     path: str
     pages: int = 0
     extracted_chars: int = 0
+    extracted_text: str = ""
+    """Exactly what came out of the PDF — what an ATS reads.
+
+    Kept, not just counted. Downstream needs the cover letter's text to paste
+    into a textarea and to check the letter is real, and re-extracting it later
+    would risk reading a different file than the one that passed the gate.
+    """
     checks: list[CheckResult] = Field(default_factory=list)
 
     @property
@@ -509,6 +516,7 @@ def verify_pdf(
         path=str(path),
         pages=pages,
         extracted_chars=len(text.strip()),
+        extracted_text=text.strip(),
         checks=checks,
     )
 
