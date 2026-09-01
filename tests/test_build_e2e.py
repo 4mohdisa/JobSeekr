@@ -7,8 +7,6 @@ metrics must fail the build, not produce a confident-looking lie about the user.
 
 from __future__ import annotations
 
-import shutil
-
 import pytest
 from sqlmodel import Session, SQLModel, create_engine
 
@@ -24,10 +22,9 @@ from backend.models import (
     JobStatus,
     Profile,
 )
+from tests.conftest import needs_pdflatex
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("pdflatex") is None, reason="pdflatex not installed"
-)
+pytestmark = needs_pdflatex
 
 
 CLEAN_TEXT = {

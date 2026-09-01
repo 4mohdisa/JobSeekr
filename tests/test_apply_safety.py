@@ -286,7 +286,11 @@ def _imported_modules(path: pathlib.Path) -> set[str]:
 def test_check_can_submit_is_called_from_exactly_one_place():
     """Hard rule 6: every submit path goes through the gate, once."""
     callers = [
-        str(path.relative_to(REPO))
+        # as_posix(), not str(): on Windows str(PurePath) uses backslashes and
+        # would never equal the POSIX literal below, so this rule-6 check would
+        # fail on every Windows run for a reason that has nothing to do with
+        # the guardrail it is protecting.
+        path.relative_to(REPO).as_posix()
         for path in _python_files("backend")
         if path.name != "guardrails.py" and "check_can_submit" in _called_names(path)
     ]

@@ -7,18 +7,15 @@ passes good documents is worthless; what matters is that it REJECTS these.
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
 from backend.documents.verify import ParseExpectations, verify_pdf
+from tests.conftest import needs_pdflatex
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("pdflatex") is None,
-    reason="pdflatex not installed; the parse gate cannot be exercised without real PDFs",
-)
+pytestmark = needs_pdflatex
 
 NAME = "Jordan Fitzgerald"
 EMAIL = "jordan.fitzgerald@example.com"
