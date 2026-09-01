@@ -1711,9 +1711,25 @@ later in this session. Assessed against the code:
 
 Nothing here needs a code change; it needs a decision about the power settings.
 
-### Frontend / backend serving
+### Frontend / backend serving: both confirmed
 
-**NOT DONE.** `npm install` succeeded but neither server was started.
+Started, checked and stopped again. No errors in either log.
+
+```
+uvicorn backend.main:app --host 127.0.0.1 --port 8010     ready in 3s
+  GET /health -> {"status":"ok","version":"0.1.0","allow_live_submit":false,
+                  "database":"connected","time":"2026-09-01T11:20:07Z"}
+  GET /docs   -> 200
+
+npm run dev -- --port 5183                                Vite 8.2.2, ready in 3.7s
+  GET /       -> 200, <title>JobSeekr</title>, #root present
+```
+
+Note `allow_live_submit: false` is served by the live app, not just the file.
+
+Neither was left running. `pkill` does not reach Windows processes from the
+bash side — `taskkill /T /F /PID` against the listening PID is what actually
+stops them, which matters for anything scripted around these servers later.
 
 ## Phase 2 — Seek, LinkedIn, Indeed: DONE
 
