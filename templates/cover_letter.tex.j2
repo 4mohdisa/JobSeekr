@@ -22,7 +22,15 @@
 \VAR{profile.email}
 \BLOCK{if profile.phone} $\cdot$ \VAR{profile.phone}\BLOCK{endif}
 \BLOCK{if profile.location} $\cdot$ \VAR{profile.location}\BLOCK{endif}
-
+% \par, not a blank line. The engine renders with trim_blocks=True, which eats
+% the newline that follows a block end tag — so a blank line here is consumed
+% and LaTeX joins the date onto the contact paragraph. It then extracts as
+% "... Adelaide SA 01 September 2026", and an ATS reads the location field as
+% having a date stapled to it. \par ends the paragraph whatever the trimming
+% does to the newlines around it.
+% (A LaTeX comment is not a Jinja comment: naming a block tag in prose here
+% would be parsed as a real tag, so they are described rather than written.)
+\par
 \VAR{today.long}
 
 \BLOCK{if job.company}

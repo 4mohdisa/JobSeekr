@@ -1554,3 +1554,686 @@ npx oxlint src                    0 errors, 5 pre-existing warnings
    LLM form-mapping call.
 5. **Add `GEMINI_API_KEY`** to `.env` if you want the new routing used.
 6. **Decide on 2.5 vs 3.1 Flash-Lite** before 2026-10-16.
+
+---
+
+# Windows bring-up — 2026-09-01 (first real machine, first real network)
+
+Everything below either ran on this machine or is marked as not done. Phases 1
+and 2 are complete; Phase 3 is complete except for the two inputs I must not
+invent (see "What is substituted in Phase 3").
+
+## Platform
+
+```
+platform.system() = Windows      Windows 11 Home Single Language 10.0.26200
+python  3.14.7 (C:\Python314)    node v24.20.0 / npm 11.19.0
+git     2.55.0.windows.5         MiKTeX 25.12 (pdfTeX 4.23)
+```
+
+## Phase 1 — Environment: DONE
+
+### Missing on arrival, and what was done
+
+| Tool | State | Action |
+|---|---|---|
+| `uv` | absent | installed -> 0.12.7 |
+| MiKTeX / `pdflatex` | absent | installed (winget, user scope) -> 25.12 |
+| Google Chrome | absent | **NOT installed** |
+| Playwright browsers | absent | **NOT installed** |
+
+```
+py -3 -m pip install --user uv
+winget install --id MiKTeX.MiKTeX -e --scope user --silent --disable-interactivity --accept-package-agreements --accept-source-agreements
+winget install --id Google.Chrome -e --silent --accept-package-agreements --accept-source-agreements
+uv run playwright install chrome
+```
+
+Chrome and the Playwright browsers are apply-layer only, and discovery is HTTP,
+so Phases 1-3 did not need them. They are the next prerequisite for any apply
+work.
+
+**Neither `uv` nor MiKTeX is on PATH:**
+
+```
+C:\Users\mohdi\AppData\Roaming\Python\Python314\Scripts
+C:\Users\mohdi\AppData\Local\Programs\MiKTeX\miktex\bin\x64
+```
+
+That is not cosmetic — it silently disabled the whole document test suite (below).
+
+### MiKTeX had to be made non-interactive before it was safe to run unattended
+
+```
+initexmf --set-config-value "[MPM]AutoInstall=1"
+```
+
+Without it pdflatex **waits for a GUI confirmation** the first time it needs a
+package. I also pre-installed the packages the templates use so no build pays
+for an on-demand fetch. Note `mpm --install=A --install=B` aborts at the first
+already-installed package; install one at a time.
+
+`uv sync`, `npm install` and `alembic upgrade head` all succeeded first try.
+
+### Test suite: 545 tests, 5 real failures, all fixed
+
+1. **`test_check_can_submit_is_called_from_exactly_one_place`** — `str(PurePath)`
+   gives backslashes on Windows, compared against a POSIX literal. This is the
+   hard-rule-6 test proving every submit path goes through the guardrail; it
+   would have been red on every Windows run for an unrelated reason.
+2. **/ 3. `test_app_refuses_to_serve_the_browser_profile`** — conftest redirected
+   `DATA_DIR` but not `BROWSER_PROFILE_DIR`. `.env.example` ships that key set,
+   so with a real `.env` the two paths stopped overlapping and the guard had
+   nothing to catch. I verified the guard itself is correct when driven with
+   production-shaped config; the bug was entirely in the test wiring.
+4. **/ 5. scoring model tests** — `.env.example` shipped `claude-opus-5` for
+   scoring and classification while `config.py` defaults to
+   `gemini-3.1-flash-lite`. **Copying `.env.example`, the documented setup path,
+   silently reinstated the ~17x cost configuration** that the earlier cost work
+   existed to remove. Fixed the example, and made the "shipped default" test
+   price `Settings(_env_file=None)` so it tests what ships rather than the local
+   file.
+
+### The worse bug those were hiding: the document suite was silently skipping
+
+`test_build_e2e`, `test_parse_gate` and `test_hostile_documents` all guarded on
+`shutil.which("pdflatex")`. The application does not use PATH — it runs
+`settings.pdflatex_path`. Because MiKTeX's per-user install is not on PATH,
+**the entire LaTeX and parse-gate suite skipped while pdflatex was installed and
+working.** Green, with the document pipeline completely unexercised. On Linux
+this never showed because TeX Live lands in `/usr/bin`.
+
+Replaced with one shared `needs_pdflatex` marker in `conftest.py` that resolves
+`settings.pdflatex_path`. `test_parse_gate.py` alone went from 0 to 12 running
+tests. `compile_tex` in that module also had to stop calling a bare `"pdflatex"`,
+or the tests would run and then die on `FileNotFoundError`.
+
+### `render_pdf` could not be timed out — FIXED
+
+The first full run **hung for over ten minutes inside a call passing
+`timeout=120`**. `subprocess.run(capture_output=True, timeout=N)` does fire and
+does kill pdflatex — but MiKTeX spawns a package installer, that grandchild
+inherits the stdout pipe, and `run` then calls `communicate()` **again with no
+timeout** to drain it. The pipe never reaches EOF while the installer holds the
+write end, so the build blocks forever. The documented timeout is worthless in
+exactly the situation it exists for.
+
+`render_pdf` now redirects to a file instead of a pipe, which removes the
+deadlock at the root — no reader threads, no inherited pipe ends, so `wait()`
+returns when pdflatex exits whatever its children are doing. `stdin` is
+`DEVNULL` so nothing can block on a console read, and the timeout kills the
+whole process tree (`taskkill /T` on Windows, `killpg` on POSIX). The per-pass
+budget is now `LATEX_TIMEOUT_SECONDS` (default 180) rather than a literal.
+
+Covered by `test_pdflatex_timeout_holds_when_a_child_outlives_the_process`,
+which reproduces the exact shape: a process that hands its stdout to a
+longer-lived child and then sleeps past the timeout.
+
+### The 10-hour test run — RESOLVED, and it is not a clock bug
+
+The suite self-reported `36807.61s (0:10:13:27)`. I flagged a possible
+clock/timezone fault. **There is none.** Measured against network time:
+
+```
+python UTC now   2026-09-01T10:15:05Z      network Date hdr 2026-09-01T10:15:05Z
+LOCAL CLOCK SKEW +0.1 s
+local            2026-09-01T19:45:05+09:30  Australia/Adelaide, ACST, tzdata resolves
+```
+
+The real cause is in the Windows event log: **the machine slept twice during the
+run.**
+
+```
+SleepTime 2026-08-31T19:51:10Z  WakeTime 2026-08-31T22:30:36Z   (2h 39m)
+SleepTime 2026-09-01T02:36:01Z  WakeTime 2026-09-01T08:48:27Z   (6h 12m)
+```
+
+~8h51m of sleep against a 10h13m wall clock leaves ~1h22m of real work, which
+matches the observed per-file timings. pytest measures elapsed wall time, which
+keeps advancing across suspend.
+
+**The operational consequence matters more than the diagnosis.** `Claude.md`
+says "Machine stays awake and logged in". On this machine that is false — it
+slept 8h51m in two days, and it slept again during a 5-second discovery run
+later in this session. Assessed against the code:
+
+* `scheduler.py` already handles it correctly: `coalesce=True`,
+  `max_instances=1`, `misfire_grace_time=3600`. A job missed during a short
+  sleep runs once on resume and does not stack up.
+* **But a sleep longer than the 1-hour grace silently skips that run entirely,
+  and one of the two sleeps was 6h12m.** Scheduled discovery would simply not
+  have happened.
+* `pacing.py` uses `time.sleep`, which only ever over-waits across suspend —
+  conservative, cannot cause submitting too fast.
+* The apply window is enforced at submit time (`guardrails.py`, rule 12
+  `inside_window`), not at schedule time, so a late wake cannot submit outside
+  09:00-17:00.
+
+Nothing here needs a code change; it needs a decision about the power settings.
+
+### Frontend / backend serving
+
+**NOT DONE.** `npm install` succeeded but neither server was started.
+
+## Phase 2 — Seek, LinkedIn, Indeed: DONE
+
+### Reachability (all previously blocked)
+
+```
+https://www.seek.com.au/   200
+https://www.linkedin.com/  200
+https://au.indeed.com/     403   Cloudflare, for plain httpx
+```
+
+### Seek had moved, and every configured endpoint was dead
+
+`verify_seek` correctly reported NOTHING WORKED. Causes:
+
+1. **`www.seek.com.au` 308-redirects to `au.seek.com`.**
+2. `/api/chalice-search/v5/search` and `/v4/search` both **404** on the new host.
+3. The HTML fallback fetched but parsed 0 jobs.
+
+**Confirmed working endpoint:**
+
+```
+https://au.seek.com/api/jobsearch/v5/search
+  siteKey=AU-Main  sourcesystem=houston  keywords=...  where=...
+  page=1  pageSize=20  locale=en-AU
+-> 200 application/json
+-> keys: data, facets, info, location, searchParams, solMetadata, sortModes, suggestions, totalCount
+```
+
+Jobs are in `data[]`. All three strategies now work: JSON API 10 jobs, page
+state 10 jobs, JSON-LD 0 (Seek publishes none on the search page).
+
+### Mapping defects found against the real payload, all fixed
+
+* **`location` was `None` for every ad.** Records carry `locations[0].label` — a
+  *list* — and no alias matched. `_dig` now indexes lists so a dotted path
+  reaches it.
+* **Records carry no `url` at all**; it is built from the id, now against the
+  configured base host instead of one that 308s on every fetch.
+* **The HTML fallback recovered nothing** because the page-state blob keeps jobs
+  at `results.results.jobs`, and the scan only looked at top-level keys. Record
+  locations are now one list of dotted paths shared by both strategies.
+* **Descriptions were the one-sentence teaser.** `bulletPoints` carries the
+  actual requirements and was unused; both are kept now, which materially
+  improves what scoring sees.
+* **The client advertised `br` encoding with no brotli decoder installed.** Seek
+  answers gzip so it never bit, but a server honouring `br` would have returned
+  a body this client cannot read. Now advertises only what httpx can decode.
+
+### Not a bug, though it looks exactly like one
+
+Non-ASCII survives end to end: an en-dash in a Seek title is `U+2013` in the
+`RawJob`. The mojibake I first saw was my console rendering as cp1252
+(`sys.stdout.encoding == 'cp1252'`). structlog console output does mangle
+non-ASCII the same way, but it substitutes rather than raising, and the database
+stores correct UTF-8. Display-only.
+
+### Discovery run: 13 genuine Adelaide jobs in SQLite
+
+Campaign "Adelaide bring-up" (`python developer`, `data engineer`,
+`software engineer` / Adelaide SA).
+
+```
+seek:     fetched 13  new 13  duplicate 0   error 0
+linkedin: fetched  0  new  0  duplicate 0   error 1
+indeed:   fetched  0  new  0  duplicate 0   error 1
+```
+
+A second run correctly reported `new 0, duplicate 13`.
+
+**Also fixed: the discovery CLI crashed on exit** with
+`DetachedInstanceError`. `session_scope` commits on the way out, a commit
+expires every tracked instance, and `main`'s first read of `run.ok` then
+lazy-loaded against a closed session. The run itself had already succeeded, so
+this turned every successful discovery into a non-zero exit and a traceback.
+
+### jobspy: works, but NOT on this machine's Python
+
+Both LinkedIn and Indeed failed with:
+
+```
+OverflowError: cannot convert longdouble infinity to integer
+  numpy/core/getlimits.py, computing float128 limits at import
+```
+
+**`python-jobspy==1.1.82` hard-pins `numpy==1.26.3`, which cannot import on
+Python 3.14.** Adding a `numpy>=2.3` floor makes the project unresolvable:
+
+```
+Because python-jobspy>=1.1.82 depends on numpy==1.26.3 and your project
+depends on numpy>=2.3.0, we can conclude that [they] are incompatible.
+```
+
+So this is not fixable by pinning. I reverted the attempt and did **not** fight
+it further. To confirm it is purely a Python-version problem I built a
+throwaway 3.12 environment and ran both boards for real:
+
+```
+python 3.12.14 + numpy 1.26.3 -> jobspy imports OK
+linkedin: 15 rows in 8.0s     WORKS
+indeed:   15 rows in 1.5s     WORKS  -- gets past the Cloudflare 403
+```
+
+**jobspy does get past Indeed's Cloudflare block** (it uses Indeed's own API
+rather than the HTML site, so the 403 that plain httpx sees is irrelevant).
+Neither board was rate-limited at this volume.
+
+Options, all yours to choose:
+1. Run the project on Python 3.12 (`uv python install 3.12`, resync). Everything
+   resolves; costs re-verifying this session's work on a different interpreter.
+2. Wait for a jobspy release that unpins numpy.
+3. Drop jobspy and write direct adapters.
+
+Until one is chosen, **LinkedIn and Indeed discovery do not work on this
+machine** and Seek is the only live source.
+
+### Dedupe verified against real cross-board duplicates
+
+105 real LinkedIn + Indeed rows exported from the 3.12 environment and run
+through the real `normalize_job` and `find_duplicate` against the 13 real Seek
+rows in SQLite.
+
+```
+incoming rows considered : 105
+flagged as duplicates    :  24
+unique after dedupe      :  81
+```
+
+Genuine **cross-board** catches (not just same-board repeats from overlapping
+search terms):
+
+```
+[linkedin] TSPV Software Engineer      @ TechThinking Talent  -> [seek]     TSPV Software Engineer
+[indeed]   Software Developers         @ BAE Systems          -> [linkedin] Software Developers
+[indeed]   Applications Developer      @ Journey Beyond       -> [linkedin] Applications Developer
+```
+
+Cross-checked against ground truth in the raw feed (`software engineer i @
+flywire` appears 5 times, `senior developer, fullstack - python @ appnovation`
+3 times, and so on). Dedupe behaves correctly on real data.
+
+## Phase 3 — Real documents: DONE (with two substitutions)
+
+### What is substituted in Phase 3, and why
+
+Two inputs were missing and I would not invent either:
+
+1. **There is no Profile in the database.** Hard rule 1 forbids inventing facts
+   about you, so the builds use the repo's own synthetic test persona
+   ("Jordan Fitzgerald", from `tests/test_build_e2e.py`) written to a
+   **throwaway database** — no fabricated profile touches your real data.
+2. **There is no LLM API key** (`OPENAI`/`ANTHROPIC`/`GEMINI` all unset), so the
+   four AI slots use fixed stand-in prose.
+
+**The job ads are real** — real titles, companies, locations and descriptions
+pulled from Seek in Phase 2. What Phase 3 verifies is the LaTeX pipeline and the
+parse gate, and those are unaffected by whose name is on the page. The prose
+below is not a writing sample.
+
+### Three genuinely different real jobs
+
+| # | Title | Company | Why different |
+|---|---|---|---|
+| 1 | Artificial Intelligence Specialist | Flinders University | university / research sector |
+| 2 | Spot Trader | GreenPoint Energy | energy trading, not a software role |
+| 3 | TSPV Software Engineer | TechThinking Talent | defence, security-cleared, via recruiter |
+
+### All nine PDFs built and gated
+
+**Job 1 — Artificial Intelligence Specialist @ Flinders University** (Bedford Park, Adelaide SA)  
+`https://au.seek.com/job/94332305`
+
+| artifact | gate | pages | extracted chars | checks |
+|---|---|---|---|---|
+| resume | PASS | 1 | 510 | 14 |
+| cover_letter | PASS | 1 | 470 | 9 |
+| combined | PASS | 2 | 981 | 11 |
+
+**Job 2 — Spot Trader @ GreenPoint Energy** (Adelaide SA)  
+`https://au.seek.com/job/94333053`
+
+| artifact | gate | pages | extracted chars | checks |
+|---|---|---|---|---|
+| resume | PASS | 1 | 510 | 14 |
+| cover_letter | PASS | 1 | 445 | 9 |
+| combined | PASS | 2 | 956 | 11 |
+
+**Job 3 — TSPV Software Engineer @ TechThinking Talent** (Edinburgh, Adelaide SA)  
+`https://au.seek.com/job/94335227`
+
+| artifact | gate | pages | extracted chars | checks |
+|---|---|---|---|---|
+| resume | PASS | 1 | 510 | 14 |
+| cover_letter | PASS | 1 | 458 | 9 |
+| combined | PASS | 2 | 969 | 11 |
+
+9/9 passed. Check counts are 14 (resume), 9 (cover letter), 11 (combined),
+including the new one added below.
+
+## The gate's fourth blind spot, found by reading the extracted text
+
+Every one of the nine PDFs passed, so the gate had nothing to say. Reading the
+text is what found it:
+
+```
+jordan.fitzgerald@example.com  +61 412 345 678  Adelaide SA 01 September 2026
+```
+
+**The letter's date was being absorbed into the contact line.** An ATS reads
+that block positionally — the line carrying the email is where it expects the
+phone and the location, and it takes the trailing run as the location. So the
+location field became `Adelaide SA 01 September 2026`. All eight checks passed,
+on all three cover letters, and on the cover-letter page of all three combined
+PDFs.
+
+**Root cause was not layout.** The template puts the date in its own paragraph:
+
+```
+BLOCK-if profile.location ... profile.location BLOCK-endif
+<blank line>
+today.long
+```
+
+but `backend/documents/engine.py` builds its Jinja `Environment` with
+`trim_blocks=True`, which **eats the newline following a block end tag**. The
+blank line was consumed, LaTeX saw one paragraph, and the two joined. Generated
+`.tex` confirmed it:
+
+```
+jordan.fitzgerald@example.com
+ $\cdot$ +61 412 345 678 $\cdot$ Adelaide SA
+01 September 2026
+```
+
+Fixed with an explicit `\par`, which ends the paragraph regardless of what
+trimming does to the surrounding newlines. (The first attempt at the fix broke
+the build: a LaTeX comment is not a Jinja comment, so naming a block tag in the
+explanatory comment was parsed as a real tag.)
+
+### New gate check: `contact_line_uncontaminated`
+
+Asserts no date shares a line with the email. Two things it has to get right,
+both learned by watching it fail:
+
+* **It checks every line carrying the email, not the first.** `combined.pdf` has
+  two contact blocks and the resume's is clean — checking only the first match
+  passed the contaminated cover-letter page. Combined is the artifact attached
+  wherever a form has a single upload slot, so that was the worst place to miss.
+* **The year is optional after a month name.** The contact line can wrap: a
+  slightly longer address pushes `2026` onto the next extracted line, leaving
+  `... Adelaide SA 01 September` behind — just as corrupt, and the first version
+  of the check missed it. Month names are spelled out rather than matched as
+  `[A-Z][a-z]+`, so `12 Regent Street` does not read as a date.
+
+Three regression tests: contaminated rejected, corrected shape accepted, and the
+combined-document case where a clean contact line precedes the contaminated one.
+
+### Also observed in the extracted text, deliberately NOT turned into checks
+
+* `Senior Analyst 2021 - 2026` — title and date range share a line via `\hfill`.
+  This is conventional resume layout that ATS parsers expect; a check would be
+  over-fitting.
+* Bullets extract as `U+2022`, though `resume.tex.j2`'s comment claims they are
+  plain text lines (`label={}` is not actually set). Harmless — parsers strip
+  bullet glyphs — but the comment is misleading.
+* Date ranges use an en-dash (`U+2013`). Some ATS date parsers only handle
+  hyphens. Real but speculative without a specific ATS to test against.
+
+## Extracted text — all nine PDFs
+
+Verbatim `pdfplumber` output, which is roughly what an ATS sees.
+
+### Job 1 — Artificial Intelligence Specialist @ Flinders University
+
+#### 1.resume
+
+```
+Jordan Fitzgerald
+Data Analyst
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+SUMMARY
+Efficient financial reporting and certification workflow design.
+SKILLS
+Python, SQL, financial modelling
+EXPERIENCE
+Senior Analyst 2021 – 2026
+Redgum Analytics, Adelaide
+• Identified efficient financial reporting workflow improvements.
+• Built qualified candidate certification review tooling.
+EDUCATION
+BSc Computer Science 2020
+University of Adelaide
+WORK RIGHTS
+Australian citizen with full working rights.
+```
+
+#### 1.cover_letter
+
+```
+Jordan Fitzgerald
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+01 September 2026
+Hiring Team
+Flinders University
+Re: Artificial Intelligence Specialist
+Dear Hiring Team,
+The reporting and analysis work this role describes is the work I do now.
+Python and SQL have been the core of my day to day work.
+The ad describes a small team owning its own data platform, which is how I like to work.
+I would welcome a conversation.
+Kind regards,
+Jordan Fitzgerald
+```
+
+#### 1.combined
+
+```
+Jordan Fitzgerald
+Data Analyst
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+SUMMARY
+Efficient financial reporting and certification workflow design.
+SKILLS
+Python, SQL, financial modelling
+EXPERIENCE
+Senior Analyst 2021 – 2026
+Redgum Analytics, Adelaide
+• Identified efficient financial reporting workflow improvements.
+• Built qualified candidate certification review tooling.
+EDUCATION
+BSc Computer Science 2020
+University of Adelaide
+WORK RIGHTS
+Australian citizen with full working rights.
+Jordan Fitzgerald
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+01 September 2026
+Hiring Team
+Flinders University
+Re: Artificial Intelligence Specialist
+Dear Hiring Team,
+The reporting and analysis work this role describes is the work I do now.
+Python and SQL have been the core of my day to day work.
+The ad describes a small team owning its own data platform, which is how I like to work.
+I would welcome a conversation.
+Kind regards,
+Jordan Fitzgerald
+```
+
+### Job 2 — Spot Trader @ GreenPoint Energy
+
+#### 2.resume
+
+```
+Jordan Fitzgerald
+Data Analyst
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+SUMMARY
+Efficient financial reporting and certification workflow design.
+SKILLS
+Python, SQL, financial modelling
+EXPERIENCE
+Senior Analyst 2021 – 2026
+Redgum Analytics, Adelaide
+• Identified efficient financial reporting workflow improvements.
+• Built qualified candidate certification review tooling.
+EDUCATION
+BSc Computer Science 2020
+University of Adelaide
+WORK RIGHTS
+Australian citizen with full working rights.
+```
+
+#### 2.cover_letter
+
+```
+Jordan Fitzgerald
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+01 September 2026
+Hiring Team
+GreenPoint Energy
+Re: Spot Trader
+Dear Hiring Team,
+The reporting and analysis work this role describes is the work I do now.
+Python and SQL have been the core of my day to day work.
+The ad describes a small team owning its own data platform, which is how I like to work.
+I would welcome a conversation.
+Kind regards,
+Jordan Fitzgerald
+```
+
+#### 2.combined
+
+```
+Jordan Fitzgerald
+Data Analyst
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+SUMMARY
+Efficient financial reporting and certification workflow design.
+SKILLS
+Python, SQL, financial modelling
+EXPERIENCE
+Senior Analyst 2021 – 2026
+Redgum Analytics, Adelaide
+• Identified efficient financial reporting workflow improvements.
+• Built qualified candidate certification review tooling.
+EDUCATION
+BSc Computer Science 2020
+University of Adelaide
+WORK RIGHTS
+Australian citizen with full working rights.
+Jordan Fitzgerald
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+01 September 2026
+Hiring Team
+GreenPoint Energy
+Re: Spot Trader
+Dear Hiring Team,
+The reporting and analysis work this role describes is the work I do now.
+Python and SQL have been the core of my day to day work.
+The ad describes a small team owning its own data platform, which is how I like to work.
+I would welcome a conversation.
+Kind regards,
+Jordan Fitzgerald
+```
+
+### Job 3 — TSPV Software Engineer @ TechThinking Talent
+
+#### 3.resume
+
+```
+Jordan Fitzgerald
+Data Analyst
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+SUMMARY
+Efficient financial reporting and certification workflow design.
+SKILLS
+Python, SQL, financial modelling
+EXPERIENCE
+Senior Analyst 2021 – 2026
+Redgum Analytics, Adelaide
+• Identified efficient financial reporting workflow improvements.
+• Built qualified candidate certification review tooling.
+EDUCATION
+BSc Computer Science 2020
+University of Adelaide
+WORK RIGHTS
+Australian citizen with full working rights.
+```
+
+#### 3.cover_letter
+
+```
+Jordan Fitzgerald
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+01 September 2026
+Hiring Team
+TechThinking Talent
+Re: TSPV Software Engineer
+Dear Hiring Team,
+The reporting and analysis work this role describes is the work I do now.
+Python and SQL have been the core of my day to day work.
+The ad describes a small team owning its own data platform, which is how I like to work.
+I would welcome a conversation.
+Kind regards,
+Jordan Fitzgerald
+```
+
+#### 3.combined
+
+```
+Jordan Fitzgerald
+Data Analyst
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+SUMMARY
+Efficient financial reporting and certification workflow design.
+SKILLS
+Python, SQL, financial modelling
+EXPERIENCE
+Senior Analyst 2021 – 2026
+Redgum Analytics, Adelaide
+• Identified efficient financial reporting workflow improvements.
+• Built qualified candidate certification review tooling.
+EDUCATION
+BSc Computer Science 2020
+University of Adelaide
+WORK RIGHTS
+Australian citizen with full working rights.
+Jordan Fitzgerald
+jordan.fitzgerald@example.com · +61 412 345 678 · Adelaide SA
+01 September 2026
+Hiring Team
+TechThinking Talent
+Re: TSPV Software Engineer
+Dear Hiring Team,
+The reporting and analysis work this role describes is the work I do now.
+Python and SQL have been the core of my day to day work.
+The ad describes a small team owning its own data platform, which is how I like to work.
+I would welcome a conversation.
+Kind regards,
+Jordan Fitzgerald
+```
+
+## What needs you
+
+1. **Decide the jobspy question** — Python 3.12, wait for a release, or drop it.
+   Until then LinkedIn and Indeed discovery do not run on this machine.
+2. **Power settings.** The machine slept 8h51m in two days, and one sleep
+   exceeded the scheduler's 1-hour misfire grace, which silently skips a run.
+   `Claude.md` assumes it stays awake; it does not.
+3. **Add `uv` and MiKTeX to PATH** (paths above).
+4. **A real profile and an LLM API key** are the two things blocking genuine
+   document generation. Everything else in that pipeline is now proven.
+5. **Chrome + `playwright install chrome`** before any apply-layer work.
+6. **One clean full-suite run.** Individual suites pass (545 collected; the five
+   fixed tests, 20 portability, 72 document tests, 143 in the affected set), but
+   the whole suite has not been run end to end since the changes.
+7. **`.env`** was created from `.env.example` this session and corrected to the
+   Gemini defaults. `ALLOW_LIVE_SUBMIT=false`, untouched.
+
+## Explicitly not done, as instructed
+
+No HAR recorded. No login to any job board. `ALLOW_LIVE_SUBMIT` never touched.

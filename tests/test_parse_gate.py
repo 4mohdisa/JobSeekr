@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 from backend.documents.verify import ParseExpectations, verify_pdf
-from tests.conftest import needs_pdflatex
+from tests.conftest import needs_pdflatex, resolved_pdflatex
 
 pytestmark = needs_pdflatex
 
@@ -44,7 +44,11 @@ def compile_tex(tmp_path: Path, stem: str, source: str) -> Path:
     tex.write_text(source, encoding="utf-8")
     result = subprocess.run(
         [
-            "pdflatex",
+            # The same binary the skip guard checked for. A bare "pdflatex"
+            # would be looked up on PATH, which MiKTeX's per-user install is
+            # not on — so these tests would run (PDFLATEX_PATH is set) and then
+            # every fixture would die on FileNotFoundError.
+            resolved_pdflatex() or "pdflatex",
             "-interaction=nonstopmode",
             "-halt-on-error",
             f"-output-directory={tmp_path}",
@@ -401,3 +405,114 @@ Dear Hiring Team,
     report = verify_pdf(pdf, kind="cover_letter", expect=ParseExpectations(name=NAME, email=EMAIL))
     assert not report.passed
     assert "page_limit" in [c.name for c in report.failures]
+
+
+def test_a_date_sharing_the_contact_line_is_rejected(tmp_path):
+    """The location field must not have the letter's date absorbed into it.
+
+    Found on the first real Windows build. The cover letter template put the
+    date in its own paragraph, but the engine renders with trim_blocks=True,
+    which ate the newline after the block end tag and so consumed the blank
+    line between them. LaTeX joined the two, and every cover letter extracted
+    its contact line as "... Adelaide SA 01 September 2026" — an ATS reading
+    the trailing run of that line as the location gets a date stapled to it.
+    Nothing in the gate noticed; all eight checks passed.
+    """
+    source = (
+        PREAMBLE
+        + r"""
+\begin{document}
+{\large\bfseries """
+        + NAME
+        + r"""}\
+"""
+        + EMAIL
+        + r""" $\cdot$ """
+        + PHONE
+        + r""" $\cdot$ Adelaide SA
+01 September 2026
+
+Dear Hiring Team,
+
+"""
+        + BODY_WORDS
+        + r"""
+\end{document}
+"""
+    )
+    pdf = compile_tex(tmp_path, "gluedate", source)
+    report = verify_pdf(pdf, kind="cover_letter", expect=ParseExpectations(name=NAME, email=EMAIL))
+    assert not report.passed
+    assert "contact_line_uncontaminated" in [c.name for c in report.failures]
+
+
+def test_a_date_on_its_own_line_is_accepted(tmp_path):
+    """The corrected shape must pass, or the check above is just noise."""
+    source = (
+        PREAMBLE
+        + r"""
+\begin{document}
+{\large\bfseries """
+        + NAME
+        + r"""}\
+"""
+        + EMAIL
+        + r""" $\cdot$ """
+        + PHONE
+        + r""" $\cdot$ Adelaide SA
+\par
+01 September 2026
+
+Dear Hiring Team,
+
+"""
+        + BODY_WORDS
+        + r"""
+\end{document}
+"""
+    )
+    pdf = compile_tex(tmp_path, "cleandate", source)
+    report = verify_pdf(pdf, kind="cover_letter", expect=ParseExpectations(name=NAME, email=EMAIL))
+    assert report.passed, report.summary()
+
+
+def test_the_contaminated_line_is_found_even_when_a_clean_one_precedes_it(tmp_path):
+    """combined.pdf carries two contact blocks; the second one still counts.
+
+    This is the case that matters most in practice: combined.pdf is what gets
+    attached wherever a form has a single upload slot, and its first contact
+    line — the resume's — is clean. Checking only the first match let the
+    contaminated cover-letter page through.
+    """
+    source = (
+        PREAMBLE
+        + r"""
+\begin{document}
+{\large\bfseries """
+        + NAME
+        + r"""}\
+"""
+        + EMAIL
+        + r""" $\cdot$ Adelaide SA
+
+"""
+        + BODY_WORDS
+        + r"""
+\newpage
+{\large\bfseries """
+        + NAME
+        + r"""}\
+"""
+        + EMAIL
+        + r""" $\cdot$ Adelaide SA 01 September 2026
+
+"""
+        + BODY_WORDS
+        + r"""
+\end{document}
+"""
+    )
+    pdf = compile_tex(tmp_path, "combineddate", source)
+    report = verify_pdf(pdf, kind="combined", expect=ParseExpectations(name=NAME, email=EMAIL))
+    assert not report.passed
+    assert "contact_line_uncontaminated" in [c.name for c in report.failures]
