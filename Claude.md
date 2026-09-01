@@ -21,8 +21,9 @@ Runs in the user's logged-in desktop session. No cloud, no auth, no deployment.
 
 ## Working style
 
-Never schedule recurring check-ins. If something is waiting on the user, say so
-once and stop. Do not poll.
+Never schedule recurring check-ins, timers, or polling. If something
+waits on the user, say it once and stop.
+Never retry a failing operation more than 3 times.
 
 ---
 
