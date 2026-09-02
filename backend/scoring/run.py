@@ -32,7 +32,7 @@ from backend.models import (
     Score,
 )
 from backend.scoring.filters import apply_hard_filters
-from backend.scoring.rubric import rubric_for
+from backend.scoring.rubric import rubric_for, rubric_hash
 from backend.scoring.stage1 import EmbeddingCache, campaign_profile_summary, rank_jobs
 from backend.scoring.stage2 import score_jobs
 
@@ -133,9 +133,22 @@ def estimate_cost(
 
 
 def needs_scoring(
-    session: Session, job: Job, *, profile_version: int, rubric_version: int
+    session: Session,
+    job: Job,
+    *,
+    profile_version: int,
+    rubric_version: int,
+    rubric_digest: str | None = None,
 ) -> bool:
-    """True when no score exists for this exact triple."""
+    """True when no current score exists for this job.
+
+    ``rubric_digest`` is what makes an edited rubric detectable. rubric_version
+    only changes when a human remembers to bump it, so editing the criteria
+    without bumping produced scores indistinguishable from ones computed before
+    the edit — the shortlist silently reflecting a rubric that no longer exists.
+    A stored score whose hash does not match the current rubric is stale and
+    the job is re-scored.
+    """
     existing = session.exec(
         select(Score).where(
             Score.job_id == job.id,
@@ -143,7 +156,19 @@ def needs_scoring(
             Score.rubric_version == rubric_version,
         )
     ).first()
-    return existing is None
+    if existing is None:
+        return True
+
+    if rubric_digest and existing.rubric_hash and existing.rubric_hash != rubric_digest:
+        log.info(
+            "rescoring_after_rubric_edit",
+            job_id=job.id,
+            stored=existing.rubric_hash,
+            current=rubric_digest,
+            note="the rubric text changed without a version bump",
+        )
+        return True
+    return False
 
 
 def _current_profile(session: Session) -> Profile | None:
@@ -184,6 +209,7 @@ def score_campaign(
         return {"error": "no profile"}
 
     rubric, rubric_version = rubric_for(campaign)
+    rubric_digest = rubric_hash(rubric)
     profile_version = profile.version
 
     candidates = list(
@@ -201,7 +227,11 @@ def score_campaign(
             job
             for job in candidates
             if needs_scoring(
-                session, job, profile_version=profile_version, rubric_version=rubric_version
+                session,
+                job,
+                profile_version=profile_version,
+                rubric_version=rubric_version,
+                rubric_digest=rubric_digest,
             )
         ]
     if limit:
@@ -277,6 +307,7 @@ def score_campaign(
                 job_id=job.id,
                 profile_version=profile_version,
                 rubric_version=rubric_version,
+                rubric_hash=rubric_digest,
                 stage1=stage1,
                 stage2=stage2,
                 final=final,

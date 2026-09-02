@@ -51,6 +51,7 @@ from backend.apply.answers import (
 from backend.apply.draft import ApplicationDraft, FormField
 from backend.ats.formmaps import fingerprint_fields, record_outcome
 from backend.ats.generic import last_map_trusted, map_fields
+from backend.ats.queueing import decide_queueing
 from backend.base import ApplyOutcome, ApplyResult
 from backend import failures
 from backend.config import settings
@@ -513,13 +514,38 @@ def _run_apply(
 
     if getattr(adapter, "detect_redirect", None) and adapter.detect_redirect(page):
         job.apply_type = ApplyType.MANUAL_ONLY
-        job.status = JobStatus.MANUAL_QUEUE
+
+        # Not every off-site listing is worth the user's time. This path used to
+        # queue all of them, which is how the manual queue fills with jobs the
+        # system itself scored as mediocre — and a manual application costs about
+        # ninety seconds of attention, the one resource that actually runs out.
+        #
+        # decide_queueing holds that judgement (a manual job must clear the
+        # auto-apply threshold plus a premium). It was written for exactly this
+        # moment and nothing had ever called it.
+        campaign = session.get(Campaign, job.campaign_id) if job.campaign_id else None
+        score_row = session.exec(
+            select(Score).where(Score.job_id == job.id).order_by(Score.id.desc())  # type: ignore[union-attr]
+        ).first()
+        decision = decide_queueing(
+            campaign, score_row.final if score_row else None, automatable=False
+        )
+
+        job.status = (
+            JobStatus.MANUAL_QUEUE if decision.action == "queue" else JobStatus.SKIPPED
+        )
         session.add(job)
-        log.warning("apply_redirects_offsite", job_id=job.id, platform=adapter.platform)
+        log.warning(
+            "apply_redirects_offsite",
+            job_id=job.id,
+            platform=adapter.platform,
+            decision=decision.action,
+            reason=decision.reason,
+        )
         return ApplyResult(
             ok=False,
             outcome=ApplyOutcome.BLOCKED,
-            failure_reason="listing redirects off-site; queued for manual application",
+            failure_reason=f"listing redirects off-site; {decision.reason}",
         )
 
     # 2-6 — walk the steps, resolving as we go.

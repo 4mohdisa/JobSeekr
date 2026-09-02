@@ -20,7 +20,6 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel, Field
 
 __all__ = [
-    "Applier",
     "ApplyOutcome",
     "ApplyResult",
     "LLMClient",
@@ -161,7 +160,12 @@ class ApplyResult(BaseModel):
     """Question -> answer actually entered, so a wrong answer is traceable."""
 
     attachment_readback: str | None = None
-    """Filename read back off the form after upload. See ``Applier.apply``."""
+    """Filename read back off the form after upload.
+
+    Mandatory before submit — LinkedIn silently reuses a stale upload, so
+    "we called set_input_files" is not evidence the right resume is attached.
+    See ``backend.apply.flow.Adapter``.
+    """
 
     screenshot_pre: Path | None = None
     screenshot_post: Path | None = None
@@ -183,46 +187,6 @@ class ApplyResult(BaseModel):
     a free-text "yes, full working rights" against a strict dropdown resolves to
     nothing and re-parks the job.
     """
-
-
-@runtime_checkable
-class Applier(Protocol):
-    """Drives one platform's application form.
-
-    Two rules bind every implementation, and neither has an exception:
-
-    1. Call ``guardrails.check_can_submit()`` immediately before submitting.
-       Not at the top of the method — state (caps, the STOP file, the time
-       window) can change while a long form is being filled.
-    2. Read the attachment filename back off the page after uploading and put
-       it in ``ApplyResult.attachment_readback``. LinkedIn silently reuses a
-       stale upload, so "we called set_input_files" is not evidence that the
-       right resume is attached.
-    """
-
-    platform: str
-    """Stable platform identifier, e.g. "linkedin"."""
-
-    def can_handle(self, job: Any) -> bool:
-        """Whether this applier owns ``job`` (a ``backend.models`` Job row)."""
-        ...
-
-    def apply(
-        self,
-        page: Any,
-        job: Any,
-        documents: Any,
-        campaign: Any,
-    ) -> ApplyResult:
-        """Fill and finish one application.
-
-        Args:
-            page: The live Playwright page, already on an authenticated session.
-            job: The Job row being applied to.
-            documents: The built, parse-gated documents to attach.
-            campaign: The Campaign row supplying answers, templates and caps.
-        """
-        ...
 
 
 @runtime_checkable

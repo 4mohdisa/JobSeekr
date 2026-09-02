@@ -26,7 +26,12 @@ from backend import preferences
 from backend.apply import guardrails
 from backend.apply.flow import RestrictionDetected, run_apply
 from backend.apply.pacing import sleep_between_submits
-from backend.apply.session import SessionExpired, is_logged_in, launch_context
+from backend.apply.session import (
+    SessionExpired,
+    ensure_logged_in,
+    is_logged_in,
+    launch_context,
+)
 from backend.base import ApplyOutcome
 from backend.boards import applier_boards
 from backend.config import settings
@@ -237,6 +242,24 @@ def run_apply_pass(
                     page = context.pages[0] if context.pages else context.new_page()
             return page
 
+        # Verify the session ONCE, before any work, rather than discovering it
+        # is dead after building documents for a job that cannot be submitted.
+        # The guardrail checks authentication again at submit time — this is the
+        # nicer failure mode, not a replacement for it.
+        checked_sessions: set[str] = set()
+
+        def verify_session(platform_name: str) -> None:
+            from backend.apply.session import PLATFORMS
+
+            # Only platforms that HAVE a session. An employer ATS has no login
+            # at all — Greenhouse serves its form to anyone — so "not signed in"
+            # there is the normal state, and checking it would halt the pass on
+            # every external application.
+            if platform_name in checked_sessions or platform_name not in PLATFORMS:
+                return
+            checked_sessions.add(platform_name)
+            ensure_logged_in(start_page(), platform_name)
+
         try:
             for index, (job, campaign, score) in enumerate(jobs):
                 counts["considered"] += 1
@@ -246,6 +269,12 @@ def run_apply_pass(
                     continue
 
                 applier = next((a for a in appliers if a.can_handle(job)), None)
+
+                if applier is not None:
+                    # Raises SessionExpired, which the pass already handles by
+                    # halting — a dead session means every remaining job would
+                    # fail the same way.
+                    verify_session(applier.platform)
 
                 if applier is None and job.apply_type in {
                     ApplyType.EXTERNAL,

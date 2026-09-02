@@ -28,7 +28,6 @@ __all__ = [
     "BoardSession",
     "applier_boards",
     "board",
-    "board_keys",
     "is_platform_domain",
     "platform_domains",
     "session_boards",
@@ -260,10 +259,6 @@ _BY_KEY: dict[str, Board] = {entry.key: entry for entry in BOARDS}
 
 def board(key: str) -> Board | None:
     return _BY_KEY.get(key)
-
-
-def board_keys() -> tuple[str, ...]:
-    return tuple(_BY_KEY)
 
 
 def source_boards() -> tuple[Board, ...]:
