@@ -63,6 +63,15 @@ class ApplicationDraft:
     screenshot_post: str | None = None
 
     form_fingerprint: str | None = None
+
+    form_map_trusted: bool = True
+    """Whether this form's shape has graduated to being filled unsupervised.
+
+    True by default so a platform with a dedicated adapter — Seek, LinkedIn,
+    a known ATS — is unaffected: its fields are not learned by a model and there
+    is nothing to graduate. Only a form mapped by ``ats.generic`` sets this
+    False, and only until three clean applications on the same shape.
+    """
     """The form-map fingerprint this draft's fields hashed to, when one was used.
 
     Carried so the outcome can be reported back to the cache: a map only earns

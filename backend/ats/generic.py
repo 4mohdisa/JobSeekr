@@ -41,10 +41,18 @@ from backend.models import FormMapTier
 
 log = get_logger(__name__)
 
+#: Fingerprint -> whether that map has graduated, from the most recent
+#: ``map_fields`` call. A module-level handoff rather than a changed return type
+#: because ``map_fields`` returns a plain list that four call sites unpack, and
+#: widening it would touch all of them to carry one boolean.
+last_map_trusted: dict[str, bool] = {}
+
+
 __all__ = [
     "CaptchaDetected",
     "detect_captcha",
     "fields_from_accessibility",
+    "last_map_trusted",
     "map_fields",
 ]
 
@@ -335,8 +343,15 @@ def map_fields(
         return []
 
     fingerprint = fingerprint_fields(fields)
-    cached, _trusted = load_map(session, fingerprint, platform=platform)
+    cached, trusted = load_map(session, fingerprint, platform=platform)
     todo = relearn_targets(cached, fields)
+
+    # The trust verdict travels with the result rather than being discarded.
+    # Without it the flow cannot tell a form shape that has been proven three
+    # times from one a model guessed at thirty seconds ago, and it would submit
+    # both. record_outcome already counted the successes; nothing read them.
+    last_map_trusted.clear()
+    last_map_trusted[fingerprint] = bool(trusted)
 
     if cached is not None and not todo:
         known = cached.by_identifier()

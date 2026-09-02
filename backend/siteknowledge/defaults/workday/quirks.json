@@ -1,0 +1,12 @@
+{
+  "platform": "workday",
+  "quirks": [
+    {
+      "key": "platform_note",
+      "learned_at": "2026-09-03",
+      "severity": "info",
+      "source": "ATS priority order",
+      "summary": "LAST in priority: Workday needs an account per company, so most listings cannot be applied to unattended at all."
+    }
+  ]
+}

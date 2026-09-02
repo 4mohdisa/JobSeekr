@@ -16,7 +16,7 @@ from sqlmodel import Session, SQLModel, create_engine, select
 
 from backend.apply.draft import FormField
 from backend.ats import generic
-from backend.ats.adapters import SELECTORS, GenericAtsApplier, build_ats_appliers
+from backend.ats.adapters import GenericAtsApplier, build_ats_appliers
 from backend.ats.detect import ATS_REGISTRY, detect, detect_from_html, detect_from_url
 from backend.ats.formmaps import (
     TRUST_THRESHOLD,
@@ -542,9 +542,40 @@ def test_an_adapter_only_claims_its_own_platform():
     assert lever.can_handle(job) is False
 
 
-def test_confirmation_selectors_have_more_than_one_candidate():
-    for platform, selectors in SELECTORS.items():
-        assert len(selectors["confirmation"]) >= 2, f"{platform} has one brittle selector"
+def test_confirmation_has_more_than_one_strategy_on_every_platform():
+    """One brittle selector is how an adapter silently stops confirming."""
+    for applier in build_ats_appliers():
+        element = applier.knowledge.elements.get("confirmation")
+        assert element is not None, f"{applier.platform} has no confirmation element"
+        assert len(element.strategies) >= 2, (
+            f"{applier.platform} confirmation has one brittle strategy"
+        )
+
+
+def test_every_ats_platform_ships_site_knowledge():
+    """An adapter with no strategies fails on its first resolve, not later."""
+    for applier in build_ats_appliers():
+        assert applier.knowledge.elements, f"{applier.platform} ships no elements"
+        assert "submit_button" in applier.knowledge.elements
+
+
+def test_the_australian_priority_order_is_preserved():
+    """JobAdder first, Workday last — the brief's order, pinned.
+
+    Workday last because it needs an account per company, so most of its
+    listings cannot be applied to unattended at all.
+    """
+    order = [applier.platform for applier in build_ats_appliers()]
+    assert order[0] == "jobadder"
+    assert order.index("pageup") < order.index("smartrecruiters")
+    assert order.index("smartrecruiters") < order.index("greenhouse")
+    assert order[-1] == "workday", order
+
+
+def test_the_form_builders_are_covered():
+    """Many "bespoke" careers pages are one of these embedded in an iframe."""
+    platforms = {applier.platform for applier in build_ats_appliers()}
+    assert {"google_forms", "typeform", "jotform"} <= platforms
 
 
 # =========================================================================
