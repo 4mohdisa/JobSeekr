@@ -26,7 +26,24 @@ __all__ = [
     "LLMClient",
     "RawJob",
     "Source",
+    "SourceUnavailable",
 ]
+
+
+class SourceUnavailable(Exception):
+    """A source could not be reached at all — not "it found nothing".
+
+    Sources are best-effort by design: a board that answers some queries and
+    fails others returns what it got, because partial results beat an
+    exception. That rule has one edge it must not swallow. When *every* request
+    a source made failed and it collected nothing, "best effort" produced an
+    empty list indistinguishable from a genuinely quiet day — and the run then
+    recorded success with zero ads and zero errors, which is how a total outage
+    came to look exactly like a Sunday afternoon.
+
+    Raise this only for that case: nothing fetched, and nothing that was tried
+    worked. Anything that returned rows, even one page of them, is a success.
+    """
 
 
 class RawJob(BaseModel):
@@ -139,7 +156,22 @@ class ApplyResult(BaseModel):
     screenshot_post: Path | None = None
 
     needs_answer: str | None = None
-    """The unanswerable question, when ``outcome`` is ABSTAINED."""
+    """The unanswerable question, when ``outcome`` is ABSTAINED.
+
+    One question, not all of them, even when the form abstained on several. The
+    reply channel answers one question per job (``/answer <job_id> <text>``), so
+    asking three at once would collect one answer and silently discard two. The
+    job is re-queued after each answer and re-parks on the next unresolved
+    question, which walks the whole form one verified answer at a time.
+    """
+
+    needs_answer_choices: list[str] = Field(default_factory=list)
+    """The form's own options for ``needs_answer``, when it was a closed list.
+
+    Sent with the question so the reply matches a value the form will accept —
+    a free-text "yes, full working rights" against a strict dropdown resolves to
+    nothing and re-parks the job.
+    """
 
 
 @runtime_checkable

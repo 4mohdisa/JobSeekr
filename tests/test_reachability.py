@@ -44,20 +44,9 @@ KNOWN_UNREACHABLE: dict[str, str] = {
     "board": "boards.py lookup helper. Nothing resolves a board by key.",
     "board_keys": "boards.py lookup helper. Nothing enumerates board keys.",
     # -- built, never reached ----------------------------------------------
-    "detect": (
-        "ats/detect.py full detection (URL then HTML). Adapters only call "
-        "detect_from_url, so a white-labelled ATS on the employer's own domain "
-        "— PageUp in Australia, the case detect_from_html exists for — is "
-        "never recognised. Needs a page, so it belongs in the adapter's open()."
-    ),
     "decide_queueing": (
         "ats/queueing.py. The manual-queue decision is never made, so a job "
         "that should be queued for the user to finish by hand is not."
-    ),
-    "escalate_question": (
-        "integrations/telegram.py. Claude.md's answer-bank loop is 'abstain, "
-        "park, ask via Telegram, save the answer, retry'. The asking half is "
-        "never called, so an abstention parks the job and stops there."
     ),
     "ensure_logged_in": (
         "apply/session.py. Nothing verifies the browser session before a run; "

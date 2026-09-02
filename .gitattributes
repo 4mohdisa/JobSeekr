@@ -1,0 +1,29 @@
+# The repo is worked on from both Windows (core.autocrlf=true) and Unix.
+# Without this, every file a Windows checkout touches comes back as a
+# whole-file diff. Normalise to LF in the repository, always.
+* text=auto eol=lf
+
+# Windows-only entry points genuinely need CRLF on disk.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary — never touch, never diff as text.
+*.pdf binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+*.har binary
+
+# Generated — keep them out of review diffs.
+uv.lock linguist-generated=true
+frontend/package-lock.json linguist-generated=true

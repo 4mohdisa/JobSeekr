@@ -370,6 +370,18 @@ class Job(SQLModel, table=True):
         default=JobStatus.DISCOVERED, sa_column=_enum_column(JobStatus)
     )
 
+    needs_answer_question: str | None = None
+    """The screening question this job is parked on, verbatim.
+
+    Set when the status becomes ``NEEDS_ANSWER``, cleared on re-queue. It has to
+    be persisted rather than held in memory because the two halves of the loop
+    are different processes: the apply pass parks the job and asks, the Telegram
+    bot receives the reply minutes or hours later. Without it ``/answer`` cannot
+    tell which question it is answering, and with several jobs parked at once it
+    would file the answer against the wrong question — which then resolves
+    nothing and re-parks the job on the next pass.
+    """
+
 
 class Document(SQLModel, table=True):
     """A built PDF on disk.

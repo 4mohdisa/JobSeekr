@@ -107,16 +107,34 @@ def escalate_question(job_id: int, question: str, *, choices: list[str] | None =
     )
 
 
-def save_answer(question: str, answer: str, *, campaign_id: int | None = None) -> int:
+def save_answer(
+    question: str,
+    answer: str,
+    *,
+    campaign_id: int | None = None,
+    row_id: int | None = None,
+) -> int:
     """Store an answer and return its row id.
 
     Updates a blank row for the same question rather than adding a duplicate —
     the seeded questions exist precisely to be filled in.
+
+    ``row_id`` is the row the abstention actually matched, and it is the whole
+    reason the loop terminates. The escalated question is the *form's* wording;
+    a seeded row's ``question_pattern`` is a regex. Matching those two by string
+    equality never succeeds, so without this the reply is filed as a new row
+    while the matched row stays blank, and on the retry the two tie in the
+    candidate pool and resolve to AMBIGUOUS — the job re-parks on a question it
+    has just been told the answer to, forever.
     """
     with session_scope() as session:
-        existing = session.exec(
-            select(AnswerBank).where(AnswerBank.question_pattern == question)
-        ).first()
+        existing = None
+        if row_id is not None:
+            existing = session.get(AnswerBank, row_id)
+        if existing is None:
+            existing = session.exec(
+                select(AnswerBank).where(AnswerBank.question_pattern == question)
+            ).first()
 
         if existing is not None:
             existing.answer_value = answer
@@ -149,6 +167,11 @@ def requeue_job(job_id: int) -> bool:
         if job is None or job.status != JobStatus.NEEDS_ANSWER:
             return False
         job.status = JobStatus.DOCUMENTS_READY
+        # Cleared with the status it belongs to. A stale question left on a
+        # re-queued job would be answered a second time by the next /answer,
+        # overwriting a good answer-bank row with a reply meant for a different
+        # question.
+        job.needs_answer_question = None
         session.add(job)
         log.info("job_requeued", job_id=job_id)
         return True
@@ -308,6 +331,20 @@ def _cmd_status(_: str) -> str:
     )
 
 
+def _matched_row_id(session: Any, question: str, campaign_id: int | None) -> int | None:
+    """The answer-bank row ``question`` matched but could not be answered from.
+
+    None when nothing matched — a question the bank has never seen — in which
+    case the answer becomes a new row.
+    """
+    from backend.apply.answers import Abstain, load_answers, resolve_answer
+
+    outcome = resolve_answer(
+        question, campaign_id, answers=load_answers(session, campaign_id)
+    )
+    return outcome.source_row_id if isinstance(outcome, Abstain) else None
+
+
 def _cmd_answer(argument: str) -> str:
     """/answer <job_id> <answer> — save it and re-queue the job."""
     parts = argument.strip().split(maxsplit=1)
@@ -320,21 +357,38 @@ def _cmd_answer(argument: str) -> str:
         return "Usage: /answer <job_id> <your answer>"
 
     with session_scope() as session:
-        if session.get(Job, job_id) is None:
+        job = session.get(Job, job_id)
+        if job is None:
             return f"No job {job_id}."
 
-        # Which question was this? The escalation parked the job because an
-        # answer-bank row matched but was blank, so the oldest blank row is the
-        # one being answered. If somehow none is blank, store the answer
-        # against the job rather than discarding what the user typed.
-        blank = session.exec(
-            select(AnswerBank)
-            .where(AnswerBank.answer_value == "")
-            .order_by(AnswerBank.updated_at)  # type: ignore[arg-type]
-        ).first()
-        question = blank.question_pattern if blank else f"question for job {job_id}"
+        # Which question was this? The one the escalation recorded on the job.
+        # This used to guess — the oldest blank answer-bank row — which is only
+        # ever right when exactly one job is parked and its question already had
+        # a row. With two jobs parked, or a question the bank has never seen, it
+        # filed the answer against someone else's question: the real question
+        # stayed unresolved, the job re-parked on the next pass, and a verified
+        # answer elsewhere in the bank was overwritten. Fall back to the old
+        # guess only for a job parked before this field existed.
+        question = job.needs_answer_question
+        if not question:
+            blank = session.exec(
+                select(AnswerBank)
+                .where(AnswerBank.answer_value == "")
+                .order_by(AnswerBank.updated_at)  # type: ignore[arg-type]
+            ).first()
+            question = blank.question_pattern if blank else f"question for job {job_id}"
+            row_id = blank.id if blank else None
+        else:
+            # Ask the resolver which row this question matched, rather than
+            # re-implementing the match here. It abstained on this exact
+            # question during the apply pass; if it matched a blank row, that is
+            # the row the answer belongs in.
+            row_id = _matched_row_id(session, question, job.campaign_id)
 
-    save_answer(question, parts[1])
+    # Deliberately global (campaign_id stays None). A screening answer over
+    # Telegram is a fact about the user, not about one campaign, and scoping it
+    # would make every other campaign ask the same question again.
+    save_answer(question, parts[1], row_id=row_id)
     requeued = requeue_job(job_id)
     return (
         f"Saved: _{question}_ → *{parts[1]}*\n"

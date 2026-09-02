@@ -21,11 +21,14 @@ inspecting the installed package (1.1.82) rather than assuming:
 
 from __future__ import annotations
 
+import logging
 import math
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 from urllib.parse import urlparse
 
-from backend.base import RawJob
+from backend.base import RawJob, SourceUnavailable
 from backend.config import settings
 from backend.logging_setup import get_logger
 
@@ -184,6 +187,52 @@ def dataframe_to_rawjobs(
     return out
 
 
+@contextmanager
+def _watch_jobspy_errors() -> Iterator[list[str]]:
+    """Collect the errors jobspy logs instead of raising.
+
+    Its scrapers do not agree with each other about failure. Indeed lets a
+    transport error propagate, so the caller sees it. **LinkedIn catches its
+    own, logs it, and returns an empty frame** — so a blocked LinkedIn is
+    indistinguishable from a LinkedIn with no matching ads, one layer below
+    anywhere this module can reach. Its log is the only signal there is, and an
+    outage reported as a quiet day is precisely what this is here to stop.
+
+    Reading another library's log is not lovely, and it is scoped as tightly as
+    possible: only for the duration of the call, and only for records jobspy
+    itself emitted at ERROR. If jobspy ever starts raising from LinkedIn, the
+    ``except`` around the call catches it first and this finds nothing — the two
+    paths agree rather than double-count.
+
+    Hooking the record *factory* rather than adding a handler is deliberate.
+    jobspy's loggers set ``propagate = False``, so a root handler never sees
+    them, and attaching to them by name only works if they already exist — true
+    after ``import jobspy``, but an ordering dependency that would fail silently
+    the day it stopped holding, restoring the very blind spot this closes. Every
+    record passes through the factory whichever logger makes it and whenever it
+    is created, including from jobspy's own worker threads.
+    """
+    captured: list[str] = []
+    previous = logging.getLogRecordFactory()
+
+    def factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
+        record = previous(*args, **kwargs)
+        # Matched case-insensitively: jobspy is inconsistent with itself,
+        # logging under both "JobSpy:LinkedIn" and "JobSpy:Linkedin".
+        if record.levelno >= logging.ERROR and record.name.lower().startswith("jobspy"):
+            try:
+                captured.append(record.getMessage()[:300])
+            except Exception:  # noqa: BLE001 - a bad log line is not our failure
+                captured.append(str(record.msg)[:300])
+        return record
+
+    logging.setLogRecordFactory(factory)
+    try:
+        yield captured
+    finally:
+        logging.setLogRecordFactory(previous)
+
+
 class JobSpySource:
     """Implements :class:`backend.base.Source` for one jobspy-backed board."""
 
@@ -212,6 +261,8 @@ class JobSpySource:
 
         wanted = limit or settings.seek_page_size * settings.discovery_max_pages
         collected: dict[str, RawJob] = {}
+        attempts = 0
+        failures = 0
 
         for term in terms or [""]:
             for location in locations or [""]:
@@ -233,9 +284,12 @@ class JobSpySource:
                     if self.easy_apply_only:
                         kwargs["easy_apply"] = True
 
+                attempts += 1
                 try:
-                    frame = scrape_jobs(**kwargs)
+                    with _watch_jobspy_errors() as reported:
+                        frame = scrape_jobs(**kwargs)
                 except Exception as exc:
+                    failures += 1
                     log.exception(
                         "jobspy_search_failed",
                         site=self.site,
@@ -245,10 +299,34 @@ class JobSpySource:
                     )
                     continue
 
-                for job in dataframe_to_rawjobs(
-                    frame, site=self.site, easy_apply_only=self.easy_apply_only
-                ):
+                rows = list(
+                    dataframe_to_rawjobs(
+                        frame, site=self.site, easy_apply_only=self.easy_apply_only
+                    )
+                )
+                # Nothing back *and* the scraper logged an error: it failed and
+                # returned empty rather than raising. Ads plus an error is a
+                # partial result and stays a success.
+                if not rows and reported:
+                    failures += 1
+                    log.error(
+                        "jobspy_search_failed_silently",
+                        site=self.site,
+                        term=term,
+                        location=location,
+                        errors=reported[:2],
+                    )
+                    continue
+
+                for job in rows:
                     collected.setdefault(job.source_job_id, job)
+
+        # Every query failed and nothing came back. Returning [] here is what
+        # let a dead board report a quiet day; see SourceUnavailable.
+        if attempts and failures == attempts and not collected:
+            raise SourceUnavailable(
+                f"{self.site}: all {attempts} search(es) failed and nothing was fetched"
+            )
 
         results = list(collected.values())
         if limit:

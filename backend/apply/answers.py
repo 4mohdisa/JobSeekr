@@ -114,6 +114,17 @@ class Abstain:
     detail: str = ""
     candidates: list[str] = field(default_factory=list)
 
+    source_row_id: int | None = None
+    """The bank row that matched but could not answer (BLANK_ANSWER, INVALID_CHOICE).
+
+    Carried so the escalation can fill *that* row when the user replies. Writing
+    the reply under the form's own wording instead would leave the matched row
+    blank and add a second row saying something different about the same
+    question — and the two then tie in the candidate pool and abstain as
+    AMBIGUOUS, so the job re-parks forever on a question it has been told the
+    answer to. None when nothing matched at all; then there is no row to fill.
+    """
+
 
 Resolution = Answer | Abstain
 
@@ -514,6 +525,7 @@ def _finalise(
                 f"answer bank row {row.id} matches but has no answer yet "
                 f"({row.question_pattern!r})"
             ),
+            source_row_id=row.id,
         )
 
     answer = _make_answer(row, question, match_type, confidence)
@@ -525,6 +537,7 @@ def _finalise(
                 reason=AbstainReason.INVALID_CHOICE,
                 detail=f"stored answer {answer.value!r} does not map onto {list(choices)}",
                 candidates=list(choices),
+                source_row_id=row.id,
             )
         answer = Answer(
             value=mapped,
