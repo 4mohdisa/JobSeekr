@@ -41,7 +41,6 @@ KNOWN_UNREACHABLE: dict[str, str] = {
         "scoring/rubric.py. Nothing stamps a rubric hash onto a Score, so a "
         "rubric edit is not currently detectable from a stored score."
     ),
-    "board": "boards.py lookup helper. Nothing resolves a board by key.",
     "board_keys": "boards.py lookup helper. Nothing enumerates board keys.",
     # -- built, never reached ----------------------------------------------
     "decide_queueing": (

@@ -81,8 +81,8 @@ class Board:
     specific job, because job postings expire."""
 
     canary_selectors: tuple[str, ...] = ()
-    """Keys into the adapter's ``SELECTORS`` whose disappearance means the
-    adapter is about to fail."""
+    """Site-knowledge element keys whose disappearance means the adapter is
+    about to fail."""
 
     make_source: Callable[[], Any] | None = None
     """Builds the discovery Source. Absent when the board is not discovered."""
@@ -136,16 +136,26 @@ def _linkedin_applier() -> Any:
     return LinkedInApplier()
 
 
-def _seek_selectors() -> dict[str, tuple[str, ...]]:
-    from backend.apply.seek import SELECTORS
+def _knowledge_selectors(platform: str) -> Callable[[], dict[str, tuple[str, ...]]]:
+    """Expose a platform's strategies in the shape the canary watches.
 
-    return SELECTORS
+    The canary asks "are the elements the adapter depends on still on the
+    page?", which is every strategy for a key, flattened. Reading it from site
+    knowledge rather than re-listing selectors is the same rule as before —
+    re-listing is how the canary came to watch selectors an adapter had already
+    renamed — except the source of truth is now a JSON file the user can edit.
+    """
 
+    def build() -> dict[str, tuple[str, ...]]:
+        from backend.siteknowledge import load
 
-def _linkedin_selectors() -> dict[str, tuple[str, ...]]:
-    from backend.apply.linkedin import SELECTORS
+        knowledge = load(platform)
+        return {
+            key: tuple(strategy.selector for strategy in element.ordered())
+            for key, element in knowledge.elements.items()
+        }
 
-    return SELECTORS
+    return build
 
 
 # --------------------------------------------------------------------------
@@ -172,7 +182,7 @@ BOARDS: tuple[Board, ...] = (
         canary_selectors=("apply_button", "submit_button", "confirmation"),
         make_source=_seek_source,
         make_applier=_seek_applier,
-        selectors=_seek_selectors,
+        selectors=_knowledge_selectors("seek"),
         har_variants=(
             (
                 "quick_apply",
@@ -209,7 +219,7 @@ BOARDS: tuple[Board, ...] = (
         canary_selectors=("easy_apply_button", "modal", "submit_button", "confirmation"),
         make_source=_jobspy_source("linkedin", easy_apply_only=True),
         make_applier=_linkedin_applier,
-        selectors=_linkedin_selectors,
+        selectors=_knowledge_selectors("linkedin"),
         har_variants=(
             (
                 "two_step",

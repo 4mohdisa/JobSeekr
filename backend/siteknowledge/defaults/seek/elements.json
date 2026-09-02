@@ -1,0 +1,497 @@
+{
+  "elements": {
+    "apply_button": {
+      "fail_count": 0,
+      "key": "apply_button",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Opens the apply flow from the listing page.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "job-detail-apply"
+        },
+        {
+          "attr": "data-testid",
+          "name": "Quick apply",
+          "note": "",
+          "role": "button",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "Quick apply",
+          "note": "",
+          "role": "link",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "label",
+          "value": "Quick apply"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "Quick apply"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "a[data-automation='job-detail-apply']"
+        }
+      ],
+      "success_count": 0
+    },
+    "attachment_readback": {
+      "fail_count": 0,
+      "key": "attachment_readback",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "MANDATORY before submit \u2014 hard rule 4. Reads what the form says is attached.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "resume-file-name"
+        },
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "testid",
+          "value": "uploaded-file-name"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": ".file-name"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "[class*='fileName']"
+        }
+      ],
+      "success_count": 0
+    },
+    "confirmation": {
+      "fail_count": 0,
+      "key": "confirmation",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "A returned click is not evidence a submission landed. This is.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "application-success"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "application*sent"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "application*submitted"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "you have applied"
+        }
+      ],
+      "success_count": 0
+    },
+    "continue_button": {
+      "fail_count": 0,
+      "key": "continue_button",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Advances a step.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "continue-button"
+        },
+        {
+          "attr": "data-testid",
+          "name": "Continue",
+          "note": "",
+          "role": "button",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "Next",
+          "note": "",
+          "role": "button",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "Continue"
+        }
+      ],
+      "success_count": 0
+    },
+    "cover_letter_file_input": {
+      "fail_count": 0,
+      "key": "cover_letter_file_input",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "",
+      "required": false,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "coverLetterFileInput"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "input[type='file'][name*='cover' i]"
+        }
+      ],
+      "success_count": 0
+    },
+    "cover_letter_textarea": {
+      "fail_count": 0,
+      "key": "cover_letter_textarea",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Seek's cover letter is an editable textarea, so the generated text is written rather than uploaded \u2014 it renders in Seek's own UI, which is what the recruiter reads first.",
+      "required": false,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "coverLetterTextArea"
+        },
+        {
+          "attr": "data-testid",
+          "name": "*cover letter*",
+          "note": "",
+          "role": "textbox",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "label",
+          "value": "cover letter"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "textarea[name='coverLetter']"
+        }
+      ],
+      "success_count": 0
+    },
+    "cover_letter_write_option": {
+      "fail_count": 0,
+      "key": "cover_letter_write_option",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "",
+      "required": false,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "coverLetterWrite"
+        },
+        {
+          "attr": "data-testid",
+          "name": "Write a cover letter",
+          "note": "",
+          "role": "radio",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "Write a cover letter"
+        }
+      ],
+      "success_count": 0
+    },
+    "form_fields": {
+      "fail_count": 0,
+      "key": "form_fields",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Step container. Low confidence: containers are reshuffled often.",
+      "required": false,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "questionnaire"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "group",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "form [role='group']"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "form .question"
+        }
+      ],
+      "success_count": 0
+    },
+    "resume_existing_radio": {
+      "fail_count": 0,
+      "key": "resume_existing_radio",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Recorded so it can be recognised and avoided, never selected.",
+      "required": false,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "resume-select-radio"
+        },
+        {
+          "attr": "data-testid",
+          "name": "Use an existing resume",
+          "note": "",
+          "role": "radio",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "input[type='radio'][value='existing']"
+        }
+      ],
+      "success_count": 0
+    },
+    "resume_file_input": {
+      "fail_count": 0,
+      "key": "resume_file_input",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Hidden behind a styled button; resolve with visible=False.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "resume-file-input"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "input[type='file'][accept*='pdf']"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "input[type='file']"
+        }
+      ],
+      "success_count": 0
+    },
+    "resume_upload_radio": {
+      "fail_count": 0,
+      "key": "resume_upload_radio",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Upload is chosen deliberately over 'use an existing resume': the whole document pipeline exists to tailor this resume and prove it parses, and picking a stored file would discard all of it.",
+      "required": false,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "resume-upload-radio"
+        },
+        {
+          "attr": "data-testid",
+          "name": "Upload a new resume",
+          "note": "",
+          "role": "radio",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "Upload a new resume"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "input[type='radio'][value='upload']"
+        }
+      ],
+      "success_count": 0
+    },
+    "submit_button": {
+      "fail_count": 0,
+      "key": "submit_button",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Presence of this is how the flow knows it is on the last step.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-automation",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "review-submit-application"
+        },
+        {
+          "attr": "data-testid",
+          "name": "Submit application",
+          "note": "",
+          "role": "button",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "Submit application"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "button[type='submit']"
+        }
+      ],
+      "success_count": 0
+    }
+  },
+  "platform": "seek"
+}

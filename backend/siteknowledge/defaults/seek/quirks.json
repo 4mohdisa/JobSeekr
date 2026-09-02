@@ -1,0 +1,37 @@
+{
+  "platform": "seek",
+  "quirks": [
+    {
+      "detail": "Write the generated text into the textarea where it exists. It renders in Seek's own UI, which is what a recruiter reads first. Only fall back to a file upload when no textarea is present.",
+      "key": "inline_cover_letter",
+      "learned_at": "2026-09-03",
+      "severity": "info",
+      "source": "adapter design note",
+      "summary": "The cover letter is an editable textarea, not a second upload."
+    },
+    {
+      "detail": "The flow's step loop is what walks them; the adapter only describes the step it is on. A one-step assumption would miss every screening question.",
+      "key": "screening_questions_own_step",
+      "learned_at": "2026-09-03",
+      "severity": "info",
+      "source": "adapter design note",
+      "summary": "Screening questions sit on their own step, after the documents step."
+    },
+    {
+      "detail": "That single slot is exactly why combined.pdf is built.",
+      "key": "single_upload_slot",
+      "learned_at": "2026-09-03",
+      "severity": "info",
+      "source": "adapter design note",
+      "summary": "Usually one file slot, because the cover letter is inline."
+    },
+    {
+      "detail": "detect_redirect fires when the host leaves Seek. That path is the majority of real volume, not an edge case.",
+      "key": "redirects_offsite",
+      "learned_at": "2026-09-03",
+      "severity": "warning",
+      "source": "adapter design note",
+      "summary": "Most Seek applications forward into an employer ATS."
+    }
+  ]
+}

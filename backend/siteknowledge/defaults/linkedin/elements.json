@@ -1,0 +1,489 @@
+{
+  "elements": {
+    "confirmation": {
+      "fail_count": 0,
+      "key": "confirmation",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "A returned click is not evidence.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "your application was sent"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "application sent"
+        },
+        {
+          "attr": "data-testid",
+          "name": "Your application was sent",
+          "note": "",
+          "role": "heading",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "[data-test-modal] :text('Done')"
+        }
+      ],
+      "success_count": 0
+    },
+    "cover_letter_file_input": {
+      "fail_count": 0,
+      "key": "cover_letter_file_input",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "",
+      "required": false,
+      "strategies": [
+        {
+          "attr": "data-test-id",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "cover-letter-upload-input"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "input[type='file'][name*='cover' i]"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "input[type='file'][id*='cover' i]"
+        }
+      ],
+      "success_count": 0
+    },
+    "easy_apply_button": {
+      "fail_count": 0,
+      "key": "easy_apply_button",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Class has historically been stable, but it is still a class \u2014 kept last.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-test-id",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "jobs-apply-button"
+        },
+        {
+          "attr": "data-testid",
+          "name": "Easy Apply",
+          "note": "",
+          "role": "button",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "label",
+          "value": "Easy Apply"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "Easy Apply"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "button.jobs-apply-button"
+        }
+      ],
+      "success_count": 0
+    },
+    "file_input": {
+      "fail_count": 0,
+      "key": "file_input",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Generic upload target. Hidden \u2014 resolve with visible=False.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "input[type='file']"
+        }
+      ],
+      "success_count": 0
+    },
+    "library_delete_button": {
+      "fail_count": 0,
+      "key": "library_delete_button",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "",
+      "required": false,
+      "strategies": [
+        {
+          "attr": "data-testid",
+          "name": "Delete",
+          "note": "",
+          "role": "button",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "label",
+          "value": "Delete"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "label",
+          "value": "Remove"
+        }
+      ],
+      "success_count": 0
+    },
+    "library_document_card": {
+      "fail_count": 0,
+      "key": "library_document_card",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Library UI changes often; low confidence throughout.",
+      "required": false,
+      "strategies": [
+        {
+          "attr": "data-test-id",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "document-upload-card"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": ".jobs-document-upload-redesign-card"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "[class*='document-upload'] li"
+        }
+      ],
+      "success_count": 0
+    },
+    "modal": {
+      "fail_count": 0,
+      "key": "modal",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Everything in the flow is scoped to this.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-test-modal",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "modal"
+        },
+        {
+          "attr": "data-testid",
+          "name": "*Easy Apply*",
+          "note": "",
+          "role": "dialog",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "dialog",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "div.jobs-easy-apply-modal"
+        }
+      ],
+      "success_count": 0
+    },
+    "next_button": {
+      "fail_count": 0,
+      "key": "next_button",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Step count is never hardcoded \u2014 the modal runs two to six steps.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-testid",
+          "name": "Continue to next step",
+          "note": "",
+          "role": "button",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "label",
+          "value": "Continue to next step"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "label",
+          "value": "Next"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "Next"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "footer button:has-text('Next')"
+        }
+      ],
+      "success_count": 0
+    },
+    "resume_file_input": {
+      "fail_count": 0,
+      "key": "resume_file_input",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "",
+      "required": false,
+      "strategies": [
+        {
+          "attr": "data-test-id",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "resume-upload-input"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "input[type='file'][name*='resume' i]"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "input[type='file'][id*='resume' i]"
+        }
+      ],
+      "success_count": 0
+    },
+    "review_button": {
+      "fail_count": 0,
+      "key": "review_button",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "",
+      "required": false,
+      "strategies": [
+        {
+          "attr": "data-testid",
+          "name": "Review your application",
+          "note": "",
+          "role": "button",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "label",
+          "value": "Review"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "Review"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "footer button:has-text('Review')"
+        }
+      ],
+      "success_count": 0
+    },
+    "submit_button": {
+      "fail_count": 0,
+      "key": "submit_button",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Visibility of this, never a step index, is how the last step is detected.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-testid",
+          "name": "Submit application",
+          "note": "",
+          "role": "button",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "label",
+          "value": "Submit application"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "text",
+          "value": "Submit application"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "footer button:has-text('Submit application')"
+        }
+      ],
+      "success_count": 0
+    },
+    "uploaded_filename": {
+      "fail_count": 0,
+      "key": "uploaded_filename",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "MANDATORY read-back \u2014 hard rule 4. LinkedIn silently reuses a previous upload when the library is full, and this is the only thing between the user and sending last month's resume.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-test-id",
+          "name": "",
+          "note": "seeded from the pre-siteknowledge hardcoded selectors; unverified against the live site",
+          "role": "",
+          "type": "testid",
+          "value": "document-upload-file-name"
+        },
+        {
+          "attr": "data-testid",
+          "name": "*.pdf",
+          "note": "",
+          "role": "heading",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "h3.jobs-document-upload__title"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": ".jobs-document-upload-redesign-card__file-name"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "",
+          "role": "",
+          "type": "css",
+          "value": "[class*='document-upload'] [class*='file-name']"
+        }
+      ],
+      "success_count": 0
+    }
+  },
+  "platform": "linkedin"
+}

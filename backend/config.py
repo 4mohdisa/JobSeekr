@@ -252,6 +252,16 @@ class Settings(BaseSettings):
         return self.formmaps_dir / "company"
 
     @property
+    def siteknowledge_dir(self) -> Path:
+        """Per-platform element strategies, flow variants and quirks.
+
+        The live copy, seeded from the packaged defaults on first load. What
+        resolution promotes into and what the user hand-edits, so a package
+        upgrade must never overwrite it.
+        """
+        return self.data_dir / "siteknowledge"
+
+    @property
     def backups_dir(self) -> Path:
         return self.data_dir / "backups"
 
@@ -276,6 +286,7 @@ class Settings(BaseSettings):
             self.formmaps_dir,
             self.formmaps_platform_dir,
             self.formmaps_company_dir,
+            self.siteknowledge_dir,
             self.backups_dir,
             self.har_dir,
             self.browser_profile_dir,

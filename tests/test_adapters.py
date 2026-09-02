@@ -188,9 +188,17 @@ def test_readback_returns_the_displayed_filenames():
 
 
 def test_an_empty_readback_is_visible_to_the_caller():
-    """The flow turns this into a hard abort; the adapter must not hide it."""
+    """The flow turns this into a hard abort; the adapter must not hide it.
+
+    Under site knowledge an empty read-back on a required element raises rather
+    than returning [] — louder, and it carries which element and what was tried.
+    Silently returning nothing here is what would let a stale upload through.
+    """
+    from backend.siteknowledge import ElementNotFound
+
     applier = linkedin.LinkedInApplier()
-    assert applier.read_back_attachments(FakeReadbackPage([])) == []
+    with pytest.raises(ElementNotFound):
+        applier.read_back_attachments(FakeReadbackPage([]))
 
 
 # --------------------------------------------------- structural invariants
@@ -220,14 +228,49 @@ def test_adapters_implement_the_whole_flow_contract(module, cls):
         assert callable(getattr(applier, name))
 
 
-@pytest.mark.parametrize("module", [seek, linkedin])
-def test_every_selector_group_has_more_than_one_candidate_where_it_matters(module):
+@pytest.mark.parametrize("platform", ["seek", "linkedin"])
+def test_every_critical_element_has_more_than_one_strategy(platform):
     """Single brittle selectors are how these adapters rot."""
-    selectors = module.SELECTORS
-    critical = [key for key in selectors if "submit" in key or "confirmation" in key]
-    assert critical, "expected submit/confirmation selectors"
+    from backend.siteknowledge import load
+
+    knowledge = load(platform)
+    critical = [
+        key for key in knowledge.elements if "submit" in key or "confirmation" in key
+    ]
+    assert critical, "expected submit/confirmation elements"
     for key in critical:
-        assert len(selectors[key]) >= 2, f"{key} has only one candidate selector"
+        assert len(knowledge.elements[key].strategies) >= 2, (
+            f"{platform}/{key} has only one strategy"
+        )
+
+
+@pytest.mark.parametrize("platform", ["seek", "linkedin"])
+def test_required_elements_do_not_rely_on_class_names_alone(platform):
+    """The point of the layer, not just a count.
+
+    Four CSS selectors would satisfy "more than one strategy" and still die on
+    the next redesign *together*, because generated class names all change at
+    once. So the rule is about class names specifically, not about CSS: an
+    attribute selector on a standard HTML type — ``input[type='file']`` — is as
+    durable as the HTML spec and is a legitimate sole strategy. A class or a
+    ``[class*=]`` match is not.
+    """
+    from backend.siteknowledge import load
+
+    knowledge = load(platform)
+    for key, element in knowledge.elements.items():
+        if not element.required:
+            continue
+        durable = [
+            strategy
+            for strategy in element.strategies
+            if strategy.type != "css"
+            or ("." not in strategy.value and "class" not in strategy.value)
+        ]
+        assert durable, (
+            f"{platform}/{key} depends entirely on class names, so one redesign "
+            "takes every strategy at once"
+        )
 
 
 def test_no_credential_parameters_exist_anywhere_in_the_apply_layer():
