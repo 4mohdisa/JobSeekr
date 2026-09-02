@@ -438,3 +438,58 @@ def test_no_reserved_windows_filenames_are_generated(name):
 
     generated = {kind.value.upper() for kind in DocumentKind}
     assert name not in generated
+
+
+# =========================================================================
+# pdflatex install hint
+# =========================================================================
+#
+# The "pdflatex not found" error is the first thing a user sees on a fresh
+# machine, and for a whole bring-up it told macOS users to install MiKTeX.
+# These pin that the advice tracks the platform actually running.
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        ("win32", "MiKTeX"),
+        ("darwin", "basictex"),
+        ("linux", "texlive"),
+    ],
+)
+def test_install_hint_names_the_right_distribution(monkeypatch, platform, expected):
+    from backend.documents import build
+
+    monkeypatch.setattr(build.sys, "platform", platform)
+    assert expected.lower() in build._install_hint().lower()
+
+
+def test_install_hint_falls_back_on_an_unknown_platform(monkeypatch):
+    """A platform nobody anticipated still gets usable advice, not a KeyError."""
+    from backend.documents import build
+
+    monkeypatch.setattr(build.sys, "platform", "sunos5")
+    hint = build._install_hint()
+    assert "pdflatex" in hint.lower()
+    assert "MiKTeX" not in hint
+
+
+def test_missing_pdflatex_error_carries_the_platform_hint(monkeypatch, tmp_path):
+    """The hint has to reach the message the user actually reads."""
+    from backend.config import settings
+    from backend.documents import build
+
+    monkeypatch.setattr(build.sys, "platform", "darwin")
+    monkeypatch.setattr(settings, "pdflatex_path", str(tmp_path / "nope" / "pdflatex"))
+
+    with pytest.raises(build.DocumentBuildError) as excinfo:
+        build.render_pdf(
+            r"\documentclass{article}\begin{document}x\end{document}",
+            tmp_path,
+            "probe",
+        )
+
+    message = str(excinfo.value)
+    assert "basictex" in message.lower()
+    assert "PDFLATEX_PATH" in message
+    assert "MiKTeX" not in message

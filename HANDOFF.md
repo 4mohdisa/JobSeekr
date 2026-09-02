@@ -183,13 +183,24 @@ Windows used MiKTeX. On macOS use BasicTeX (small) or MacTeX (large):
 brew install --cask basictex
 ```
 
-BasicTeX ships a minimal package set, so install what the templates need:
+BasicTeX ships a minimal package set, but **TeX Live 2026's BasicTeX already
+carries everything these templates use** — verified 2026-09-03 by compiling the
+real preamble (`fontenc`, `inputenc`, `lmodern`, `geometry`, `enumitem`,
+`hyperref`, `titlesec`). No `tlmgr install` was needed. Skip straight to the
+`.env` path below and only come back here if a build actually fails.
+
+If a future template does pull in something missing, TeX Live fails with
+`LaTeX Error: File 'x.sty' not found` naming the file, and this installs it:
 
 ```bash
 sudo tlmgr update --self
-sudo tlmgr install enumitem titlesec geometry hyperref oberdiek url \
-                   cm-super ec psnfss iftex kvoptions letltxmacro refcount etoolbox
+sudo tlmgr install <package>
 ```
+
+Do not check for packages with `kpsewhich oberdiek.sty` and friends. Bundle
+names — `oberdiek`, `psnfss`, `cm-super`, `ec` — ship no `.sty` of their own, so
+kpsewhich reports them missing even when they are installed. A trial compile is
+the only check that means anything.
 
 Then in `.env`:
 
@@ -197,16 +208,18 @@ Then in `.env`:
 PDFLATEX_PATH=/Library/TeX/texbin/pdflatex
 ```
 
-The current `.env.example` and the Windows `.env` both carry a Windows path —
-**this is the setting most likely to be wrong after the move.**
+`.env.example` ships the bare name `pdflatex`, which resolves via PATH and does
+work on macOS. Prefer the absolute path above anyway: a launchd or Task
+Scheduler run does not inherit an interactive shell's PATH, so a bare name is
+the setting most likely to break unattended.
 
 Two MiKTeX-specific things that do *not* apply on macOS:
 
 - MiKTeX needed `initexmf --set-config-value "[MPM]AutoInstall=1"`, or
   pdflatex stops and waits for a GUI confirmation the first time it needs a
   package — an unattended run hanging forever. TeX Live does not prompt; it
-  just fails if a package is missing, which is why the `tlmgr install` list
-  above matters.
+  just fails if a package is missing — naming the file it wanted, which is why
+  a missing package is a clear error here rather than a silent hang.
 - `pdflatex` is on `PATH` by default with BasicTeX, so the parse-gate and
   document tests will not silently skip the way they did on Windows. (They
   resolve `settings.pdflatex_path` now, so they would not skip anyway.)

@@ -29,6 +29,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -352,6 +353,23 @@ _AUX_SUFFIXES = (".aux", ".log", ".out", ".fls", ".fdb_latexmk", ".synctex.gz", 
 # the parent-child tree and needs no creation flag.
 _NEW_PROCESS_GROUP: dict[str, Any] = {} if os.name == "nt" else {"start_new_session": True}
 
+# What to tell the user to install when pdflatex is missing. Keyed by
+# sys.platform because os.name cannot tell macOS from Linux and they need
+# different answers. Anything unrecognised falls back to the generic TeX Live
+# line, which is true everywhere pdflatex exists at all.
+_PDFLATEX_INSTALL_HINT: dict[str, str] = {
+    "win32": "Install MiKTeX (https://miktex.org)",
+    "darwin": "Install BasicTeX (brew install --cask basictex)",
+    "linux": "Install TeX Live (e.g. apt install texlive-latex-recommended)",
+}
+_GENERIC_INSTALL_HINT = "Install a TeX distribution that provides pdflatex"
+
+
+def _install_hint() -> str:
+    """The platform-appropriate 'how to get pdflatex' line."""
+    return _PDFLATEX_INSTALL_HINT.get(sys.platform, _GENERIC_INSTALL_HINT)
+
+
 
 def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
     """Kill the process *and everything it spawned*.
@@ -460,7 +478,7 @@ def render_pdf(tex_source: str, out_dir: Path, stem: str) -> Path:
         except FileNotFoundError as exc:
             raise DocumentBuildError(
                 f"pdflatex not found at {settings.pdflatex_path!r}. "
-                "Install MiKTeX (Windows) or set PDFLATEX_PATH."
+                f"{_install_hint()}, or set PDFLATEX_PATH to an existing one."
             ) from exc
 
         if returncode != 0:
