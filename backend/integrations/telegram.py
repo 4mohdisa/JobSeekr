@@ -24,6 +24,7 @@ from typing import Any
 from sqlmodel import select
 
 from backend.config import settings
+from backend import failures
 from backend.db import session_scope
 from backend.integrations.notify import Priority, set_sender
 from backend.logging_setup import configure_logging, get_logger
@@ -236,6 +237,11 @@ def build_digest(*, hours: int = 24) -> str:
 
     if failed:
         lines.append(f"\n*Failed* — {len(failed)} (parse gate or apply errors; see the dashboard)")
+
+    # Trends, not events: a failure worth an immediate alert already got one
+    # from the layer that detected it. What the digest adds is repetition.
+    with session_scope() as session:
+        lines.extend(failures.digest_lines(session))
 
     from backend.llm.client import budget_status
 

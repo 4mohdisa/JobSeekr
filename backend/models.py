@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from sqlalchemy import JSON, Column
+from sqlalchemy import JSON, Column, ForeignKey, Integer
 from sqlalchemy import Enum as SAEnum
 from sqlmodel import Field, Index, SQLModel, UniqueConstraint
 
@@ -173,6 +173,37 @@ class RunPhase(str, Enum):
     APPLY = "apply"
     EMAIL = "email"
     MAINTENANCE = "maintenance"
+
+
+class FailureType(str, Enum):
+    """What kind of failure a FailureEvent records.
+
+    Coarse on purpose. The question the ledger answers is "which selectors drift
+    most, which employers keep abstaining, which questions keep arriving" — and
+    a taxonomy fine enough to need its own documentation would produce buckets
+    with one member each, which trends nothing.
+    """
+
+    SELECTOR_DRIFT = "selector_drift"
+    """A strategy stopped working and a lower-priority one took over."""
+
+    ELEMENT_UNRESOLVED = "element_unresolved"
+    """No strategy resolved an element. The job went to the manual queue."""
+
+    ANSWER_ABSTAINED = "answer_abstained"
+    """A screening question could not be answered from the bank."""
+
+    PARSE_GATE = "parse_gate"
+    """A built document failed the parse gate and was not attached."""
+
+    READBACK_MISMATCH = "readback_mismatch"
+    """The form reported a different filename than the one uploaded."""
+
+    SUBMIT_FAILED = "submit_failed"
+    """The submit itself raised, or no confirmation state appeared."""
+
+    SOURCE_UNAVAILABLE = "source_unavailable"
+    """A discovery source returned nothing because every request failed."""
 
 
 class FormMapTier(str, Enum):
@@ -523,6 +554,69 @@ class FormMap(SQLModel, table=True):
     trusted: bool = False
     last_verified_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class FailureEvent(SQLModel, table=True):
+    """One failure, remembered.
+
+    WHY A TABLE AND NOT JUST A LOG LINE
+        The circuit breaker already stops repeated failure, and then forgets it
+        happened. That makes every failure look like the first one. This is the
+        memory: with it the system can answer which selectors drift most, which
+        employers consistently abstain, which questions keep arriving
+        unanswered, and whether a parse-gate failure is new or recurring.
+
+    IDENTITY, NOT NARRATIVE
+        The columns are the dimensions worth grouping by. ``detail`` carries the
+        human-readable remainder and nothing aggregates on it — a trend built by
+        grouping free text is a trend built on phrasing.
+
+    RESOLUTION IS PART OF THE RECORD
+        ``resolved_at`` and ``resolution`` are what separate "this keeps
+        happening" from "this happened and was fixed". Without them the ledger
+        grows monotonically and every old failure keeps voting in the trends.
+    """
+
+    __tablename__ = "failure_event"
+
+    id: int | None = Field(default=None, primary_key=True)
+    platform: str = Field(index=True)
+    failure_type: FailureType = Field(sa_column=_enum_column(FailureType))
+
+    element_id: str | None = Field(default=None, index=True)
+    """The site-knowledge element key, when the failure was about finding one."""
+
+    flow_variant: str | None = Field(default=None, index=True)
+    """The flow fingerprint, so a failure specific to one variant is visible."""
+
+    company: str | None = Field(default=None, index=True)
+    """Which employer, so "this company always abstains" is answerable."""
+
+    question: str | None = None
+    """The normalised screening question, when that is what failed."""
+
+    job_id: int | None = Field(
+        default=None,
+        # ON DELETE SET NULL, not the default RESTRICT and not CASCADE.
+        #
+        # The ledger exists to outlive the thing that failed. RESTRICT makes a
+        # failure row block the deletion of its job — the ledger would quietly
+        # pin every job it ever touched. CASCADE goes the other way and erases
+        # the record that anything failed, which loses exactly the history this
+        # table was added to keep.
+        #
+        # SET NULL keeps the trend and drops the pointer: the platform, element,
+        # company and question all survive, and those are what anything
+        # aggregates on. Only the link back to one deleted job is lost.
+        sa_column=Column(
+            Integer, ForeignKey("job.id", ondelete="SET NULL"), nullable=True, index=True
+        ),
+    )
+    detail: str | None = None
+
+    occurred_at: datetime = Field(default_factory=utcnow, index=True)
+    resolved_at: datetime | None = None
+    resolution: str | None = None
 
 
 class LLMSpend(SQLModel, table=True):

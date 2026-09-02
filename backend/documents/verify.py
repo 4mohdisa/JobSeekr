@@ -529,5 +529,41 @@ def verify_pdf(
             kind=kind,
             failures=[c.name for c in report.failures],
             detail=report.summary(),
+            recurring=_gate_failure_is_recurring(kind, report.summary()),
         )
     return report
+
+
+def _gate_failure_is_recurring(kind: str, summary: str) -> bool:
+    """Record this gate failure and say whether it has happened before.
+
+    "The parse gate failed" and "the parse gate has failed four times this week"
+    call for completely different responses — the first is a bad document, the
+    second is a broken template. Answering it on the log line means the
+    distinction is visible where the failure is read, not only in the digest.
+
+    Never raises and never blocks the gate: bookkeeping attached to an already
+    failing path must not turn a diagnosable failure into a confusing one.
+    """
+    from backend.db import session_scope
+    from backend.failures import is_recurring, record
+    from backend.models import FailureType
+
+    try:
+        with session_scope() as session:
+            record(
+                session,
+                platform="documents",
+                failure_type=FailureType.PARSE_GATE,
+                element_id=kind,
+                detail=summary,
+            )
+            return is_recurring(
+                session,
+                platform="documents",
+                failure_type=FailureType.PARSE_GATE,
+                element_id=kind,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("parse_gate_failure_not_recorded", error=str(exc)[:150])
+        return False
