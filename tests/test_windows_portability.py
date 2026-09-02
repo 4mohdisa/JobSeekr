@@ -17,6 +17,7 @@ here rather than on the user's desktop.
 from __future__ import annotations
 
 import ast
+import contextlib
 import pathlib
 
 import pytest
@@ -274,13 +275,44 @@ _SPAWNS_AND_HANGS = """
 import subprocess, sys, time
 
 # A child that outlives its parent and holds the stdout it inherited.
-subprocess.Popen(
+child = subprocess.Popen(
     [sys.executable, "-c", "import time; time.sleep(120)"],
     stdout=sys.stdout,
     stderr=subprocess.STDOUT,
 )
+# Record the grandchild so the test can check it was actually reaped. Written
+# to a file rather than stdout: stdout is the temp file _run_pdflatex owns, and
+# the whole point of the redirect is that nothing else reads it.
+if len(sys.argv) > 1:
+    with open(sys.argv[1], "w") as handle:
+        handle.write(str(child.pid))
 time.sleep(120)
 """
+
+
+def _process_is_alive(pid: int) -> bool:
+    """True if pid exists and is not an already-reaped zombie.
+
+    ``os.kill(pid, 0)`` alone is not enough: a killed child that its parent has
+    not waited on is a zombie, still addressable by signal, but dead. Reading
+    the state field keeps this from reporting a corpse as a survivor.
+    """
+    import os
+
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    proc_stat = pathlib.Path(f"/proc/{pid}/stat")
+    if not proc_stat.exists():  # macOS has no /proc; os.kill is all we have
+        return True
+    try:
+        state = proc_stat.read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return False
+    return state != "Z"
 
 
 def test_pdflatex_timeout_holds_when_a_child_outlives_the_process(tmp_path):
@@ -297,6 +329,15 @@ def test_pdflatex_timeout_holds_when_a_child_outlives_the_process(tmp_path):
     The stand-in is that exact shape: a process that starts a longer-lived
     child on its own stdout, then sleeps well past the timeout. It must raise
     promptly rather than waiting the grandchild out.
+
+    Returning promptly is only half of it, and on its own it proves the weaker
+    half. ``process.kill()`` reaps the direct child, so with the temp-file
+    redirect in place this call returns in about the timeout even if the
+    process-tree kill does nothing at all — verified by suppressing
+    ``os.killpg`` during the macOS bring-up, which leaked the grandchild while
+    the elapsed-time assertion still passed. So assert the grandchild is dead
+    too: that is the assertion that actually covers ``_kill_process_tree``, and
+    on POSIX it is the only thing exercising ``os.killpg`` at all.
     """
     import sys
     import time
@@ -305,15 +346,34 @@ def test_pdflatex_timeout_holds_when_a_child_outlives_the_process(tmp_path):
 
     stub = tmp_path / "spawns_and_hangs.py"
     stub.write_text(_SPAWNS_AND_HANGS, encoding="utf-8")
+    pidfile = tmp_path / "grandchild.pid"
 
     started = time.monotonic()
     with pytest.raises(DocumentBuildError, match="timed out"):
-        _run_pdflatex([sys.executable, str(stub)], timeout=5)
+        _run_pdflatex([sys.executable, str(stub), str(pidfile)], timeout=5)
     elapsed = time.monotonic() - started
 
     # The grandchild sleeps 120s. Anything approaching that means the pipe
     # deadlock is back; the fix returns in about the 5s timeout plus teardown.
     assert elapsed < 60, f"timeout did not hold: took {elapsed:.1f}s"
+
+    assert pidfile.exists(), "stub never recorded a grandchild pid"
+    grandchild = int(pidfile.read_text().strip())
+
+    deadline = time.monotonic() + 10
+    while _process_is_alive(grandchild) and time.monotonic() < deadline:
+        time.sleep(0.1)
+
+    if _process_is_alive(grandchild):
+        import os
+        import signal
+
+        with contextlib.suppress(OSError):  # never leak a 120s sleeper
+            os.kill(grandchild, signal.SIGKILL)
+        pytest.fail(
+            f"process-tree kill leaked grandchild pid={grandchild}: "
+            "pdflatex was killed but its child outlived it"
+        )
 
 
 def test_latex_aux_cleanup_tolerates_a_locked_file(tmp_path, monkeypatch):

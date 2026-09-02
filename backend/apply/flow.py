@@ -634,12 +634,19 @@ def _readback_mismatch(intended: dict[str, str], readback: list[str]) -> str | N
 def _park(session: Session, job: Job, draft: ApplicationDraft) -> ApplyResult:
     """Mark the job as needing an answer and close cleanly.
 
-    The browser is NOT held open waiting for a human. The integrations layer
-    asks the question over Telegram, saves the answer, and the job is re-queued.
+    The browser is NOT held open waiting for a human. The caller asks the
+    question over Telegram once this session has committed, the reply is saved
+    to the answer bank, and the job is re-queued.
+
+    The question is recorded on the job, not just returned, because the half
+    that asks and the half that answers are different processes: ``/answer``
+    arrives at the bot long after this pass has ended, and it has nothing but
+    the job id to work from.
     """
     job.status = JobStatus.NEEDS_ANSWER
-    session.add(job)
     questions = [a.question for a in draft.abstentions]
+    job.needs_answer_question = questions[0] if questions else None
+    session.add(job)
     log.warning(
         "application_parked_needs_answer",
         job_id=job.id,
@@ -652,7 +659,21 @@ def _park(session: Session, job: Job, draft: ApplicationDraft) -> ApplyResult:
         failure_reason=f"{len(questions)} unanswered screening questions",
         answers_given=draft.answers_given,
         needs_answer=questions[0] if questions else None,
+        needs_answer_choices=_choices_for(draft, questions[0]) if questions else [],
     )
+
+
+def _choices_for(draft: ApplicationDraft, question: str) -> list[str]:
+    """The form's options for ``question``, if it was a closed list.
+
+    Matched on the normalised question because ``Abstain.question`` is already
+    normalised while ``FormField.label`` is raw.
+    """
+    target = normalise_question(question)
+    for field_ in draft.fields:
+        if normalise_question(question_key(field_)) == target:
+            return list(field_.choices)
+    return []
 
 
 def _abort(

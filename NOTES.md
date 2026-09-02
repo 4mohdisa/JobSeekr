@@ -2253,3 +2253,278 @@ Jordan Fitzgerald
 ## Explicitly not done, as instructed
 
 No HAR recorded. No login to any job board. `ALLOW_LIVE_SUBMIT` never touched.
+
+---
+
+# macOS bring-up — 2026-09-02
+
+Second bring-up, following `HANDOFF.md`. Read that first; this records what
+actually happened, including where the handoff's expectations were wrong.
+
+## Read this first: it did not run on macOS
+
+**The session ran on Linux, not a Mac.** The agent was given a remote Ubuntu
+24.04 container (`x86_64`, kernel 6.18), not the MacBook. Everything below is
+real — the commands ran, the output is quoted — but it is Linux output.
+
+What that does and does not cost you:
+
+| | Status |
+|---|---|
+| POSIX process-tree kill (§4 of HANDOFF) | **Genuinely verified.** Same `os.killpg` code path on macOS and Linux. |
+| Test suite, rehearsal, migrations, servers | Verified, on Linux. Nothing in them is macOS-specific. |
+| `brew install --cask basictex` | **Never run.** No Homebrew here. |
+| `tlmgr install ...` package list | **Never run.** TeX Live came from `apt`. |
+| `/Library/TeX/texbin/pdflatex` | **Never exercised.** |
+| `zoneinfo` resolving `Australia/Adelaide` from the system tz database | Not a macOS check — `tzdata` is installed on Linux too. |
+
+So: the code is in better shape than it was, and the *Mac* is still unproven.
+The one command you still have to run yourself is the BasicTeX install.
+
+## Environment
+
+```
+uv 0.8.17 · CPython 3.12.3 · node v22.22.2 · npm 10.9.7
+pdfTeX 3.141592653-2.6-1.40.25 (TeX Live 2023/Debian)
+```
+
+`uv venv --python 3.12`, `uv sync --all-groups`, `npm install` (53 packages,
+0 vulnerabilities) and `alembic upgrade head` all ran clean, first try. The
+3.12 pin held; nothing needed relaxing.
+
+LaTeX came from `apt-get install texlive-latex-base texlive-latex-recommended
+texlive-latex-extra texlive-fonts-recommended lmodern`. The templates need
+exactly `lmodern`, `geometry`, `hyperref`, `fontenc`/`inputenc`, `enumitem` and
+`titlesec`; all six resolved via `kpsewhich`. **On the Mac use the `tlmgr` list
+in HANDOFF §4 instead** — that list is still the one to run, still untested.
+
+## `PDFLATEX_PATH` — the handoff was half right
+
+The instruction was "fix it in `.env` and `.env.example` — both carry a Windows
+MiKTeX path". Neither turned out to be true here:
+
+- **`.env` does not exist in a fresh clone.** It is gitignored, so nothing came
+  across with the repo. Created it from `.env.example`.
+- **`.env.example` already had `PDFLATEX_PATH=pdflatex`** — portable, correct on
+  macOS and Linux both. The Windows path was only ever in the *comment* above it.
+
+The real defect was that the comment named MiKTeX and gave a Windows example
+only, which is what makes the next person think the value is wrong. Rewritten to
+say the bare name works wherever pdflatex is on `PATH` (macOS BasicTeX/MacTeX,
+Linux TeX Live) and to list the absolute paths for both platforms.
+
+`ALLOW_LIVE_SUBMIT=false` in both files. Not touched.
+
+## `.gitattributes` — added, and it is a no-op today
+
+`* text=auto eol=lf`, plus `eol=crlf` for `.bat`/`.cmd`/`.ps1`, binary markers,
+and `linguist-generated` on the two lockfiles.
+
+Checked rather than assumed: `git add --renormalize .` produced **no** additional
+changes, which confirms every tracked file is already LF. So this costs you
+nothing now and prevents the whole-file diffs later.
+
+## The 17-hour hang: the branch works, the test did not cover it
+
+This is the most important result in this session.
+
+**The POSIX branch works.** Under a deliberate reproduction — a process that
+spawns a longer-lived grandchild on the inherited stdout, then sleeps past the
+timeout — `_run_pdflatex` raised after 5.0s and the grandchild was dead.
+
+**The shipped test could not have told you that.** `tests/test_windows_
+portability.py::test_pdflatex_timeout_holds_when_a_child_outlives_the_process`
+asserted only `elapsed < 60`. Suppressing `os.killpg` entirely and re-running it:
+
+```
+[control] suppressed killpg(pgid=3633, sig=9)
+raised DocumentBuildError after 5.0s
+grandchild pid=3634 alive_after_kill=True
+```
+
+Still under 5 seconds, still passing — with the process tree leaked. The prompt
+return comes from the temp-file redirect (no pipe deadlock) plus
+`process.kill()` reaping the direct child; the elapsed-time assertion never
+touches `_kill_process_tree` at all. HANDOFF §4 said "if that test passes there,
+the branch works". That inference does not hold.
+
+Fixed: the stub now records its grandchild's pid, and the test asserts the
+process is gone (checking `/proc` state so a zombie is not mistaken for a
+survivor). Mutation-checked both ways — the strengthened test **fails** with
+`killpg` suppressed and passes with it restored, so it is now load-bearing.
+
+## What ran
+
+| | Result |
+|---|---|
+| `uv run pytest` | **590 passed**, ~35s (575 before; 15 added) |
+| `uv run python -m backend.rehearsal` | **12/12 stages pass**, 6.0s, real pdflatex, 6 PDFs through the parse gate |
+| `uv run alembic upgrade head` / `alembic check` | Clean; "No new upgrade operations detected" |
+| `uv run ruff check backend tests` | All checks passed |
+| `uvicorn backend.main:app` | Serves. `/docs` 200, `/api/campaigns` 200, `/api/jobs` 200. `/` is 404 by design — there is no root route |
+| `npm run dev` | Serves on :5173, 200 |
+| `npm run build` (`tsc -b && vite build`) | Clean, 40 modules, 294 kB |
+
+Both servers were stopped afterwards and the ports confirmed closed.
+
+`ruff format --check` reports 59 of 90 files would be reformatted. That is
+**pre-existing** and was left alone — reformatting the repo would have buried
+this session's diff. Worth doing as its own commit.
+
+## Discovery on an empty database
+
+The first-run backfill works exactly as documented:
+
+```
+discovery_backfilling  jobs_in_db=0 threshold=25
+                       incremental_hours=8 backfill_hours=720
+```
+
+Two things the handoff did not mention, both found by running it:
+
+1. **A fresh database has no campaigns, so discovery is a no-op.** The first run
+   logged `no_active_campaigns` and fetched nothing. `python -m backend.seed`
+   creates the profile shell and the 21 answer-bank rows but **no campaign** —
+   campaigns are only created through the API/UI. So on the Mac the order is:
+   migrate, seed, *create a campaign*, then discover. A campaign was inserted
+   here by hand to get past this.
+2. **A total source failure is recorded as a successful run.** With a campaign
+   active, all three sources were blocked by this container's egress proxy (403
+   at the tunnel — environmental, not a bug). Each failure was logged loudly and
+   correctly (`seek_json_transport_failed`, `jobspy_search_failed`), so hard rule
+   9 holds at the log. But the `Run` row came back `ok=True` with
+   `{'seek': {'fetched': 0, 'error': 0}, ...}` — the per-source `error` counter
+   is never incremented from the source exceptions. A silent network outage
+   therefore looks identical on the dashboard to a quiet day. Not fixed; it is
+   outside this session's scope and wants a small deliberate decision about what
+   `ok` should mean.
+
+**No ads were fetched, so no live source is verified from here.** Seek,
+LinkedIn and Indeed are all still only proven on the Windows machine.
+
+## Gap 1 — `escalate_question` is wired, and the loop actually closes
+
+`Claude.md` hard rule 2: "abstain, park the job, ask via Telegram, save the
+answer, retry". The asking half is now called.
+
+Wiring, end to end:
+
+- `apply/flow.py::_park` records the parked question on the job.
+- `apply/run.py` collects parked jobs during the pass and calls
+  `escalate_question` in `_escalate_parked` **after the session commits**. Not
+  inside it: the pass holds one session open for the whole queue (minutes, with
+  pacing), so asking mid-transaction races the reply — a prompt `/answer` would
+  read a job whose `NEEDS_ANSWER` status was not committed yet and `requeue_job`
+  would refuse it without saying why.
+- A send failure or exception is logged and the pass continues; the job stays
+  parked.
+
+**Two real bugs were in the way, and the loop could not have worked without
+fixing them.** Both were found by trying to make the round trip pass.
+
+1. **The answer was filed against the wrong question.** `_cmd_answer` picked *the
+   oldest blank row in the whole bank*, regardless of which job was being
+   answered. With two jobs parked, answering one wrote into the other's row:
+   the real question stayed unresolved and a verified answer elsewhere was
+   overwritten. Now the job carries its own question (new nullable column
+   `job.needs_answer_question`, migration `11c09d52282c`) and `/answer` uses it.
+
+2. **Answering a seeded question created a rival row and deadlocked the loop.**
+   `Abstain.question` is the *form's* wording; a seeded row's `question_pattern`
+   is a regex. `save_answer` matched them by string equality, which never
+   succeeds, so the reply was stored as a *new* fuzzy row while the matched row
+   stayed blank. On the retry both rows match, they tie inside
+   `AMBIGUITY_MARGIN`, they disagree ("" vs "Yes") — and `resolve_answer`
+   abstains as `AMBIGUOUS`. The job re-parks on a question you have just
+   answered, forever, and it would have done so for all 21 seeded questions.
+   Fixed by carrying `Abstain.source_row_id` through to `save_answer`, which now
+   fills the row that actually matched.
+
+Proof, in `tests/test_escalation_loop.py` — the full circuit against the real
+database, only the Telegram HTTP call faked: abstain → park → escalate →
+`/answer` → stored in the matched row → re-queued → **the retry resolves and
+fills the field**. Plus: two jobs parked at once do not steal each other's
+answers; a failed send leaves the job parked and says so; an escalation that
+raises does not end the pass.
+
+Mutation-checked: reverting the `row_id` fix makes the loop test fail with two
+rows in the bank and the seeded one still blank — the exact deadlock above.
+
+## Gap 2 — `detect`'s HTML fingerprint is wired
+
+The handoff recommended wiring `detect` into the adapter's `open()`. **That
+alone would not have fixed anything**, and it is worth being clear why:
+adapter selection runs `can_handle` → `detect_from_url`. A white-labelled PageUp
+on `careers.acme.com.au` matches no adapter, so `no_applier_for_job` fires and
+the job goes to `MANUAL_QUEUE` — `open()` is never reached on exactly the jobs
+the HTML fingerprint exists for.
+
+So it is wired in two places:
+
+- **Selection** (`apply/run.py::_applier_from_page`) — when no adapter claims the
+  job by URL and it is `EXTERNAL`/`UNKNOWN`, the page is loaded and `detect(url,
+  html)` runs. This is the path that fixes the Australian case. Returns None
+  rather than guessing: unidentifiable still means manual queue.
+- **Confirmation** (`ats/adapters.py::_confirm_platform`, in `open()`) — the page
+  that actually loaded is checked against the adapter driving it. Clicking
+  "Apply" often lands on a different platform, and employers embed other
+  vendors' form builders in iframes; either way the selectors are wrong.
+  It **reports** rather than re-points — swapping adapters on an already-open,
+  already-clicked page is a bigger change than a mismatch justifies, and hard
+  rule 9 means it must not be silent.
+
+`tests/test_ats_html_wiring.py` covers both: a white-labelled PageUp page now
+selects the PageUp adapter, an iframe to Greenhouse is followed into,
+an unrecognisable page selects nothing, a recognised platform with no adapter is
+reported rather than substituted, a probe that cannot load does not end the
+pass, and the mismatch warning fires (and does not false-fire).
+
+`tests/test_reachability.py` had both functions pinned as known-unreachable;
+both entries are removed, so the check now enforces that they stay wired.
+`decide_queueing`, `ensure_logged_in`, the outbound-email trio, `replay` and the
+vestigial five are untouched and still pinned.
+
+## Still unverified
+
+Everything HANDOFF §1 listed as unverified, still is, plus:
+
+- **macOS itself.** Nothing here ran on a Mac. BasicTeX, `tlmgr`,
+  `/Library/TeX/texbin`, and the Mac's own tz database are all still untested.
+- **Live discovery.** Egress blocked; 0 ads from all three sources.
+- **Real scoring and document content.** No API key, no profile. Every LLM call
+  in the rehearsal is still a deterministic stub.
+- **Telegram, for real.** The loop is proven against a fake sender. No token was
+  configured, so no message has ever left the machine. The transport in
+  `send_message` is unchanged and still unexercised.
+- **Any browser.** No Chrome, no Playwright browsers, no HAR. The ATS detection
+  work is tested against fake pages — the fingerprints and the selection logic
+  are proven, driving a real portal is not.
+- **`ALLOW_LIVE_SUBMIT`.** Still false everywhere. Never touched.
+
+## What needs you
+
+1. **Run the BasicTeX install on the Mac** — HANDOFF §4, `brew install --cask
+   basictex` then the `tlmgr install` list. It is the one setup step this
+   session could not do for you. Then `uv run python -m backend.rehearsal`; if
+   it passes, the Mac is set up.
+2. **Create a campaign before running discovery**, or discovery silently does
+   nothing on the fresh database. Migrate → `python -m backend.seed` → create a
+   campaign in the UI → discover.
+3. **A Telegram bot token and chat id.** The answer-bank loop is wired and
+   tested but cannot ask you anything without them, and until it can, every
+   novel screening question still parks the job. This is now the single change
+   that unlocks the most.
+4. **Your LaTeX resume and an API key** — unchanged from the last handoff, still
+   the two things blocking real document generation.
+5. **Decide what a discovery `Run`'s `ok` should mean** when every source failed
+   (see above). Currently `ok=True`, `error=0`.
+6. **`ruff format`** as its own commit, if you want the repo format-clean.
+7. **Branch name.** This work is on `claude/macos-bringup-yd8i0q`, not the
+   `fix/macos-bringup` that was asked for — the session harness pins the branch
+   it is allowed to push. Rename or merge as you prefer; the commits are the
+   same.
+
+## Explicitly not done
+
+`ALLOW_LIVE_SUBMIT` untouched. No login to any job board, no HAR recorded, no
+browser installed, no message sent to Telegram, no scheduled check-ins.

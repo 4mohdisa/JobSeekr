@@ -139,7 +139,22 @@ class ApplyResult(BaseModel):
     screenshot_post: Path | None = None
 
     needs_answer: str | None = None
-    """The unanswerable question, when ``outcome`` is ABSTAINED."""
+    """The unanswerable question, when ``outcome`` is ABSTAINED.
+
+    One question, not all of them, even when the form abstained on several. The
+    reply channel answers one question per job (``/answer <job_id> <text>``), so
+    asking three at once would collect one answer and silently discard two. The
+    job is re-queued after each answer and re-parks on the next unresolved
+    question, which walks the whole form one verified answer at a time.
+    """
+
+    needs_answer_choices: list[str] = Field(default_factory=list)
+    """The form's own options for ``needs_answer``, when it was a closed list.
+
+    Sent with the question so the reply matches a value the form will accept —
+    a free-text "yes, full working rights" against a strict dropdown resolves to
+    nothing and re-parks the job.
+    """
 
 
 @runtime_checkable

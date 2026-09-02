@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from backend.apply.draft import FormField
-from backend.ats.detect import detect_from_url
+from backend.ats.detect import detect, detect_from_url
 from backend.ats.generic import (
     CaptchaDetected,
     detect_captcha,
@@ -155,6 +155,42 @@ class GenericAtsApplier:
             page.wait_for_load_state("domcontentloaded")
 
         self._check_captcha(page)
+        self._confirm_platform(page, job)
+
+    def _confirm_platform(self, page: Any, job: Job) -> None:
+        """Check the page that actually loaded is the platform this adapter drives.
+
+        The URL is not the last word. Clicking through "Apply" often lands on a
+        different platform than the ad was served from, and an employer's own
+        careers page frequently embeds someone else's form builder in an
+        iframe. Either way the selectors held here belong to the wrong platform,
+        and filling with them puts values in the wrong fields or in none at all
+        — silently, which hard rule 9 does not allow.
+
+        Reports rather than re-points. Swapping the adapter mid-flow, on a page
+        that is already open and may already have been clicked through, is a
+        bigger change than a mismatch warrants; this makes the mismatch
+        impossible to miss in the log and leaves the decision visible.
+        """
+        try:
+            html = page.content()
+        except Exception as exc:  # noqa: BLE001 - a check must not break the flow
+            log.debug("platform_confirm_skipped", error=str(exc)[:120])
+            return
+
+        detection = detect(job.url, html)
+        if detection.platform is None or detection.key == self.platform:
+            return
+
+        log.warning(
+            "ats_platform_mismatch",
+            job_id=job.id,
+            adapter=self.platform,
+            detected=detection.key,
+            via=detection.confidence,
+            evidence=detection.evidence,
+            iframe_src=detection.iframe_src,
+        )
 
     def _check_captcha(self, page: Any) -> None:
         """A CAPTCHA is a hard stop. No solving services, ever."""

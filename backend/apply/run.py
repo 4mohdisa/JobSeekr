@@ -33,6 +33,7 @@ from backend.db import persist_detached, session_scope
 from backend.logging_setup import configure_logging, get_logger
 from backend.models import (
     Application,
+    ApplyType,
     Campaign,
     Document,
     GrayZoneAction,
@@ -59,6 +60,54 @@ def build_appliers() -> list[Any]:
     from backend.ats.adapters import build_ats_appliers
 
     return [entry.make_applier() for entry in applier_boards()] + build_ats_appliers()
+
+
+def _applier_from_page(page: Any, job: Job, appliers: list[Any]) -> Any | None:
+    """Identify the ATS from the loaded page when the URL did not name it.
+
+    ``detect`` tries the URL first and falls back to the HTML fingerprint, which
+    is what recognises a white-labelled portal — and an ``iframe`` to an
+    embedded form builder, where the wrapper page is the employer's own brand
+    and the form belongs to someone else entirely.
+
+    Returns None rather than guessing: a job nothing can identify belongs in the
+    manual queue, not in an adapter chosen on a hunch.
+    """
+    from backend.ats.detect import detect
+
+    try:
+        page.goto(job.url, wait_until="domcontentloaded")
+        html = page.content()
+    except Exception as exc:  # noqa: BLE001 - a probe must never end the pass
+        log.warning("ats_html_probe_failed", job_id=job.id, error=str(exc)[:150])
+        return None
+
+    detection = detect(job.url, html)
+    if detection.platform is None:
+        return None
+
+    applier = next(
+        (a for a in appliers if getattr(a, "platform", None) == detection.key), None
+    )
+    if applier is None:
+        # Recognised, but nothing can drive it. Loud, because this is the case
+        # where adding one selector set would unlock a whole platform.
+        log.warning(
+            "ats_detected_without_adapter",
+            job_id=job.id,
+            platform=detection.key,
+            evidence=detection.evidence,
+        )
+        return None
+
+    log.info(
+        "ats_detected_from_html",
+        job_id=job.id,
+        platform=detection.key,
+        evidence=detection.evidence,
+        iframe_src=detection.iframe_src,
+    )
+    return applier
 
 
 def _latest_score(session: Session, job_id: int) -> float | None:
@@ -159,6 +208,7 @@ def run_apply_pass(
     started = datetime.now(UTC)
     errors: list[dict[str, Any]] = []
     counts = {"considered": 0, "submitted": 0, "blocked": 0, "parked": 0, "failed": 0}
+    pending_escalations: list[tuple[int, str, list[str]]] = []
     appliers = build_appliers()
     rng = rng or random.Random()
 
@@ -172,6 +222,20 @@ def run_apply_pass(
         )
         log.info("apply_pass_starting", eligible=len(jobs), dry_run=dry_run)
 
+        def start_page() -> Any:
+            """The browser is only started once there is real work for it."""
+            nonlocal page, playwright, context
+            if page is None:
+                if page_factory is not None:
+                    page = page_factory()
+                else:
+                    from playwright.sync_api import sync_playwright
+
+                    playwright = sync_playwright().start()
+                    context = launch_context(playwright)
+                    page = context.pages[0] if context.pages else context.new_page()
+            return page
+
         try:
             for index, (job, campaign, score) in enumerate(jobs):
                 counts["considered"] += 1
@@ -181,6 +245,20 @@ def run_apply_pass(
                     continue
 
                 applier = next((a for a in appliers if a.can_handle(job)), None)
+
+                if applier is None and job.apply_type in {
+                    ApplyType.EXTERNAL,
+                    ApplyType.UNKNOWN,
+                }:
+                    # The URL gave nothing away. In Australia that is the common
+                    # case rather than an edge one: PageUp and JobAdder are
+                    # routinely white-labelled onto careers.employer.com.au,
+                    # where neither the host nor the path names the platform.
+                    # Load the page and fingerprint the HTML before giving up —
+                    # this is the only path that reaches detect_from_html, and
+                    # without it every such job goes to the manual queue.
+                    applier = _applier_from_page(start_page(), job, appliers)
+
                 if applier is None:
                     log.warning(
                         "no_applier_for_job",
@@ -192,16 +270,7 @@ def run_apply_pass(
                     session.add(job)
                     continue
 
-                # The browser is only started once there is real work for it.
-                if page is None:
-                    if page_factory is not None:
-                        page = page_factory()
-                    else:
-                        from playwright.sync_api import sync_playwright
-
-                        playwright = sync_playwright().start()
-                        context = launch_context(playwright)
-                        page = context.pages[0] if context.pages else context.new_page()
+                page = start_page()
 
                 if index > 0 and not dry_run:
                     sleep_between_submits(rng)
@@ -241,6 +310,16 @@ def run_apply_pass(
                     counts["submitted"] += 1
                 elif result.outcome is ApplyOutcome.ABSTAINED:
                     counts["parked"] += 1
+                    if result.needs_answer:
+                        # Queued, not sent here. Asking inside this transaction
+                        # races the reply: the pass holds the session open for
+                        # the rest of the queue (minutes, with pacing), so a
+                        # prompt /answer would look up a job whose NEEDS_ANSWER
+                        # status has not been committed yet, and re-queueing
+                        # would silently refuse.
+                        pending_escalations.append(
+                            (job.id, result.needs_answer, result.needs_answer_choices)
+                        )
                 elif result.outcome in {ApplyOutcome.BLOCKED, ApplyOutcome.DRY_RUN}:
                     counts["blocked"] += 1
                 else:
@@ -261,8 +340,39 @@ def run_apply_pass(
         )
         persist_detached(session, run)
 
+    # Outside the session: the parks are committed, so a reply that arrives
+    # immediately finds the job in NEEDS_ANSWER and re-queues it.
+    _escalate_parked(pending_escalations)
+
     log.info("apply_pass_complete", **counts, dry_run=dry_run, errors=len(errors))
     return run
+
+
+def _escalate_parked(escalations: list[tuple[int, str, list[str]]]) -> None:
+    """Ask the user about each parked job. Never lets a send failure end the pass.
+
+    This is the half of the answer-bank loop that turns a parked job into a
+    question the user can actually answer. Without it a job parks and stops
+    there forever, and the bank never self-populates.
+    """
+    if not escalations:
+        return
+
+    from backend.integrations.telegram import escalate_question
+
+    sent = 0
+    for job_id, question, choices in escalations:
+        try:
+            if escalate_question(job_id, question, choices=choices or None):
+                sent += 1
+            else:
+                # send_message already logged why. Loud, not silent: the job
+                # stays parked and nobody has been asked about it.
+                log.warning("escalation_not_delivered", job_id=job_id)
+        except Exception as exc:
+            log.exception("escalation_failed", job_id=job_id, error=str(exc)[:200])
+
+    log.info("escalations_sent", sent=sent, parked=len(escalations))
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
