@@ -1,0 +1,21 @@
+{
+  "platform": "seek",
+  "variant": "quick_apply",
+  "steps": [
+    {
+      "label": "load",
+      "url": "https://au.seek.com/job/123",
+      "html": "\n<html><body>\n  <main>\n    <h1>Data Analyst</h1>\n    <a data-automation=\"job-detail-apply\" href=\"/apply/123\">Quick apply</a>\n  </main>\n</body></html>\n"
+    },
+    {
+      "label": "manual",
+      "url": "https://au.seek.com/apply/123",
+      "html": "\n<html><body>\n  <form>\n    <fieldset>\n      <legend>Your documents</legend>\n      <input type=\"radio\" name=\"resumeMethod\" value=\"upload\" data-automation=\"resume-upload-radio\" id=\"r-up\">\n      <label for=\"r-up\">Upload a new resume</label>\n      <input type=\"file\" name=\"resume\" data-automation=\"resume-file-input\" id=\"resume-file\" accept=\"application/pdf\" required>\n      <textarea name=\"coverLetter\" data-automation=\"coverLetterTextArea\" aria-label=\"Write a cover letter\"></textarea>\n    </fieldset>\n    <button data-automation=\"continue-button\" type=\"button\">Continue</button>\n  </form>\n</body></html>\n"
+    },
+    {
+      "label": "manual",
+      "url": "https://au.seek.com/apply/123/questions",
+      "html": "\n<html><body>\n  <form data-automation=\"questionnaire\">\n    <label for=\"q_1\">Do you have full working rights in Australia?</label>\n    <select id=\"q_1\" name=\"q_1\" required>\n      <option>Select an option</option><option>Yes</option><option>No</option>\n    </select>\n    <label for=\"q_2\">How many years of experience do you have with SQL?</label>\n    <select id=\"q_2\" name=\"q_2\" required>\n      <option>Select an option</option><option>None</option><option>1-2</option><option>3-5</option>\n    </select>\n    <label for=\"start\">Preferred start date</label>\n    <input type=\"date\" id=\"start\" name=\"start\">\n    <button data-automation=\"review-submit-application\">Submit application</button>\n  </form>\n</body></html>\n"
+    }
+  ]
+}
