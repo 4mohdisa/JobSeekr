@@ -31,7 +31,7 @@ home: ``guardrails.check_can_submit``.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -39,8 +39,18 @@ from typing import Any, Protocol, runtime_checkable
 from sqlmodel import Session, select
 
 from backend.apply import guardrails
-from backend.apply.answers import load_answers, resolve_all
+from backend.apply.answers import (
+    Abstain,
+    Answer,
+    load_answers,
+    normalise_question,
+    question_key,
+    resolve_all,
+    resolve_answer,
+)
 from backend.apply.draft import ApplicationDraft, FormField
+from backend.ats.formmaps import fingerprint_fields, record_outcome
+from backend.ats.generic import map_fields
 from backend.base import ApplyOutcome, ApplyResult
 from backend.config import settings
 from backend.logging_setup import get_logger
@@ -172,13 +182,100 @@ def build_draft(
         else:
             screening.append(field)
 
-    bank = load_answers(session, campaign.id if campaign else None)
-    resolved, abstentions = resolve_all(
-        screening, campaign.id if campaign else None, answers=bank
-    )
+    campaign_id = campaign.id if campaign else None
+    bank = load_answers(session, campaign_id)
+    resolved, abstentions = resolve_all(screening, campaign_id, answers=bank)
     draft.answers.update(resolved)
+
+    if abstentions and settings.apply_form_mapping_enabled:
+        draft.form_fingerprint = fingerprint_fields(screening)
+        rescued, abstentions = _resolve_via_form_map(
+            session,
+            [f for f in screening if question_key(f) not in resolved],
+            abstentions,
+            platform=platform,
+            profile=profile,
+            bank=bank,
+            campaign_id=campaign_id,
+        )
+        draft.answers.update(rescued)
+
     draft.abstentions = abstentions
     return draft
+
+
+def _resolve_via_form_map(
+    session: Session,
+    unresolved: list[FormField],
+    abstentions: list[Abstain],
+    *,
+    platform: str,
+    profile: Profile | None,
+    bank: Sequence[Any],
+    campaign_id: int | None,
+) -> tuple[dict[str, Any], list[Abstain]]:
+    """Second pass over the fields nothing deterministic could place.
+
+    The first pass matches labels against ``PROFILE_FIELD_HINTS`` and the
+    answer bank literally. That handles "Email address" and fails on "Best
+    contact e-mail for you" — a field the system knows the answer to and cannot
+    see it knows. This pass asks the model what such a field is *for*, and the
+    answer is cached by form shape, so a given form costs one mapping call ever
+    rather than one per application.
+
+    It maps, it does not answer. A field the model says is a screening question
+    still goes back to the answer bank for its value, so hard rule 2 holds:
+    the bank remains the only source of screening answers, and a field that
+    maps to nothing the bank knows still abstains and still parks the job.
+    """
+    if not unresolved:
+        return {}, abstentions
+
+    mapped = {m.identifier: m for m in map_fields(unresolved, platform=platform, session=session)}
+
+    rescued: dict[str, Any] = {}
+    cleared: set[str] = set()
+
+    for field in unresolved:
+        mapping = mapped.get(field.identifier)
+        if mapping is None or not mapping.usable:
+            continue
+
+        answer = None
+        if mapping.source == "profile" and mapping.profile_path:
+            value = _profile_value(profile, mapping.profile_path.split(".")[-1])
+            if value:
+                answer = _synthetic_answer(field, value)
+        elif mapping.source == "answer_bank" and mapping.question:
+            outcome = resolve_answer(
+                mapping.question,
+                campaign_id,
+                answers=bank,
+                choices=field.choices or None,
+            )
+            if isinstance(outcome, Answer):
+                answer = outcome
+
+        if answer is None:
+            continue
+
+        log.info(
+            "field_resolved_via_form_map",
+            field=field.identifier,
+            source=mapping.source,
+            platform=platform,
+        )
+        rescued[field.label or field.identifier] = answer
+        cleared.add(normalise_question(question_key(field)))
+
+    # Drop only the abstentions actually resolved, and keep everything else.
+    # Written as an exclusion rather than by rebuilding the list from matched
+    # fields on purpose: Abstain.question is normalised, so a lookup that
+    # missed silently dropped the abstention instead of parking the job — the
+    # field vanished from the draft rather than stopping it. Anything this
+    # cannot positively account for stays an abstention.
+    still = [a for a in abstentions if normalise_question(a.question) not in cleared]
+    return rescued, still
 
 
 def _synthetic_answer(field: FormField, value: str):
@@ -237,6 +334,25 @@ def _record(
         )
     job.status = status
     session.add(job)
+
+    # Report back to the form-map cache. Trust graduation is the half of
+    # formmaps that stayed unwired after load/save were connected: without
+    # this, record_outcome is never called, no map ever reaches TRUST_THRESHOLD
+    # and every learned map stays a draft forever. A map is credited only for
+    # an application that actually went in; anything else resets its streak,
+    # because a map that produced a failure has not been shown to work.
+    if draft.form_fingerprint:
+        became_trusted = record_outcome(
+            session,
+            draft.form_fingerprint,
+            success=outcome is ApplicationOutcome.SUBMITTED,
+        )
+        if became_trusted:
+            log.info(
+                "form_map_trusted",
+                fingerprint=draft.form_fingerprint,
+                platform=draft.platform,
+            )
 
 
 def run_apply(

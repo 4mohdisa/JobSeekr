@@ -84,9 +84,17 @@ class Settings(BaseSettings):
     # notice: run ``python -m backend.discovery.verify_seek`` to confirm what
     # actually works from your machine, then correct these in .env without
     # touching code. See NOTES.md.
-    seek_search_url: str = "https://www.seek.com.au/api/chalice-search/v5/search"
-    seek_search_url_fallback: str = "https://www.seek.com.au/api/chalice-search/v4/search"
-    seek_html_search_url: str = "https://www.seek.com.au/jobs"
+    #
+    # Verified live from the user's machine on 2026-09-01. Seek has moved from
+    # www.seek.com.au to au.seek.com (the old host 308-redirects) and the old
+    # chalice-search paths now 404 on the new host. jobsearch/v5 is what the
+    # site's own front end calls, and it answers with the job array under
+    # ``data``. The fallback is the same endpoint on the legacy host, kept only
+    # so a re-run of verify_seek reports on it rather than losing the record.
+    seek_base_url: str = "https://au.seek.com"
+    seek_search_url: str = "https://au.seek.com/api/jobsearch/v5/search"
+    seek_search_url_fallback: str = "https://www.seek.com.au/api/jobsearch/v5/search"
+    seek_html_search_url: str = "https://au.seek.com/jobs"
     seek_site_key: str = "AU-Main"
     seek_source_system: str = "houston"
     seek_locale: str = "en-AU"
@@ -97,6 +105,14 @@ class Settings(BaseSettings):
     discovery_request_delay_seconds: float = 1.5
     # Default incremental window; the 4-hourly schedule overlaps deliberately.
     discovery_default_hours_old: int = 8
+    # First-run backfill. The incremental window above is correct for a
+    # database that is already populated and wrong for one that is empty: on a
+    # fresh install it asks three boards for the last eight hours and stores
+    # almost nothing, with no visible reason why. When the jobs table is below
+    # the threshold and no window was asked for explicitly, discovery widens to
+    # the backfill window once and says so in the log.
+    discovery_backfill_hours: int = 720
+    discovery_backfill_threshold: int = 25
 
     # --------------------------------------------------------------- scoring
     # Stage 2 (the expensive one) only ever sees this many jobs per campaign.
@@ -146,6 +162,14 @@ class Settings(BaseSettings):
     browser_headless: bool = False
 
     # ----------------------------------------------------------------- apply
+    # Second-pass form mapping. When the deterministic path cannot place a
+    # field — no profile hint matched, no answer-bank entry matched — ask the
+    # model where the field's value comes from, and cache that answer by form
+    # shape so a given form is only ever mapped once. Costs an LLM call the
+    # first time a new form shape is seen and nothing thereafter; turn it off
+    # to keep the apply path entirely deterministic and free.
+    apply_form_mapping_enabled: bool = True
+
     apply_window_start: str = "09:00"
     apply_window_end: str = "17:00"
     apply_min_interval_floor_seconds: int = 90
@@ -158,6 +182,10 @@ class Settings(BaseSettings):
     pdflatex_path: str = "pdflatex"
     # Two passes so LaTeX resolves its own references.
     latex_passes: int = 2
+    # Per-pass wall clock. Generous because a cold MiKTeX may legitimately be
+    # downloading a package on the first build; the timeout is enforced by
+    # killing the whole process tree, so overshooting it costs nothing.
+    latex_timeout_seconds: int = 180
 
     # -------------------------------------------------------------- telegram
     telegram_bot_token: str | None = None

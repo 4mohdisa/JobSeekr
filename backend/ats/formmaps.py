@@ -85,6 +85,11 @@ class FieldMapping:
     source: str = "unknown"
     #: The exact answer-bank question to resolve, when source is "answer_bank".
     question: str | None = None
+    #: Which profile field, when source is "profile" — e.g. "profile.email".
+    #: Without this a cached map knows a field wants *some* profile value but
+    #: not which one, so restoring it from cache would lose the mapping that
+    #: made it useful and force the LLM call the cache exists to avoid.
+    profile_path: str = ""
     required: bool = False
     step: int = 0
     #: Last-resort locator. Tried only after semantic resolution fails.

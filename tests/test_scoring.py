@@ -275,7 +275,19 @@ def test_the_shipped_default_meets_the_cost_target():
     output alone. That was arithmetic rather than tuning, and the fix was to
     stop paying Opus rates for classification.
     """
-    default = estimate_cost(200)
+    # Priced from the defaults declared in backend/config.py, not from the
+    # ambient settings object. Read live, this asserted on whatever the
+    # developer's .env happened to say, so it went red on a machine that had
+    # simply copied .env.example — testing the local file rather than the
+    # shipped configuration it names.
+    from backend.config import Settings
+
+    shipped = Settings(_env_file=None)
+    default = estimate_cost(
+        200,
+        scoring_model=shipped.llm_model_scoring,
+        embedding_model=shipped.llm_model_embedding,
+    )
 
     assert default["scoring_model"].startswith("gemini/")
     assert default["meets_target"] is True, default

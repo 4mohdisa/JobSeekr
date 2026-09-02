@@ -46,6 +46,23 @@ __all__ = ["SeekSource", "parse_json_payload", "parse_jsonld", "parse_page_state
 
 _SOURCE = "seek"
 
+# Where the job array lives, most specific first. Dotted, so one list covers
+# both the JSON API (``data``) and the page-state blob (``results.results.jobs``).
+_RECORD_PATHS: tuple[str, ...] = (
+    "data",
+    "results.results.jobs",
+    "results.jobs",
+    "jobs",
+    "results",
+    "items",
+    "hits",
+    "searchResults.data",
+    "searchResults.jobs",
+    "searchResults.results",
+    "props.data",
+    "props.jobs",
+)
+
 # Tolerant field lookup: the same value has been seen under several spellings
 # across Seek's payload versions, so each field names every plausible key.
 _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
@@ -60,6 +77,10 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
         "hiringOrganization.name",
     ),
     "location": (
+        # What the live jobsearch/v5 payload actually uses: a list of location
+        # objects. Verified 2026-09-01 — without this every job came back with
+        # location None, because none of the singular spellings below matched.
+        "locations.0.label",
         "location",
         "locationLabel",
         "jobLocation.label",
@@ -81,11 +102,20 @@ _FIELD_ALIASES: dict[str, tuple[str, ...]] = {
 
 
 def _dig(payload: dict[str, Any], path: str) -> Any:
-    """Read a dotted path without raising on a missing or wrongly typed level."""
+    """Read a dotted path without raising on a missing or wrongly typed level.
+
+    A numeric segment indexes a list, so ``locations.0.label`` reaches into the
+    list-of-objects shape Seek actually returns.
+    """
     node: Any = payload
     for part in path.split("."):
         if isinstance(node, dict):
             node = node.get(part)
+        elif isinstance(node, list):
+            if not part.isdigit():
+                return None
+            index = int(part)
+            node = node[index] if index < len(node) else None
         else:
             return None
         if node is None:
@@ -141,11 +171,25 @@ def _record_to_rawjob(record: dict[str, Any]) -> RawJob | None:
         log.debug("seek_record_unmappable", keys=sorted(record)[:12])
         return None
 
-    url = _as_text(_first(record, "url")) or f"https://www.seek.com.au/job/{job_id}"
+    # Search records carry no url of their own — it is built from the id. Uses
+    # the configured base so it points at the live host directly instead of
+    # taking a redirect on every fetch.
+    base = settings.seek_base_url.rstrip("/")
+    url = _as_text(_first(record, "url")) or f"{base}/job/{job_id}"
     if url.startswith("/"):
-        url = f"https://www.seek.com.au{url}"
+        url = f"{base}{url}"
 
     description = _as_text(_first(record, "description"))
+    # The teaser is one sentence. bulletPoints carries the actual requirements
+    # and is the only substantive text a search record has, so scoring gets a
+    # far better signal when both are kept.
+    bullets = record.get("bulletPoints")
+    if isinstance(bullets, list):
+        lines = [b.strip() for b in bullets if isinstance(b, str) and b.strip()]
+        if lines:
+            joined = "\n".join(f"- {line}" for line in lines)
+            description = f"{description}\n\n{joined}" if description else joined
+
     salary_text = _as_text(_first(record, "salary"))
     if salary_text and description:
         # Keep the salary label with the body so normalise can read it.
@@ -173,23 +217,30 @@ def _record_to_rawjob(record: dict[str, Any]) -> RawJob | None:
 
 
 def parse_json_payload(payload: dict[str, Any]) -> list[RawJob]:
-    """Pull records out of a search response without assuming the envelope."""
+    """Pull records out of a search response without assuming the envelope.
+
+    One list of dotted paths rather than two hand-rolled loops, so the JSON API
+    and the page-state blob are read by the same code. ``results.results.jobs``
+    is the redux store the search page embeds: its ``results`` key is a *dict*,
+    which the previous top-level-only scan skipped, so the HTML fallback logged
+    "shape unknown" and recovered nothing.
+    """
     records: Iterable[Any] | None = None
-    for key in ("data", "jobs", "results", "items", "hits"):
-        candidate = payload.get(key)
-        if isinstance(candidate, list):
+    matched_empty = False
+    for path in _RECORD_PATHS:
+        candidate = _dig(payload, path)
+        if not isinstance(candidate, list):
+            continue
+        if candidate:
             records = candidate
             break
+        # A real search that matched nothing. Keep looking in case another
+        # path holds the real list, but do not report the shape as unknown.
+        matched_empty = True
+
     if records is None:
-        nested = payload.get("searchResults") or payload.get("props") or {}
-        if isinstance(nested, dict):
-            for key in ("data", "jobs", "results", "items"):
-                candidate = nested.get(key)
-                if isinstance(candidate, list):
-                    records = candidate
-                    break
-    if records is None:
-        log.warning("seek_payload_shape_unknown", top_level_keys=sorted(payload)[:15])
+        if not matched_empty:
+            log.warning("seek_payload_shape_unknown", top_level_keys=sorted(payload)[:15])
         return []
 
     out: list[RawJob] = []
@@ -275,7 +326,7 @@ def parse_jsonld(html: str) -> list[RawJob]:
                 RawJob(
                     source=_SOURCE,
                     source_job_id=str(job_id),
-                    url=url or f"https://www.seek.com.au/job/{job_id}",
+                    url=url or f"{settings.seek_base_url.rstrip('/')}/job/{job_id}",
                     title=str(block["title"]),
                     company=str((hiring or {}).get("name") or "Unknown"),
                     location=" ".join(

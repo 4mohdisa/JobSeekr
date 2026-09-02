@@ -98,6 +98,13 @@ class ParseReport(BaseModel):
     path: str
     pages: int = 0
     extracted_chars: int = 0
+    extracted_text: str = ""
+    """Exactly what came out of the PDF — what an ATS reads.
+
+    Kept, not just counted. Downstream needs the cover letter's text to paste
+    into a textarea and to check the letter is real, and re-extracting it later
+    would risk reading a different file than the one that passed the gate.
+    """
     checks: list[CheckResult] = Field(default_factory=list)
 
     @property
@@ -120,6 +127,30 @@ class ParseReport(BaseModel):
 # The suite missed it because its fixture profile was written around the canary
 # list ("Efficient financial reporting...") rather than the other way round.
 _LATEX_COMMENT = re.compile(r"(?<!\\)%.*")
+
+_MONTHS = (
+    "January|February|March|April|May|June|July|August|September|October"
+    "|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sept|Sep|Oct|Nov|Dec"
+)
+
+# Dates as any template is likely to render them: "01 September 2026",
+# "1 Sep 2026", "2026-09-01", "01/09/2026".
+#
+# The year is OPTIONAL after a month name, because the contact line can wrap:
+# a slightly longer address pushes "2026" onto the next extracted line, leaving
+# "... Adelaide SA 01 September" behind. That is just as corrupt a location
+# field, and requiring the full date silently missed it.
+#
+# Month names are spelled out rather than matched as [A-Z][a-z]+, which would
+# make "12 Regent Street" — a legitimate contact line — look like a date. A
+# bare year is likewise not matched: "Adelaide SA 5000" postcodes and company
+# names carrying years are normal contact-line content.
+_DATE_ON_CONTACT_LINE = re.compile(
+    rf"\b(?:\d{{1,2}}\s+(?:{_MONTHS})\b"
+    rf"|(?:{_MONTHS})\s+\d{{1,2}}\b"
+    rf"|\d{{4}}-\d{{2}}-\d{{2}}"
+    rf"|\d{{1,2}}/\d{{1,2}}/\d{{2,4}})\b"
+)
 
 
 def _strip_latex_comments(source: str) -> str:
@@ -381,6 +412,48 @@ def verify_pdf(
             )
         )
 
+    # 6b — nothing else shares the contact line
+    #
+    # An ATS reads the contact block positionally: the line carrying the email
+    # is where it expects to find the phone and the location, and it takes the
+    # trailing run of that line as the location. Anything else landing on that
+    # line is silently absorbed into a field the employer then filters on.
+    #
+    # This is not hypothetical. The cover letter template put the date in its
+    # own paragraph, but Jinja runs with trim_blocks=True, which eats the
+    # newline after \BLOCK{endif} and so consumed the blank line separating
+    # them. LaTeX joined the two into one paragraph and every cover letter
+    # extracted as "... Adelaide SA 01 September 2026" — a location field with
+    # a date stapled to it. All eight checks passed.
+    if expect.email:
+        # Every line carrying the email, not just the first. combined.pdf holds
+        # the resume's contact block *and* the cover letter's, and it is the
+        # artifact used wherever a form has a single attachment slot — checking
+        # only the first match passed the contaminated cover-letter page.
+        contact_lines = [
+            line
+            for line in text.splitlines()
+            if _normalise(expect.email) in _normalise(line)
+        ]
+        contaminated = [
+            (line, match)
+            for line, match in (
+                (line, _DATE_ON_CONTACT_LINE.search(line)) for line in contact_lines
+            )
+            if match is not None
+        ]
+        checks.append(
+            CheckResult(
+                name="contact_line_uncontaminated",
+                passed=not contaminated,
+                detail=(
+                    f"date {contaminated[0][1].group(0)!r} shares a contact line: {contaminated[0][0]!r}"
+                    if contaminated
+                    else f"{len(contact_lines)} contact line(s) carry contact details only"
+                ),
+            )
+        )
+
     # 7 — page limits
     limit = PAGE_LIMITS.get(kind)
     if limit:
@@ -443,6 +516,7 @@ def verify_pdf(
         path=str(path),
         pages=pages,
         extracted_chars=len(text.strip()),
+        extracted_text=text.strip(),
         checks=checks,
     )
 

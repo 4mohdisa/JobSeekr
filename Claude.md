@@ -21,8 +21,9 @@ Runs in the user's logged-in desktop session. No cloud, no auth, no deployment.
 
 ## Working style
 
-Never schedule recurring check-ins. If something is waiting on the user, say so
-once and stop. Do not poll.
+Never schedule recurring check-ins, timers, or polling. If something
+waits on the user, say it once and stop.
+Never retry a failing operation more than 3 times.
 
 ---
 
@@ -111,6 +112,7 @@ uv run python -m backend.scoring.run
 uv run python -m backend.documents.build --job-id N
 uv run python -m backend.apply.run --dry-run
 uv run python -m backend.apply.session login
+uv run python -m backend.rehearsal
 uv run pytest
 alembic upgrade head
 ```

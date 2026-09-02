@@ -40,6 +40,7 @@ __all__ = [
     "coerce_to_choices",
     "load_answers",
     "normalise_question",
+    "question_key",
     "resolve_all",
     "resolve_answer",
 ]
@@ -689,6 +690,19 @@ def resolve_answer(
     )
 
 
+def question_key(item: Any) -> str:
+    """The string a question is filed under, for both resolution and abstention.
+
+    Callers need to match an :class:`Abstain` back to the field that produced
+    it, which only works if they derive the key the same way this module does.
+    Exported so that logic lives in one place rather than being reimplemented
+    slightly differently at the call site.
+    """
+    if isinstance(item, str):
+        return item
+    return getattr(item, "label", None) or getattr(item, "text", "") or str(item)
+
+
 def resolve_all(
     questions: Sequence[Any],
     campaign_id: int | None = None,
@@ -708,11 +722,8 @@ def resolve_all(
     abstentions: list[Abstain] = []
 
     for item in questions:
-        if isinstance(item, str):
-            label, choices = item, None
-        else:
-            label = getattr(item, "label", None) or getattr(item, "text", "") or str(item)
-            choices = getattr(item, "choices", None)
+        label = question_key(item)
+        choices = None if isinstance(item, str) else getattr(item, "choices", None)
 
         outcome = resolve_answer(label, campaign_id, answers=answers, choices=choices)
         if isinstance(outcome, Abstain):

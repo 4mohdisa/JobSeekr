@@ -1,7 +1,13 @@
 [project]
 name = "jobseekr"
 version = "0.1.0"
-requires-python = ">=3.11"
+# Pinned to 3.12.x, not ">=3.12". python-jobspy 1.1.82 hard-pins numpy==1.26.3,
+# whose last supported interpreter is 3.12 — there is no cp313 or cp314 wheel.
+# On 3.14 numpy dies at import ("cannot convert longdouble infinity to integer"
+# computing float128 limits), which took LinkedIn and Indeed discovery down
+# while Seek was unaffected. An upper bound states that rather than letting a
+# future `uv sync` silently resolve onto an interpreter jobspy cannot run on.
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1.19.1",
     "apscheduler>=3.11.3",

@@ -29,7 +29,7 @@ from backend.apply.session import SessionExpired, is_logged_in, launch_context
 from backend.base import ApplyOutcome
 from backend.boards import applier_boards
 from backend.config import settings
-from backend.db import session_scope
+from backend.db import persist_detached, session_scope
 from backend.logging_setup import configure_logging, get_logger
 from backend.models import (
     Application,
@@ -259,9 +259,7 @@ def run_apply_pass(
             errors=errors,
             ok=not errors,
         )
-        session.add(run)
-        session.flush()
-        session.refresh(run)
+        persist_detached(session, run)
 
     log.info("apply_pass_complete", **counts, dry_run=dry_run, errors=len(errors))
     return run

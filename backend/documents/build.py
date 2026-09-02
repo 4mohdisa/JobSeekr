@@ -25,8 +25,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import shutil
+import signal
 import subprocess
+import tempfile
+from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -343,6 +347,90 @@ def generate_ai_slots(
 
 _AUX_SUFFIXES = (".aux", ".log", ".out", ".fls", ".fdb_latexmk", ".synctex.gz", ".toc")
 
+# pdflatex gets its own process group / session on POSIX so the whole group can
+# be signalled at once. On Windows the equivalent is taskkill /T, which walks
+# the parent-child tree and needs no creation flag.
+_NEW_PROCESS_GROUP: dict[str, Any] = {} if os.name == "nt" else {"start_new_session": True}
+
+
+def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
+    """Kill the process *and everything it spawned*.
+
+    ``process.kill()`` only kills the direct child. MiKTeX's pdflatex spawns a
+    package installer, so killing pdflatex alone leaves that installer running.
+    """
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/T", "/F", "/PID", str(process.pid)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=30,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            log.warning("pdflatex_taskkill_failed", pid=process.pid)
+    else:
+        with suppress(OSError):
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    with suppress(OSError):
+        process.kill()
+
+
+def _run_pdflatex(argv: list[str], timeout: int) -> tuple[int, str]:
+    """Run pdflatex under a timeout that actually holds, and return (rc, output).
+
+    Two deliberate choices, both learned from a run that hung for hours on a
+    cold MiKTeX despite passing ``timeout=`` to ``subprocess.run``:
+
+    **Output goes to a file, never a pipe.** ``subprocess.run(capture_output=
+    True, timeout=N)`` is not safe here. pdflatex spawns MiKTeX's package
+    installer on first use of a package, and that grandchild *inherits the
+    stdout and stderr pipe handles*. When the timeout fires, ``run`` kills
+    pdflatex — but not the installer — and then calls ``communicate()`` again
+    with no timeout to drain the pipes. Those pipes never reach EOF, because
+    the surviving installer still holds the write end. The documented timeout
+    therefore provides no protection whatsoever, and the build blocks forever.
+    Redirecting to a real file removes the deadlock at the root: there are no
+    reader threads and no inherited pipe ends, so ``wait()`` returns the moment
+    pdflatex itself exits, whatever its children are doing.
+
+    **stdin is closed.** ``-interaction=nonstopmode`` covers LaTeX's own error
+    prompts, but not everything that can ask a question — a package installer
+    reading from the console will block on a terminal that never answers.
+    DEVNULL turns any such read into an immediate EOF.
+    """
+    # Binary mode on purpose: the log carries non-ASCII from package banners and
+    # file names, and decoding is done explicitly below rather than by the
+    # locale (cp1252 on Windows).
+    with tempfile.TemporaryFile(prefix="pdflatex-", suffix=".log") as console:
+        process = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=console,
+            stderr=subprocess.STDOUT,
+            **_NEW_PROCESS_GROUP,
+        )
+        try:
+            returncode = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_process_tree(process)
+            with suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=30)
+            console.seek(0)
+            tail = console.read().decode("utf-8", errors="replace")[-600:]
+            log.error("pdflatex_timeout", timeout_seconds=timeout, tail=tail)
+            raise DocumentBuildError(
+                f"pdflatex timed out after {timeout}s and was killed. If this is "
+                "a fresh MiKTeX, it was probably fetching a package: run "
+                "`initexmf --set-config-value \"[MPM]AutoInstall=1\"` so it "
+                f"installs without prompting. Last output:\n{tail}"
+            ) from None
+
+        console.seek(0)
+        return returncode, console.read().decode("utf-8", errors="replace")
+
 
 def render_pdf(tex_source: str, out_dir: Path, stem: str) -> Path:
     """Write .tex, run pdflatex twice, clean up, return the PDF path.
@@ -358,7 +446,7 @@ def render_pdf(tex_source: str, out_dir: Path, stem: str) -> Path:
     last_output = ""
     for pass_number in range(1, max(1, settings.latex_passes) + 1):
         try:
-            completed = subprocess.run(
+            returncode, last_output = _run_pdflatex(
                 [
                     settings.pdflatex_path,
                     "-interaction=nonstopmode",
@@ -367,29 +455,15 @@ def render_pdf(tex_source: str, out_dir: Path, stem: str) -> Path:
                     f"-output-directory={out_dir}",
                     str(tex_path),
                 ],
-                capture_output=True,
-                text=True,
-                # Decode pdflatex's output as UTF-8 explicitly. Without this,
-                # `text=True` uses the locale encoding — cp1252 on a typical
-                # Windows install — and one non-cp1252 byte in the log (an
-                # em-dash in a filename, a package's copyright line) raises
-                # UnicodeDecodeError. The build would then fail with a decoding
-                # error instead of the LaTeX error that actually happened.
-                encoding="utf-8",
-                errors="replace",
-                timeout=120,
-                check=False,
+                timeout=settings.latex_timeout_seconds,
             )
         except FileNotFoundError as exc:
             raise DocumentBuildError(
                 f"pdflatex not found at {settings.pdflatex_path!r}. "
                 "Install MiKTeX (Windows) or set PDFLATEX_PATH."
             ) from exc
-        except subprocess.TimeoutExpired as exc:
-            raise DocumentBuildError("pdflatex timed out after 120s") from exc
 
-        last_output = completed.stdout + completed.stderr
-        if completed.returncode != 0:
+        if returncode != 0:
             errors = [
                 line
                 for line in last_output.splitlines()
@@ -591,13 +665,25 @@ def build_documents(
         report = verify_pdf(path, kind=kind.value, expect=expectations[kind])
         result.reports[kind.value] = report
 
+        stored_report = report.model_dump()
+        if kind is DocumentKind.COVER_LETTER:
+            # The key three readers expect and nothing produced: the guardrail
+            # that checks the letter is real, the dashboard review screen, and
+            # Seek's cover-letter textarea all read
+            # parse_report["cover_letter_text"]. Nothing ever wrote it, so
+            # cover_letter_clean failed on every application and the textarea
+            # would have been filled with an empty string. The unit tests missed
+            # it because their fixtures set the key by hand, which encoded the
+            # expectation without ever checking the producer met it.
+            stored_report["cover_letter_text"] = report.extracted_text
+
         document = Document(
             job_id=job_id,
             kind=kind,
             path=str(path),
             sha256=_sha256(path),
             parse_check_passed=report.passed,
-            parse_report=report.model_dump(),
+            parse_report=stored_report,
             template_version=version,
         )
         session.add(document)

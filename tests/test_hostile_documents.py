@@ -25,7 +25,6 @@ the intended strings — every string, not a sample.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 import pytest
@@ -46,11 +45,7 @@ from backend.documents.verify import (
     verify_pdf,
 )
 from backend.models import Job, Profile
-
-needs_pdflatex = pytest.mark.skipif(
-    shutil.which("pdflatex") is None, reason="pdflatex not installed"
-)
-
+from tests.conftest import needs_pdflatex
 
 # =========================================================================
 # Corpus 1 — characters LaTeX treats as syntax
