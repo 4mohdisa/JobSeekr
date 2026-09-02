@@ -28,6 +28,8 @@ from backend.models import (
 
 __all__ = [
     "AnalyticsBucket",
+    "PreferenceIn",
+    "PreferenceOut",
     "AnalyticsResponse",
     "AnswerIn",
     "AnswerOut",
@@ -382,3 +384,38 @@ class ControlState(BaseModel):
     stopped: bool
     stop_file: str
     reason: str | None = None
+
+
+class PreferenceOut(BaseModel):
+    """One learned or stated preference, with where it came from.
+
+    ``source`` and ``status`` are shown in the UI, not hidden implementation
+    detail: the point of the page is that the user can see what the system
+    decided for itself and undo it.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    key: str
+    value: str
+    value_type: str
+    scope: str
+    campaign_id: int | None
+    source: str
+    status: str
+    confidence: float
+    times_confirmed: int
+    times_ignored: int
+    evidence: str | None
+    learned_at: datetime
+    confirmed_at: datetime | None
+
+
+class PreferenceIn(BaseModel):
+    """A preference the user sets by hand. Always user_set, never inferred."""
+
+    key: str = Field(min_length=1, max_length=200)
+    value: str = Field(max_length=2000)
+    value_type: AnswerType = AnswerType.TEXT
+    campaign_id: int | None = None

@@ -24,7 +24,7 @@ from typing import Any
 from sqlmodel import select
 
 from backend.config import settings
-from backend import failures
+from backend import failures, preferences
 from backend.db import session_scope
 from backend.integrations.notify import Priority, set_sender
 from backend.logging_setup import configure_logging, get_logger
@@ -243,6 +243,14 @@ def build_digest(*, hours: int = 24) -> str:
     with session_scope() as session:
         lines.extend(failures.digest_lines(session))
 
+        # Proposals batch here rather than interrupting when they are inferred:
+        # an inference is never urgent, and a message the moment a fifth skip
+        # lands is how this channel becomes one the user mutes. sweep_ignored
+        # first, so a proposal nobody answered ages out instead of reappearing
+        # forever.
+        preferences.sweep_ignored(session)
+        lines.extend(preferences.digest_lines(session))
+
     from backend.llm.client import budget_status
 
     spend = budget_status()
@@ -406,12 +414,41 @@ def _cmd_digest(_: str) -> str:
     return build_digest()
 
 
+def _cmd_yes(argument: str) -> str:
+    """Confirm a proposed preference. Only this makes an inference take effect."""
+    return _decide_preference(argument, confirm=True)
+
+
+def _cmd_no(argument: str) -> str:
+    """Reject a proposed preference, and stop it being proposed again."""
+    return _decide_preference(argument, confirm=False)
+
+
+def _decide_preference(argument: str, *, confirm: bool) -> str:
+    identifier = argument.strip().split()[0] if argument.strip() else ""
+    if not identifier.isdigit():
+        return "Usage: /yes <id> or /no <id> — the id is in the digest line."
+
+    with session_scope() as session:
+        row = (
+            preferences.confirm(session, int(identifier))
+            if confirm
+            else preferences.reject(session, int(identifier))
+        )
+        if row is None:
+            return f"No preference {identifier}."
+        verb = "Active" if confirm else "Rejected"
+        return f"{verb}: {row.key} = {row.value}"
+
+
 COMMANDS = {
     "/stop": _cmd_stop,
     "/resume": _cmd_resume,
     "/status": _cmd_status,
     "/answer": _cmd_answer,
     "/digest": _cmd_digest,
+    "/yes": _cmd_yes,
+    "/no": _cmd_no,
 }
 
 
@@ -421,7 +458,10 @@ def handle_command(text: str) -> str:
     command, _, argument = text.partition(" ")
     handler = COMMANDS.get(command.split("@")[0].lower())
     if handler is None:
-        return "Commands: /stop [campaign] · /resume [campaign] · /status · /answer · /digest"
+        return (
+            "Commands: /stop [campaign] · /resume [campaign] · /status · "
+            "/answer · /digest · /yes <id> · /no <id>"
+        )
     try:
         return handler(argument)
     except Exception as exc:

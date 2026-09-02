@@ -676,6 +676,7 @@ def _run_apply(
         readback=draft.attachment_readback,
         status=JobStatus.APPLIED,
     )
+    _remember_observed_fields(session, draft)
     log.info(
         "application_submitted",
         job_id=job.id,
@@ -697,6 +698,35 @@ def _run_apply(
 # Helpers
 # --------------------------------------------------------------------------
 
+
+
+def _remember_observed_fields(session: Session, draft: ApplicationDraft) -> None:
+    """Propose preferences from the plain fields on an accepted application.
+
+    Only after a confirmed submit: a value the employer never received is not
+    evidence of anything. Only non-question fields — a screening question's
+    answer belongs to the answer bank, which already owns that loop, and
+    duplicating it here would give one answer two homes that could disagree.
+
+    Everything written is a PROPOSAL. `preferences.observed_field` additionally
+    refuses fact-shaped keys outright, so a start date or a licence seen on a
+    form never becomes an inferred claim about the user.
+    """
+    from backend import preferences
+
+    for field_ in draft.fields:
+        if field_.choices or (field_.label or "").strip().endswith("?"):
+            continue  # a screening question; the answer bank owns it
+        answer = draft.answers.get(field_.identifier)
+        value = getattr(answer, "value", None)
+        if not value:
+            continue
+        try:
+            preferences.observed_field(
+                session, key=field_.label or field_.identifier, value=value
+            )
+        except Exception as exc:  # noqa: BLE001 - never fail a sent application
+            log.debug("observed_field_skipped", error=str(exc)[:120])
 
 def _restricted(adapter: Adapter, page: Any) -> bool:
     """Whether the platform is showing an account-restriction interstitial.

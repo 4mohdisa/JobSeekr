@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
+from backend import preferences
 from backend.api.schemas import (
     AnswerIn,
     AnswerOut,
@@ -22,6 +23,8 @@ from backend.api.schemas import (
     CampaignOut,
     ControlState,
     PlaceholderIssueOut,
+    PreferenceIn,
+    PreferenceOut,
     ProfileIn,
     ProfileOut,
     SettingsIn,
@@ -36,6 +39,8 @@ from backend.logging_setup import get_logger
 from backend.models import (
     AnswerBank,
     Application,
+    Preference,
+    PreferenceSource,
     ApplicationOutcome,
     Campaign,
     Job,
@@ -52,6 +57,7 @@ answers_router = APIRouter(prefix="/answers", tags=["answers"])
 templates_router = APIRouter(prefix="/templates", tags=["templates"])
 settings_router = APIRouter(prefix="/settings", tags=["settings"])
 control_router = APIRouter(prefix="/control", tags=["control"])
+preferences_router = APIRouter(prefix="/preferences", tags=["preferences"])
 
 
 # ==========================================================================
@@ -541,3 +547,82 @@ def health_summary(session: Session = Depends(get_session)) -> dict[str, Any]:
         "spend": budget_status(),
         "circuit_breakers": breaker_status(),
     }
+
+
+# ==========================================================================
+# Preferences — what the system learned, and the user's veto over it
+# ==========================================================================
+
+
+@preferences_router.get("", response_model=list[PreferenceOut])
+def list_preferences(
+    status: str | None = None,
+    session: Session = Depends(get_session),
+) -> list[Preference]:
+    """Everything learned or stated, newest first.
+
+    Proposals are included by default and carry ``status="proposed"``. The page
+    exists so the user can see what the system decided for itself, which means
+    it has to show the things that have not taken effect yet.
+    """
+    rows = list(
+        session.exec(select(Preference).order_by(Preference.learned_at.desc())).all()  # type: ignore[union-attr]
+    )
+    if status:
+        rows = [row for row in rows if row.status.value == status]
+    return rows
+
+
+@preferences_router.post("", response_model=PreferenceOut, status_code=201)
+def create_preference(
+    payload: PreferenceIn, session: Session = Depends(get_session)
+) -> Preference:
+    """Set a preference by hand. Always ``user_set`` — the user is the source.
+
+    This is also the only route by which a fact-shaped key gets a value, which
+    is the whole point: ``preferences.set`` refuses to infer one.
+    """
+    row = preferences.set(
+        session,
+        key=payload.key,
+        value=payload.value,
+        source=PreferenceSource.USER_SET,
+        value_type=payload.value_type,
+        campaign_id=payload.campaign_id,
+    )
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+@preferences_router.post("/{preference_id}/confirm", response_model=PreferenceOut)
+def confirm_preference(
+    preference_id: int, session: Session = Depends(get_session)
+) -> Preference:
+    row = preferences.confirm(session, preference_id)
+    if row is None:
+        raise HTTPException(404, "no such preference")
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+@preferences_router.post("/{preference_id}/reject", response_model=PreferenceOut)
+def reject_preference(
+    preference_id: int, session: Session = Depends(get_session)
+) -> Preference:
+    row = preferences.reject(session, preference_id)
+    if row is None:
+        raise HTTPException(404, "no such preference")
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+@preferences_router.delete("/{preference_id}", status_code=204)
+def delete_preference(preference_id: int, session: Session = Depends(get_session)) -> None:
+    row = session.get(Preference, preference_id)
+    if row is None:
+        raise HTTPException(404, "no such preference")
+    session.delete(row)
+    session.commit()

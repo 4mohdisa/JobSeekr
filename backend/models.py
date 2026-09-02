@@ -175,6 +175,46 @@ class RunPhase(str, Enum):
     MAINTENANCE = "maintenance"
 
 
+class PreferenceScope(str, Enum):
+    """How widely a preference applies."""
+
+    GLOBAL = "global"
+    CAMPAIGN = "campaign"
+
+
+class PreferenceSource(str, Enum):
+    """Where a preference came from. This is a safety boundary, not metadata.
+
+    ``INFERRED`` is the only one the system may write on its own, and an
+    inferred preference is a *proposal* — it changes nothing until the user
+    confirms it over Telegram. See ``backend/preferences.py``.
+    """
+
+    USER_SET = "user_set"
+    """The user stated it directly, in the UI."""
+
+    ASKED = "asked"
+    """The system asked and the user answered."""
+
+    INFERRED = "inferred"
+    """Derived from observed behaviour. A proposal until confirmed."""
+
+
+class PreferenceStatus(str, Enum):
+    """Where a proposal is in its life.
+
+    Only ``ACTIVE`` preferences affect behaviour. A proposal sits in
+    ``PROPOSED`` until the user says yes; ignoring it twice retires it, because
+    a question the user has silently declined twice is a question that should
+    stop arriving.
+    """
+
+    ACTIVE = "active"
+    PROPOSED = "proposed"
+    REJECTED = "rejected"
+    RETIRED = "retired"
+
+
 class FailureType(str, Enum):
     """What kind of failure a FailureEvent records.
 
@@ -617,6 +657,61 @@ class FailureEvent(SQLModel, table=True):
     occurred_at: datetime = Field(default_factory=utcnow, index=True)
     resolved_at: datetime | None = None
     resolution: str | None = None
+
+
+class Preference(SQLModel, table=True):
+    """What the user prefers, learned or told. Key-value, never dynamic columns.
+
+    KEY-VALUE, DELIBERATELY
+        A system that adds a column whenever it learns something cannot be
+        migrated and cannot be reasoned about: the schema becomes a function of
+        the user's history, every deployment has a different one, and no
+        migration can be written ahead of time. Rows are boring and boring is
+        the point.
+
+        ``value_type`` carries what the string means, so a reader coerces
+        rather than guesses.
+
+    SOURCE IS A SAFETY BOUNDARY
+        ``source`` is not provenance trivia. Facts about the user — work
+        rights, licences, certifications, dates — may only ever be ``USER_SET``
+        or ``ASKED``, and never ``INFERRED``: hard rule 1 says facts come from
+        the profile verbatim or not at all, and an inferred fact is a fabricated
+        one however good the evidence looked. ``preferences.set`` enforces it.
+
+    A PROPOSAL IS NOT A PREFERENCE
+        An inferred row is written with ``status=PROPOSED`` and does not affect
+        behaviour. Only the user's confirmation makes it ``ACTIVE``.
+    """
+
+    __tablename__ = "preference"
+    __table_args__ = (
+        # One row per key per scope. Without this the same preference could be
+        # learned twice with different values and reads would depend on order.
+        UniqueConstraint("key", "campaign_id", name="uq_preference_key_scope"),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    key: str = Field(index=True)
+    value: str
+    value_type: AnswerType = Field(sa_column=_enum_column(AnswerType))
+    scope: PreferenceScope = Field(sa_column=_enum_column(PreferenceScope))
+    campaign_id: int | None = Field(default=None, foreign_key="campaign.id", index=True)
+
+    source: PreferenceSource = Field(sa_column=_enum_column(PreferenceSource))
+    status: PreferenceStatus = Field(sa_column=_enum_column(PreferenceStatus))
+
+    confidence: float = 0.0
+    times_confirmed: int = 0
+    times_ignored: int = 0
+    """Proposals the user did not answer. Two and it retires itself."""
+
+    evidence: str | None = None
+    """Why this was proposed, in the user's terms — shown when asking."""
+
+    learned_at: datetime = Field(default_factory=utcnow)
+    last_asked_at: datetime | None = None
+    confirmed_at: datetime | None = None
 
 
 class LLMSpend(SQLModel, table=True):
