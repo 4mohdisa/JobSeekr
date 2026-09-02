@@ -30,6 +30,8 @@ from urllib.parse import urlparse
 
 from backend.base import RawJob, SourceUnavailable
 from backend.config import settings
+from backend.models import Region
+from backend.regions import config_for
 from backend.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -136,7 +138,11 @@ def _salary(row: Any) -> tuple[float | None, float | None, str | None]:
 
 
 def dataframe_to_rawjobs(
-    frame: Any, *, site: str, easy_apply_only: bool = False
+    frame: Any,
+    *,
+    site: str,
+    easy_apply_only: bool = False,
+    region: Region = Region.AU,
 ) -> list[RawJob]:
     """Convert a jobspy DataFrame into RawJobs, skipping anything unusable."""
     out: list[RawJob] = []
@@ -168,6 +174,12 @@ def dataframe_to_rawjobs(
                 title=title,
                 company=_text(row, "company") or "Unknown",
                 location=_text(row, "location"),
+                # jobspy gives no country code per row, so the search's own
+                # region is the best available evidence — unlike Seek, where the
+                # ad states it. Recorded so a salary figure still carries a
+                # currency rather than silently defaulting to the campaign's.
+                region=region.value,
+                salary_currency=config_for(region).currency,
                 description=_text(row, "description"),
                 salary_min=low,
                 salary_max=high,
@@ -242,11 +254,14 @@ class JobSpySource:
         *,
         easy_apply_only: bool = False,
         fetch_description: bool = True,
+        region: Region | str = Region.AU,
     ) -> None:
         self.name = site
         self.site = site
         self.easy_apply_only = easy_apply_only
         self.fetch_description = fetch_description
+        self.region = Region(region) if isinstance(region, str) else region
+        self.config = config_for(self.region)
 
     def search(
         self,
@@ -271,9 +286,15 @@ class JobSpySource:
                     "search_term": term,
                     "location": location or None,
                     "results_wanted": wanted,
-                    # Australia — jobspy defaults to the US and silently
-                    # returns the wrong market otherwise.
-                    "country_indeed": "Australia",
+                    # jobspy defaults to the US and silently returns the wrong
+                    # market otherwise. Indeed is the only site that takes this
+                    # — LinkedIn is driven by the location string instead, which
+                    # is why NZ works there without a country parameter.
+                    #
+                    # jobspy 1.1.82 supports New Zealand: Country.NEWZEALAND,
+                    # indeed domain "nz". Verified against the installed
+                    # version, not assumed.
+                    "country_indeed": self.config.jobspy_country,
                     "description_format": "markdown",
                     "verbose": 0,
                 }
@@ -301,7 +322,10 @@ class JobSpySource:
 
                 rows = list(
                     dataframe_to_rawjobs(
-                        frame, site=self.site, easy_apply_only=self.easy_apply_only
+                        frame,
+                        site=self.site,
+                        easy_apply_only=self.easy_apply_only,
+                        region=self.region,
                     )
                 )
                 # Nothing back *and* the scraper logged an error: it failed and

@@ -70,6 +70,17 @@ class RawJob(BaseModel):
     salary_min: float | None = None
     salary_max: float | None = None
 
+    region: str | None = None
+    """Market the ad belongs to ("AU"/"NZ"), from the ad's own countryCode.
+
+    None when the source does not say. None is deliberately not "AU": guessing
+    the country is guessing the currency, and every salary comparison
+    downstream depends on it.
+    """
+
+    salary_currency: str | None = None
+    """ISO code for the salary figures. None when the region is unknown."""
+
     posted_at: datetime | None = None
     """When the ad was posted, UTC. None when the source does not say."""
 

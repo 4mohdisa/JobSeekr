@@ -84,7 +84,7 @@ class Board:
     """Site-knowledge element keys whose disappearance means the adapter is
     about to fail."""
 
-    make_source: Callable[[], Any] | None = None
+    make_source: Callable[..., Any] | None = None
     """Builds the discovery Source. Absent when the board is not discovered."""
 
     make_applier: Callable[[], Any] | None = None
@@ -109,17 +109,19 @@ class Board:
 # --------------------------------------------------------------------------
 
 
-def _seek_source() -> Any:
+def _seek_source(region: Any = None) -> Any:
     from backend.discovery.seek_source import SeekSource
+    from backend.models import Region
 
-    return SeekSource()
+    return SeekSource(region=region or Region.AU)
 
 
-def _jobspy_source(board_key: str, **kwargs: Any) -> Callable[[], Any]:
-    def build() -> Any:
+def _jobspy_source(board_key: str, **kwargs: Any) -> Callable[..., Any]:
+    def build(region: Any = None) -> Any:
         from backend.discovery.jobspy_source import JobSpySource
+        from backend.models import Region
 
-        return JobSpySource(board_key, **kwargs)
+        return JobSpySource(board_key, region=region or Region.AU, **kwargs)
 
     return build
 
