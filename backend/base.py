@@ -26,7 +26,24 @@ __all__ = [
     "LLMClient",
     "RawJob",
     "Source",
+    "SourceUnavailable",
 ]
+
+
+class SourceUnavailable(Exception):
+    """A source could not be reached at all — not "it found nothing".
+
+    Sources are best-effort by design: a board that answers some queries and
+    fails others returns what it got, because partial results beat an
+    exception. That rule has one edge it must not swallow. When *every* request
+    a source made failed and it collected nothing, "best effort" produced an
+    empty list indistinguishable from a genuinely quiet day — and the run then
+    recorded success with zero ads and zero errors, which is how a total outage
+    came to look exactly like a Sunday afternoon.
+
+    Raise this only for that case: nothing fetched, and nothing that was tried
+    worked. Anything that returned rows, even one page of them, is a success.
+    """
 
 
 class RawJob(BaseModel):

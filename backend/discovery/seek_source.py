@@ -35,7 +35,7 @@ from typing import Any
 import httpx
 from bs4 import BeautifulSoup
 
-from backend.base import RawJob
+from backend.base import RawJob, SourceUnavailable
 from backend.config import settings
 from backend.discovery.http import build_client, get_with_retry
 from backend.logging_setup import get_logger
@@ -406,7 +406,14 @@ class SeekSource:
 
     def _fetch_html(
         self, client: httpx.Client, *, term: str, where: str, page: int
-    ) -> list[RawJob]:
+    ) -> list[RawJob] | None:
+        """Return jobs, or None when the page could not be fetched at all.
+
+        None and ``[]`` mean different things and the caller depends on the
+        difference: None is "Seek never answered", ``[]`` is "Seek answered and
+        there was nothing on the page". Collapsing them is what made a blocked
+        endpoint look like an empty result set.
+        """
         params = {"keywords": term, "page": page}
         if where:
             params["where"] = where
@@ -419,10 +426,10 @@ class SeekSource:
             )
         except httpx.HTTPError as exc:
             log.warning("seek_html_transport_failed", error=str(exc)[:200])
-            return []
+            return None
         if response.status_code != 200:
             log.warning("seek_html_status", status=response.status_code)
-            return []
+            return None
 
         jobs = parse_page_state(response.text)
         if jobs:
@@ -446,6 +453,8 @@ class SeekSource:
         """Search Seek. Best effort: partial results beat an exception."""
         client = self._client or build_client()
         collected: dict[str, RawJob] = {}
+        attempts = 0
+        unreachable = 0
         cutoff = (
             datetime.now(UTC) - timedelta(hours=hours_old) if hours_old else None
         )
@@ -470,6 +479,12 @@ class SeekSource:
                                 client, term=term, where=where, page=page
                             )
 
+                        attempts += 1
+                        if jobs is None:
+                            # All three endpoints refused. Not an empty page —
+                            # no page at all.
+                            unreachable += 1
+                            break
                         if not jobs:
                             break
 
@@ -481,6 +496,12 @@ class SeekSource:
         finally:
             if self._owns_client:
                 client.close()
+
+        # Nothing answered and nothing was fetched; see SourceUnavailable.
+        if attempts and unreachable == attempts and not collected:
+            raise SourceUnavailable(
+                f"seek: {attempts} search(es), every endpoint unreachable"
+            )
 
         results = list(collected.values())
         if cutoff is not None:

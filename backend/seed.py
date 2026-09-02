@@ -1,4 +1,4 @@
-"""Idempotent seed data: the empty profile and the Australian screening questions.
+"""Idempotent seed data: the empty profile, the screening questions, one campaign.
 
 Run it as often as you like — ``uv run python -m backend.seed``. Every insert is
 guarded by a check, and nothing here ever updates a row that already exists, so
@@ -18,6 +18,12 @@ What seeding buys is the matching metadata: the question phrasings, whether they
 match by regex or fuzz, what shape the answer has to be, and a note telling the
 user the exact format to type. All rows are global (``campaign_id`` NULL); a
 campaign-scoped entry added later wins over them.
+
+**The starter campaign follows the same rule and is seeded inactive.** It exists
+so a fresh database is not a silent no-op — discovery reads active campaigns
+only, and with none it runs, stores nothing and reports success. Seeding it
+paused makes the state visible and editable without letting anything start
+applying before the user has looked at it. See ``seed_starter_campaign``.
 """
 
 from __future__ import annotations
@@ -28,9 +34,18 @@ from sqlmodel import col, select
 
 from backend.db import session_scope
 from backend.logging_setup import get_logger
-from backend.models import AnswerBank, AnswerType, MatchType, Profile
+from backend.models import (
+    AnswerBank,
+    AnswerType,
+    Campaign,
+    GrayZoneAction,
+    MatchType,
+    Profile,
+)
 
 log = get_logger(__name__)
+
+STARTER_CAMPAIGN_NAME = "Adelaide starter"
 
 # The profile is versioned and never edited in place; version 1 is the empty
 # shell the user fills in, and every Score records the version it scored against.
@@ -333,14 +348,77 @@ def seed_default_profile() -> bool:
     return True
 
 
+def seed_starter_campaign() -> bool:
+    """Create one **inactive** example campaign if no campaign exists at all.
+
+    Returns True if a row was created.
+
+    Discovery only looks at active campaigns, so a freshly migrated database —
+    which has none — runs, logs ``no_active_campaigns``, stores nothing and
+    reports itself finished. Every part of that is working as designed and the
+    combined effect is a system that appears to run and does nothing, which is
+    what happened on the first bring-up of the second machine.
+
+    So this seeds the missing piece: a campaign that is visible in the UI,
+    obviously a starting point, and **inactive**, so reviewing and editing it is
+    a deliberate step rather than something to undo in a hurry. Activating it is
+    the user's decision; nothing here can start applying on its own.
+
+    The search terms are a *search configuration*, not a claim about the user —
+    hard rule 1 governs the profile, and this touches none of it. They are still
+    only a guess at what to look for, which is the main thing to edit. The
+    rubric is deliberately left empty so scoring falls back to ``DEFAULT_RUBRIC``
+    rather than pinning a copy of it here that would drift.
+    """
+    with session_scope() as session:
+        if session.exec(select(Campaign.id).limit(1)).first() is not None:
+            log.info("starter_campaign_skipped", reason="campaign_already_exists")
+            return False
+
+        session.add(
+            Campaign(
+                name=STARTER_CAMPAIGN_NAME,
+                # The whole point. Never seed something that can start applying.
+                active=False,
+                search_terms=["data analyst", "software engineer"],
+                locations=["Adelaide SA"],
+                work_types=["full-time"],
+                # No salary floor: an invented one silently filters out real ads.
+                salary_floor=None,
+                exclusions={},
+                score_floor=60.0,
+                # Above the 80.0 default on purpose — the automatic path should
+                # start stricter than the shortlist and be relaxed knowingly.
+                score_auto_apply=85.0,
+                # Ambiguous score means ask, never guess in either direction.
+                gray_zone_action=GrayZoneAction.ASK,
+                # A cap must exist: check_can_submit passes outright when no cap
+                # is configured, so an uncapped campaign is an unlimited one.
+                # "default" applies to every platform that has no entry.
+                daily_caps={"default": 5},
+                rubric={},
+            )
+        )
+
+    log.info(
+        "starter_campaign_seeded",
+        name=STARTER_CAMPAIGN_NAME,
+        active=False,
+        note="inactive by design — review the search terms, then activate it",
+    )
+    return True
+
+
 def seed_all() -> None:
     """Seed everything. Safe to run on every startup and after every migration."""
     profile_created = seed_default_profile()
     answers_inserted = seed_answer_bank()
+    campaign_created = seed_starter_campaign()
     log.info(
         "seed_complete",
         profile_created=profile_created,
         answer_bank_inserted=answers_inserted,
+        starter_campaign_created=campaign_created,
     )
 
 

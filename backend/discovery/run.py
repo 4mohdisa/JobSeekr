@@ -105,11 +105,17 @@ def discover(
     hours_old: int | None = None,
     limit: int | None = None,
     dry_run: bool = False,
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Run discovery for the given campaigns. Returns (counts, errors)."""
+) -> tuple[dict[str, Any], list[dict[str, Any]], set[str]]:
+    """Run discovery for the given campaigns.
+
+    Returns ``(counts, errors, succeeded)``, where ``succeeded`` names the
+    sources that answered at least once. The caller needs that third value
+    because "no ads" alone cannot tell a dead board from a quiet one.
+    """
     sources = sources if sources is not None else build_sources()
     counts: dict[str, Any] = {}
     errors: list[dict[str, Any]] = []
+    succeeded: set[str] = set()
 
     for campaign in campaigns:
         terms = [str(t) for t in (campaign.search_terms or []) if str(t).strip()]
@@ -124,6 +130,7 @@ def discover(
                 name, {"fetched": 0, "new": 0, "duplicate": 0, "error": 0}
             )
 
+            before = len(errors)
             raws = _search_safely(
                 source,
                 terms=terms,
@@ -132,6 +139,15 @@ def discover(
                 limit=limit,
                 errors=errors,
             )
+            if len(errors) > before:
+                # The source itself failed, as opposed to a single ad failing to
+                # store. Counted here so the per-source bucket shows it: a
+                # bucket reading all zeros used to be the only trace a board had
+                # died, and zeros are also what a quiet day looks like.
+                bucket["error"] += 1
+            else:
+                succeeded.add(name)
+
             bucket["fetched"] += len(raws)
             if not raws:
                 continue
@@ -157,7 +173,7 @@ def discover(
                     continue
                 bucket[outcome] += 1
 
-    return counts, errors
+    return counts, errors, succeeded
 
 
 def _window_for(session: Session, incremental_hours: int) -> int:
@@ -216,7 +232,7 @@ def run_discovery(
         if not campaigns:
             log.warning("no_active_campaigns")
 
-        counts, errors = discover(
+        counts, errors, succeeded = discover(
             session,
             campaigns,
             sources=sources,
@@ -225,13 +241,43 @@ def run_discovery(
             dry_run=dry_run,
         )
 
+        # A run is ok only if at least one board actually answered. Previously
+        # this was `not errors`, and because each source swallows its own
+        # transport failures and returns [], a total outage produced no errors
+        # at all: every bucket zero, ok=True, indistinguishable from a quiet
+        # day. Both halves are needed — `succeeded` catches the silent outage,
+        # `not errors` still catches a board that failed loudly or an ad that
+        # would not store.
+        ok = bool(succeeded) and not errors
+        if not succeeded:
+            # Two very different problems, and they need different fixes from
+            # the user, so name which one it is rather than logging one vague
+            # line for both.
+            log.error(
+                "discovery_no_source_succeeded",
+                attempted=sorted(counts),
+                campaigns=len(campaigns),
+                reason="no_active_campaign" if not campaigns else "every_source_failed",
+                note=(
+                    "no campaign is active, so no board was asked anything — "
+                    "activate one in the dashboard"
+                    if not campaigns
+                    else "every board failed; this is an outage, not an empty market"
+                ),
+            )
+
         run = Run(
             started_at=started,
             ended_at=datetime.now(UTC),
             phase=RunPhase.DISCOVERY,
-            counts={"campaigns": len(campaigns), "dry_run": dry_run, "sources": counts},
+            counts={
+                "campaigns": len(campaigns),
+                "dry_run": dry_run,
+                "sources": counts,
+                "sources_succeeded": sorted(succeeded),
+            },
             errors=errors,
-            ok=not errors,
+            ok=ok,
         )
         persist_detached(session, run)
         summary = run.model_dump()

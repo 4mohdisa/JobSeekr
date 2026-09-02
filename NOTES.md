@@ -2528,3 +2528,127 @@ Everything HANDOFF §1 listed as unverified, still is, plus:
 
 `ALLOW_LIVE_SUBMIT` untouched. No login to any job board, no HAR recorded, no
 browser installed, no message sent to Telegram, no scheduled check-ins.
+
+---
+
+# Discovery honesty and a starter campaign — 2026-09-02 (later)
+
+Still on Linux, not the Mac. Steps 1 and 4 of the follow-up (BasicTeX via
+`tlmgr`, and real discovery against live boards) are deliberately **not** done
+here — both need macOS or working egress. What follows is the two pure-Python
+items.
+
+## 1. A run where every board failed is no longer `ok`
+
+The bug, from the previous section: all three boards blocked by a proxy, every
+failure logged, and the `Run` row still `ok=True` with `error: 0` on every
+source. A total outage was indistinguishable from a quiet Sunday.
+
+**The root cause was one level down from where it looked.** `run_discovery` set
+`ok = not errors`, and `errors` was genuinely empty — because the sources never
+raised. Each one catches its own transport failures and returns `[]`:
+
+- `seek_source` — `_fetch_json` returns None and `_fetch_html` returned `[]` on
+  a 403, and `[]` also means "the page had no ads". The two were the same value.
+- `jobspy_source` — catches per-query and `continue`s.
+- Worse, **jobspy's LinkedIn scraper swallows its errors inside the library**,
+  logs them and returns an empty frame. Indeed re-raises; LinkedIn does not.
+
+So "best effort: partial results beat an exception" had quietly become "an
+outage returns success".
+
+The fix keeps that rule and carves out the one case it must not cover — nothing
+fetched *and* nothing that was tried worked:
+
+- New `SourceUnavailable` in `backend/base.py`. Sources raise it only when every
+  request failed and nothing came back. Anything that returned rows, even one
+  page, is still a success and still does not raise.
+- `seek_source._fetch_html` now returns `None` for "could not fetch" and `[]`
+  for "fetched, nothing there". Collapsing those was the actual defect.
+- `jobspy_source` counts attempts and failures, and — for LinkedIn — reads
+  jobspy's own ERROR records around the call. Zero rows *plus* a logged error is
+  a failure; rows plus a logged error is a partial success.
+- `discover` increments the per-source `error` bucket when a source fails, and
+  returns the set of sources that answered.
+- `ok = bool(succeeded) and not errors`. Both halves are needed: `succeeded`
+  catches the silent outage, `not errors` still catches a loud failure or an ad
+  that would not store. `counts["sources_succeeded"]` records which boards
+  answered.
+
+Reading another library's log is not lovely. It is scoped to the duration of the
+call and to jobspy's own ERROR records, and it hooks the **log record factory**
+rather than adding a handler — jobspy's loggers set `propagate = False`, so a
+root handler never sees them, and attaching by name only works if the logger
+already exists. That is true after `import jobspy`, but it is an ordering
+dependency that would have failed silently the day it stopped holding and
+restored the exact blind spot being closed. There is a test for a logger created
+late for precisely this reason.
+
+Verified against the real blocked network, which is the same outage that
+produced the original false positive:
+
+```
+sources={'seek':     {'fetched': 0, 'error': 1},
+         'linkedin': {'fetched': 0, 'error': 1},
+         'indeed':   {'fetched': 0, 'error': 1}},
+sources_succeeded=[]   ok=False   exit code 1
+```
+
+Before the change this same run reported `ok=True` and `error: 0` on all three.
+
+`discovery_no_source_succeeded` also names *which* problem it is —
+`no_active_campaign` versus `every_source_failed` — because they need different
+fixes and were previously one vague line.
+
+**A genuinely quiet day is still `ok=True`.** There are tests pinning that in
+both directions; if they ever go red, the fix has overcorrected and an empty
+Adelaide is being reported as an outage.
+
+## 2. A starter campaign, seeded inactive
+
+Discovery reads active campaigns only, and a freshly migrated database has none,
+so it ran, stored nothing and reported itself finished. Every part working as
+designed, adding up to a system that appears to run and does nothing.
+
+`seed_starter_campaign()` (in `backend/seed.py`, called by `seed_all`) creates
+one campaign **only when no campaign exists at all**:
+
+| Field | Value | Why |
+|---|---|---|
+| `name` | `Adelaide starter` | |
+| `active` | **`False`** | The point. Nothing can apply before it is read. |
+| `search_terms` | `["data analyst", "software engineer"]` | A guess at what to look for — **the main thing to edit.** |
+| `locations` | `["Adelaide SA"]` | |
+| `work_types` | `["full-time"]` | |
+| `salary_floor` | `None` | An invented floor silently filters out real ads. |
+| `score_floor` | `60.0` | Matches the API default. |
+| `score_auto_apply` | `85.0` | Above the 80.0 default — the automatic path should start stricter and be relaxed knowingly. |
+| `gray_zone_action` | `ASK` | An ambiguous score asks; it never guesses either way. |
+| `daily_caps` | `{"default": 5}` | **Load-bearing:** `check_can_submit` passes outright when no cap is configured, so a campaign with no caps is an uncapped one. |
+| `rubric` | `{}` | Falls back to `DEFAULT_RUBRIC`; pinning a copy here is how the two drift. |
+
+The search terms are search *configuration*, not a claim about the user — hard
+rule 1 governs the profile and nothing here touches it. They are still a guess,
+which is why the campaign ships switched off.
+
+Re-seeding never overwrites it, and specifically never re-activates a campaign
+the user paused or reverts an edit — same rule as the answer bank, with a test.
+
+Verified on a genuinely fresh database: `alembic upgrade head` →
+`python -m backend.seed` → profile, 21 answer rows and one inactive campaign; a
+second `seed` run inserts nothing.
+
+## Suite
+
+**622 passed** (590 before; 32 added), ruff clean, rehearsal 12/12, `alembic
+check` reports no new operations. The suite was run twice to check the new
+files are not order-dependent — the first version of the campaign tests was, by
+deleting from the shared database across a foreign key, so they now use their
+own.
+
+## Still for the Mac
+
+Unchanged: BasicTeX via `tlmgr`, `PDFLATEX_PATH`, and real discovery against
+live boards. Nothing in this section has been exercised against a real job
+board — the sources' *failure* path is now well covered, their success path
+still only by the fixtures and by the previous Windows run.

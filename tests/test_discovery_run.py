@@ -13,7 +13,7 @@ import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from backend.base import RawJob
+from backend.base import RawJob, SourceUnavailable
 from backend.config import settings
 from backend.discovery import run as run_module
 from backend.models import Campaign, Job
@@ -212,3 +212,118 @@ def test_the_returned_run_is_readable_after_the_session_closes(factory):
     run = run_module.run_discovery(sources=[RecordingSource()], session_factory=factory)
     assert run.ok in (True, False)
     assert isinstance(run.counts, dict)
+
+
+# --------------------------------------------------- a total outage is not a quiet day
+
+
+class DeadSource:
+    """A board that raises, the way a source signals it could not be reached."""
+
+    def __init__(self, name: str = "seek"):
+        self.name = name
+
+    def search(self, **kwargs):
+        raise SourceUnavailable(f"{self.name}: every endpoint unreachable")
+
+
+class SilentlyEmptySource:
+    """A board that swallows its own failure and returns nothing.
+
+    This is the shape every real source had: transport errors were caught
+    inside ``search`` and turned into ``[]``, so the runner never saw them.
+    """
+
+    def __init__(self, name: str = "seek"):
+        self.name = name
+
+    def search(self, **kwargs):
+        return []
+
+
+def test_a_run_where_every_source_failed_is_not_ok(factory):
+    """The bug this replaces: total outage recorded as a clean, quiet run.
+
+    Observed on a real machine — all three boards blocked by a proxy, every
+    failure logged loudly, and the Run row still read ok=True with error=0 on
+    every source. Nothing downstream could tell that from a Sunday afternoon.
+    """
+    run = run_module.run_discovery(
+        sources=[DeadSource("seek"), DeadSource("linkedin"), DeadSource("indeed")],
+        session_factory=factory,
+    )
+
+    assert run.ok is False, "every board failed and the run still reported ok"
+    for name in ("seek", "linkedin", "indeed"):
+        assert run.counts["sources"][name]["error"] == 1, (
+            f"{name} failed but its bucket reported no error"
+        )
+    assert run.counts["sources_succeeded"] == []
+
+
+def test_one_surviving_source_still_counts_the_dead_ones(factory):
+    """Partial outage: ok is False, but the healthy board's work is kept."""
+    run = run_module.run_discovery(
+        sources=[DeadSource("linkedin"), RecordingSource("seek", jobs=[raw(1)])],
+        session_factory=factory,
+    )
+
+    assert run.counts["sources"]["linkedin"]["error"] == 1
+    assert run.counts["sources"]["seek"]["new"] == 1, "the healthy board still stored"
+    assert run.counts["sources_succeeded"] == ["seek"]
+    assert run.ok is False, "a dead board is still an error worth reporting"
+
+
+def test_a_genuinely_quiet_day_is_still_ok(factory):
+    """Zero ads with every board answering is success, and must stay success.
+
+    The counterpart to the test above: if this ever goes red, the fix has
+    overcorrected and an empty market now looks like an outage.
+    """
+    run = run_module.run_discovery(
+        sources=[RecordingSource("seek"), RecordingSource("linkedin")],
+        session_factory=factory,
+    )
+
+    assert run.ok is True, "an empty market must not be reported as a failure"
+    assert run.counts["sources"]["seek"]["fetched"] == 0
+    assert sorted(run.counts["sources_succeeded"]) == ["linkedin", "seek"]
+
+
+def test_a_source_that_returns_nothing_without_failing_counts_as_succeeded(factory):
+    """`ok` keys off the source answering, not off it finding something."""
+    run = run_module.run_discovery(
+        sources=[SilentlyEmptySource("seek")], session_factory=factory
+    )
+
+    assert run.ok is True
+    assert run.counts["sources_succeeded"] == ["seek"]
+
+
+def test_no_active_campaigns_is_not_a_successful_run(factory, caplog):
+    """A fresh database ran no sources at all — that is not success either."""
+    with factory() as session:
+        for campaign in session.exec(select(Campaign)).all():
+            campaign.active = False
+            session.add(campaign)
+
+    with caplog.at_level("ERROR"):
+        run = run_module.run_discovery(
+            sources=[RecordingSource()], session_factory=factory
+        )
+
+    assert run.ok is False, "a run that asked nobody anything reported success"
+    assert "discovery_no_source_succeeded" in caplog.text
+    assert "no_active_campaign" in caplog.text, (
+        "an unconfigured system and a total outage need different fixes and "
+        "must not be reported identically"
+    )
+
+
+def test_the_failure_is_reported_loudly(factory, caplog):
+    """Hard rule 9. A silent outage is the thing being fixed."""
+    with caplog.at_level("ERROR"):
+        run_module.run_discovery(sources=[DeadSource()], session_factory=factory)
+
+    assert "discovery_no_source_succeeded" in caplog.text
+    assert "every_source_failed" in caplog.text
