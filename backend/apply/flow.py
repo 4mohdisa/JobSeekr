@@ -52,6 +52,7 @@ from backend.apply.draft import ApplicationDraft, FormField
 from backend.ats.formmaps import fingerprint_fields, record_outcome
 from backend.ats.generic import map_fields
 from backend.base import ApplyOutcome, ApplyResult
+from backend import failures
 from backend.config import settings
 from backend.logging_setup import get_logger
 from backend.siteknowledge import ElementNotFound
@@ -59,6 +60,7 @@ from backend.models import (
     Application,
     ApplicationOutcome,
     ApplyType,
+    FailureType,
     Campaign,
     Document,
     Job,
@@ -413,6 +415,15 @@ def _park_unresolvable(
     job.status = JobStatus.MANUAL_QUEUE
     session.add(job)
     guardrails.record_failure(platform, f"unresolvable element: {exc.key}")
+    failures.record(
+        session,
+        platform=platform,
+        failure_type=FailureType.ELEMENT_UNRESOLVED,
+        element_id=exc.key,
+        company=job.company,
+        job_id=job.id,
+        detail=f"tried {len(exc.tried)} strategies",
+    )
 
     log.error(
         "element_unresolvable_parked",
@@ -737,6 +748,22 @@ def _park(session: Session, job: Job, draft: ApplicationDraft) -> ApplyResult:
     questions = [a.question for a in draft.abstentions]
     job.needs_answer_question = questions[0] if questions else None
     session.add(job)
+
+    # One row per question, not one per park: the trend worth seeing is "this
+    # question keeps arriving", and a company that abstains on three different
+    # questions is a different signal from one that abstains on the same one
+    # three times.
+    for abstention in draft.abstentions:
+        failures.record(
+            session,
+            platform=draft.platform,
+            failure_type=FailureType.ANSWER_ABSTAINED,
+            company=job.company,
+            question=abstention.question,
+            job_id=job.id,
+            detail=getattr(abstention, "reason", None)
+            and str(getattr(abstention.reason, "value", abstention.reason)),
+        )
     log.warning(
         "application_parked_needs_answer",
         job_id=job.id,

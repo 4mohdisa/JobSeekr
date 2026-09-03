@@ -60,6 +60,32 @@ def notify(title: str, body: str = "", priority: Priority = Priority.NORMAL) -> 
         log.exception("notify_failed", title=title, error=str(exc)[:200])
 
 
+
+def _record_drift(platform: str, key: str, was: str, now: str) -> None:
+    """Add a drifted strategy to the failure ledger.
+
+    Separate from the notification because they answer different questions: the
+    message says "this changed just now", the ledger says "this is the fourth
+    time this month". Only the second one tells you a selector is rotting rather
+    than the site having shipped one redesign.
+    """
+    from backend.db import session_scope
+    from backend.failures import record
+    from backend.models import FailureType
+
+    try:
+        with session_scope() as session:
+            record(
+                session,
+                platform=platform,
+                failure_type=FailureType.SELECTOR_DRIFT,
+                element_id=key,
+                detail=f"{was} -> {now}",
+            )
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not break a run
+        log.warning("drift_not_recorded", error=str(exc)[:150])
+
+
 def register_hooks() -> None:
     """Wire the safety layers' notification hooks to this module.
 
@@ -91,12 +117,15 @@ def register_hooks() -> None:
         "all_strategies_failed", platform=platform, key=key, tried=tried
     )
 
-    siteknowledge.on_strategy_drift = lambda platform, key, was, now: notify(
+    siteknowledge.on_strategy_drift = lambda platform, key, was, now: (
+        _record_drift(platform, key, was, now),
+        notify(
         "Strategy drift",
         f"{platform}: `{key}` stopped resolving via `{was}` and now resolves via "
         f"`{now}`. Applications continue — the working strategy has been promoted "
         f"in data/siteknowledge/{platform}/elements.json.",
         Priority.DIGEST,
+        ),
     )
 
     canary.on_drift = lambda platform, missing: notify(
