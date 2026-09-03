@@ -62,6 +62,13 @@ KNOWN_UNREACHABLE: dict[str, str] = {
         "apply/har.py. Replay needs recorded HAR captures and an installed "
         "browser; neither exists yet. This is what the rehearsal cannot cover."
     ),
+    # -- test harness, by design -------------------------------------------
+    "page_for_capture": (
+        "apply/snapshot.py. The offline replay harness's entry point: it exists "
+        "so tests can drive a real adapter against captured markup with no "
+        "browser. Production has a real page and never needs one of these. "
+        "Same category as `replay` above — tooling, not an unwired feature."
+    ),
 }
 
 

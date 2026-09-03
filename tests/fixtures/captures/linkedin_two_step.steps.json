@@ -1,0 +1,21 @@
+{
+  "platform": "linkedin",
+  "variant": "two_step",
+  "steps": [
+    {
+      "label": "load",
+      "url": "https://www.linkedin.com/jobs/view/4012345678/",
+      "html": "\n<html><body>\n  <div class=\"jobs-details\">\n    <button class=\"jobs-apply-button\" aria-label=\"Easy Apply to Data Analyst at Acme\" id=\"ember1481\">Easy Apply</button>\n  </div>\n</body></html>\n"
+    },
+    {
+      "label": "manual",
+      "url": "https://www.linkedin.com/jobs/view/4012345678/",
+      "html": "\n<html><body>\n  <div role=\"dialog\" aria-labelledby=\"easy-apply-title\" class=\"jobs-easy-apply-modal\">\n    <h2 id=\"easy-apply-title\">Contact info</h2>\n    <label for=\"urn:li:fsd_jobPosting:4012345678-email\">Email address</label>\n    <input id=\"urn:li:fsd_jobPosting:4012345678-email\" name=\"email\" type=\"text\" required>\n    <input type=\"file\" id=\"jobs-document-upload-file-input-ember2311\" name=\"resume\">\n    <footer><button aria-label=\"Continue to next step\" id=\"ember9012\">Next</button></footer>\n  </div>\n</body></html>\n"
+    },
+    {
+      "label": "manual",
+      "url": "https://www.linkedin.com/jobs/view/4012345678/",
+      "html": "\n<html><body>\n  <div role=\"dialog\" class=\"jobs-easy-apply-modal\">\n    <h3 class=\"jobs-document-upload__title\">resume-2026-09-03.pdf</h3>\n    <footer><button aria-label=\"Submit application\" id=\"ember7788\">Submit application</button></footer>\n  </div>\n</body></html>\n"
+    }
+  ]
+}
