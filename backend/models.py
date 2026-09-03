@@ -632,6 +632,20 @@ class Score(SQLModel, table=True):
     stage2: float | None = None
     final: float | None = None
     reasoning: str | None = None
+    requirements: dict[str, Any] = Field(
+        default_factory=dict, sa_column=Column(JSON, nullable=False)
+    )
+    """What the EMPLOYER asked for: must_haves, nice_to_haves, tone.
+
+    Extracted in the same stage-2 call that scores the job, because the model is
+    already reading the whole ad there. Stored on the Score rather than the Job
+    because it is model output about the ad, and re-scoring against a changed
+    rubric can legitimately re-derive it.
+
+    Read by the document build. Scoring itself does not use it — the point is to
+    tailor against the ad, not only to rank against it.
+    """
+
     matched_skills: list[Any] = Field(
         default_factory=list, sa_column=Column(JSON, nullable=False)
     )

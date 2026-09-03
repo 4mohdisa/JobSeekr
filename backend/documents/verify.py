@@ -27,6 +27,9 @@ from typing import Any
 
 import pdfplumber
 import pypdf
+
+from backend.config import settings
+from backend.llm.client import llm
 from pydantic import BaseModel, Field
 from rapidfuzz import fuzz
 
@@ -279,13 +282,111 @@ def _detect_two_columns(words_per_page: list[list[dict[str, Any]]]) -> tuple[boo
     return False, ""
 
 
+
+_SELF_CHECK_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "unsupported": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "Claims the document makes that the profile does not support. "
+                "Quote the document's own words. Empty when everything checks out."
+            ),
+        }
+    },
+    "required": ["unsupported"],
+    "additionalProperties": False,
+}
+
+_SELF_CHECK_SYSTEM = """\
+You audit a job application document against the facts it is allowed to assert.
+
+List ONLY claims the profile does not support. Be strict about substance and
+indifferent to style:
+
+* A claim of experience, seniority, scale or duration that the profile does not
+  evidence is unsupported, even when it names nothing specific. "Extensive
+  experience leading cross-functional teams" is unsupported unless the profile
+  shows it.
+* Rephrasing something the profile does contain is FINE. "Built the reporting
+  pipeline" for "developed reporting infrastructure" is the same claim.
+* Enthusiasm, motivation and interest in the role are not factual claims. Ignore
+  them.
+* Contact details, section headings and formatting are not claims.
+
+An empty list is the normal and expected answer. Do not invent problems to look
+thorough.\
+"""
+
+
+def _fabrication_self_check(text: str, profile: Any, kind: str) -> tuple[bool, str]:
+    """Read the document back against the profile. Returns (passed, detail).
+
+    PASSES on any failure to run. A model outage, a missing API key or a
+    malformed response must not fail a document that every deterministic check
+    accepted — that would make the gate depend on a third party being up, and
+    the gate's whole job is to be the thing you can rely on.
+    """
+    from backend.documents.fabrication import profile_fact_index
+
+    try:
+        facts_text = profile_fact_index(profile)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("self_check_profile_unreadable", error=str(exc)[:150])
+        return True, "skipped: profile could not be summarised"
+
+    try:
+        # Through the module-level `llm`, not an inline import. That object is
+        # the seam the rehearsal and the document tests replace with a stub —
+        # an inline `from backend.llm.client import complete_json` bypasses it
+        # and attempts a real call, which is what turned a 27-second suite into
+        # a 3.5-minute one on LiteLLM's retry backoff.
+        result = llm.complete_json(
+            f"PROFILE (the only facts assertable):\n{facts_text}\n\n"
+            f"DOCUMENT ({kind}):\n{text[:6000]}",
+            model=settings.llm_model_classify,
+            purpose="document_self_check",
+            schema=_SELF_CHECK_SCHEMA,
+            system=_SELF_CHECK_SYSTEM,
+            temperature=0.0,
+        )
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        log.warning("self_check_unavailable", kind=kind, error=str(exc)[:200])
+        return True, "skipped: the check could not run"
+
+    unsupported = [
+        str(item).strip()
+        for item in (result.get("unsupported") or [])
+        if str(item).strip()
+    ]
+    if not unsupported:
+        return True, ""
+
+    log.error(
+        "unsupported_claims_in_document",
+        kind=kind,
+        count=len(unsupported),
+        claims=unsupported[:5],
+    )
+    return False, "; ".join(unsupported[:3])
+
+
 def verify_pdf(
     path: str | Path,
     *,
     kind: str,
     expect: ParseExpectations | None = None,
+    profile: Any = None,
 ) -> ParseReport:
-    """Run every gate check against a built PDF. Never raises."""
+    """Run every gate check against a built PDF. Never raises.
+
+    ``profile`` enables the model-read fabrication check: the extracted text is
+    read back against the profile and any unsupported claim fails the gate.
+    Optional because the gate must still work with no API key — and because
+    every other check here is deterministic, so a model outage should not be
+    able to stop a build that the deterministic checks pass.
+    """
     path = Path(path)
     expect = expect or ParseExpectations()
     checks: list[CheckResult] = []
@@ -509,6 +610,21 @@ def verify_pdf(
             detail=detail or "no column gutter detected",
         )
     )
+
+    # The last check, and the only one that reads the document with a model.
+    #
+    # documents/fabrication.py catches specific shapes — an employer name, a
+    # date, a number the profile does not contain. What it cannot catch is the
+    # fluent paraphrase that claims a capability without naming anything
+    # checkable: "extensive experience leading cross-functional teams" contains
+    # no fact to match against and is exactly what a writing model produces
+    # when the profile is thin. This reads the finished text against the
+    # profile and asks what is not supported.
+    if profile is not None and settings.document_fabrication_check:
+        supported, detail = _fabrication_self_check(text, profile, kind)
+        checks.append(
+            CheckResult(name="no_unsupported_claims", passed=supported, detail=detail)
+        )
 
     report = ParseReport(
         passed=all(check.passed for check in checks),

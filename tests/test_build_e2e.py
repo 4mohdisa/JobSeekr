@@ -121,6 +121,17 @@ def stub_llm(monkeypatch, values: dict[str, str]):
 
     monkeypatch.setattr(build_module.llm, "complete", fake_complete)
 
+    # The parse gate's fabrication self-check is an LLM call too. Left
+    # unstubbed it attempts a real one per document and the file's runtime goes
+    # from two seconds to twenty-six on LiteLLM's retry backoff. Returning "no
+    # unsupported claims" keeps these tests about the deterministic gate, which
+    # is what they are for — the self-check has its own tests.
+    from backend.documents import verify as verify_module
+
+    monkeypatch.setattr(
+        verify_module.llm, "complete_json", lambda *a, **k: {"unsupported": []}
+    )
+
 
 # ------------------------------------------------------------------ escaping
 

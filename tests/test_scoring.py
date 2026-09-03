@@ -171,12 +171,31 @@ def test_score_schema_is_strict():
     schema = score_schema()
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == {
+        # About the candidate.
         "score",
         "reasoning",
         "matched_skills",
         "gaps",
         "red_flags",
+        # About the AD, extracted in the same call because the model is already
+        # reading the whole thing. Consumed by the document build.
+        "must_haves",
+        "nice_to_haves",
+        "tone",
     }
+
+
+def test_the_extracted_requirements_are_about_the_ad_not_the_candidate():
+    """The distinction the whole extraction rests on.
+
+    must_haves is what the employer asked for, judged against nobody. gaps is
+    what the candidate lacks. Conflating them would tailor the letter to the
+    candidate's weaknesses instead of the employer's needs.
+    """
+    schema = score_schema()
+    for field in ("must_haves", "nice_to_haves"):
+        description = schema["properties"][field]["description"].lower()
+        assert "candidate" not in description or "not judged" in description, field
 
 
 def test_stage2_maps_a_good_response(monkeypatch):
@@ -253,12 +272,55 @@ def test_stage1_is_negligible_for_two_hundred_jobs():
     assert projection["stage1_usd"] < 0.01, projection
 
 
-def test_cost_scales_with_the_stage2_cap_not_the_discovery_volume():
-    """Stage 2 is capped, so doubling discovery must not double the bill."""
-    small = estimate_cost(200)
-    large = estimate_cost(400)
+def test_cost_scales_with_volume_when_the_fan_out_is_unlimited():
+    """The deliberate trade, and a REVERSAL of what this test used to assert.
+
+    It previously pinned "stage 2 is capped, so doubling discovery must not
+    double the bill". That was true and is no longer the default: the prefilter
+    had become the constraint rather than the cost, so a good match with unusual
+    wording was discarded on an embedding similarity that does not understand
+    context.
+
+    With SCORING_STAGE2_MAX=0 the bill is linear in new jobs. That is affordable
+    because scoring is incremental — needs_scoring skips anything already
+    scored — so the steady-state number is new jobs per run, not the table.
+    """
+    small = estimate_cost(200, top_n=0)
+    large = estimate_cost(400, top_n=0)
+
+    assert large["stage2_jobs"] == 400, "every job that passed the filters"
+    assert large["stage2_usd"] > small["stage2_usd"] * 1.9
+
+
+def test_a_configured_cap_still_stops_the_cost_scaling():
+    """Unlimited is the default, not the only option.
+
+    Someone who wants the old behaviour sets SCORING_STAGE2_MAX and gets it
+    back exactly — the cap is still enforced, it is simply no longer implicit.
+    """
+    small = estimate_cost(200, top_n=40)
+    large = estimate_cost(400, top_n=40)
+
+    assert large["stage2_jobs"] == small["stage2_jobs"] == 40
     assert large["stage2_usd"] == small["stage2_usd"]
-    assert large["total_usd"] < small["total_usd"] * 1.5
+
+
+def test_the_unlimited_fan_out_fits_the_monthly_cap():
+    """The number that decides whether the default is safe.
+
+    200 new jobs per run x 6 runs a day is the backfill worst case, not the
+    steady state. If even that fits the monthly cap, unlimited is a safe
+    default; if it stops fitting, this test is where that shows up.
+    """
+    from backend.config import settings
+
+    per_run = estimate_cost(200, top_n=0)["total_usd"]
+    monthly_worst_case = per_run * 6 * 30
+
+    assert monthly_worst_case < settings.llm_monthly_cap_usd, (
+        f"unlimited fan-out projects ${monthly_worst_case:.2f}/month against a "
+        f"${settings.llm_monthly_cap_usd:.2f} cap — set SCORING_STAGE2_MAX"
+    )
 
 
 def test_the_shipped_default_meets_the_cost_target():

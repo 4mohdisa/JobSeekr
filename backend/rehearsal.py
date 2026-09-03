@@ -337,6 +337,7 @@ def rehearse(root: Path, *, keep: bool = False) -> RehearsalReport:
     from backend.ats import generic as generic_module
     from backend.config import settings
     from backend.documents import build as build_module
+    from backend.documents import verify as verify_module
     from backend.models import (
         Application,
         ApplicationOutcome,
@@ -353,7 +354,9 @@ def rehearse(root: Path, *, keep: bool = False) -> RehearsalReport:
     settings.data_dir = root
 
     stub = StubLLM()
-    for module in (build_module, stage1, stage2, generic_module):
+    # verify_module included: the parse gate's fabrication self-check is an
+    # LLM call too, and a module missing from this list makes a real one.
+    for module in (build_module, verify_module, stage1, stage2, generic_module):
         if hasattr(module, "llm"):
             module.llm = stub
 
