@@ -175,6 +175,25 @@ class RunPhase(str, Enum):
     MAINTENANCE = "maintenance"
 
 
+class Region(str, Enum):
+    """Which Seek market a campaign, job or answer belongs to.
+
+    Seek AU and Seek NZ are the same platform serving different markets. The
+    difference is configuration — a site key and a locale — not a second
+    adapter, which is why this is an enum on the existing rows rather than a new
+    source.
+
+    It is also a safety boundary. Salary is quoted as a bare ``$`` on both
+    sites with no currency field anywhere in the payload, so an AU floor
+    silently compares against NZD without this. And work rights are a different
+    question in each country: an answer verified for one is not evidence about
+    the other.
+    """
+
+    AU = "AU"
+    NZ = "NZ"
+
+
 class PreferenceScope(str, Enum):
     """How widely a preference applies."""
 
@@ -316,6 +335,13 @@ class Campaign(SQLModel, table=True):
     locations: list[Any] = Field(
         default_factory=list, sa_column=Column(JSON, nullable=False)
     )
+    region: Region = Field(
+        sa_column=_enum_column(Region), default=Region.AU
+    )
+    """Which Seek market this campaign searches. Drives the site key, the
+    locale, the currency a salary floor is read in, and the timezone the apply
+    window is measured in."""
+
     salary_floor: int | None = None
     work_types: list[Any] = Field(
         default_factory=list, sa_column=Column(JSON, nullable=False)
@@ -362,6 +388,19 @@ class AnswerBank(SQLModel, table=True):
     answer_value: str
     answer_type: AnswerType = Field(sa_column=_enum_column(AnswerType))
     campaign_id: int | None = Field(default=None, foreign_key="campaign.id", index=True)
+
+    region: Region | None = Field(
+        sa_column=Column(SAEnum(Region, values_callable=_enum_values), nullable=True),
+        default=None,
+    )
+    """Which country this answer is true for. NULL means it holds everywhere.
+
+    Work rights, tax numbers, licences and notice periods are different
+    questions in AU and NZ, and an answer verified for one is not evidence about
+    the other. A row scoped to a region only ever matches that region;
+    resolution abstains rather than reaching across.
+    """
+
     # none_as_null so "no choices" is SQL NULL rather than the JSON text 'null'.
     choices: list[Any] | None = Field(
         default=None, sa_column=Column(JSON(none_as_null=True), nullable=True)
@@ -414,6 +453,21 @@ class Job(SQLModel, table=True):
     company: str
     location: str | None = None
     description: str | None = None
+    region: Region = Field(sa_column=_enum_column(Region), default=Region.AU)
+    """Derived from the ad's own countryCode, never from the campaign.
+
+    A campaign searching NZ can still surface an Australian ad, and the ad is
+    the authority on where it is. This is what ``salary_currency`` is read from.
+    """
+
+    salary_currency: str | None = None
+    """ISO code for salary_min/salary_max. NULL when no salary was stated.
+
+    Explicit because Seek gives none: both markets print "$75,000 – $90,000"
+    with no currency anywhere in the payload, so without this column an NZD
+    figure and an AUD figure are the same number.
+    """
+
     salary_min: int | None = None
     salary_max: int | None = None
 

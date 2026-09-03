@@ -26,20 +26,24 @@ from backend.db import persist_detached, session_scope
 from backend.discovery.dedupe import find_duplicate
 from backend.discovery.normalize import normalize_job
 from backend.logging_setup import configure_logging, get_logger
-from backend.models import Campaign, Job, Run, RunPhase
+from backend.models import Campaign, Job, Region, Run, RunPhase
 
 log = get_logger(__name__)
 
 __all__ = ["build_sources", "discover", "run_discovery"]
 
 
-def build_sources() -> list[Source]:
+def build_sources(region: Region = Region.AU) -> list[Source]:
     """The boards discovery reads, from the one registry that defines them.
 
     Adding a board is an entry in ``backend.boards`` plus an adapter file —
     never a change to the runner's logic, which stays source-agnostic.
+
+    ``region`` is threaded through rather than being a source of its own: Seek
+    NZ is the same API with a different site key, so a second Source would be a
+    duplicate of the first with two constants changed.
     """
-    return [entry.make_source() for entry in source_boards()]
+    return [entry.make_source(region=region) for entry in source_boards()]
 
 
 def _search_safely(
@@ -112,7 +116,10 @@ def discover(
     sources that answered at least once. The caller needs that third value
     because "no ads" alone cannot tell a dead board from a quiet one.
     """
-    sources = sources if sources is not None else build_sources()
+    # Sources are built per campaign below when the caller did not supply them,
+    # because the region is a campaign setting: two campaigns in one run can
+    # search different markets.
+    supplied_sources = sources
     counts: dict[str, Any] = {}
     errors: list[dict[str, Any]] = []
     succeeded: set[str] = set()
@@ -124,7 +131,14 @@ def discover(
             log.warning("campaign_has_no_search_terms", campaign=campaign.name)
             continue
 
-        for source in sources:
+        region = getattr(campaign, "region", Region.AU) or Region.AU
+        active_sources = (
+            supplied_sources
+            if supplied_sources is not None
+            else build_sources(Region(region))
+        )
+
+        for source in active_sources:
             name = getattr(source, "name", type(source).__name__)
             bucket = counts.setdefault(
                 name, {"fetched": 0, "new": 0, "duplicate": 0, "error": 0}

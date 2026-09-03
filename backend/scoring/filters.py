@@ -15,6 +15,7 @@ from typing import Any
 from backend.discovery.normalize import canonical_company
 from backend.logging_setup import get_logger
 from backend.models import Job
+from backend.regions import currency_for
 
 log = get_logger(__name__)
 
@@ -53,7 +54,13 @@ def _excluded_title_words(campaign: Any) -> list[str]:
     return [str(word).casefold() for word in raw if str(word).strip()]
 
 
-def _salary_below_floor(job: Job, floor: int | None, *, keep_unstated: bool) -> bool:
+def _salary_below_floor(
+    job: Job,
+    floor: int | None,
+    *,
+    keep_unstated: bool,
+    floor_currency: str | None = None,
+) -> bool:
     """Whether a job is dropped on salary.
 
     An ad that states no salary is KEPT by default. Most Australian ads omit
@@ -61,11 +68,42 @@ def _salary_below_floor(job: Job, floor: int | None, *, keep_unstated: bool) -> 
     of the market to enforce a floor that was never tested. The behaviour is a
     campaign setting (``exclusions.drop_unstated_salary``) for users who would
     rather trade recall for precision.
+
+    CURRENCIES ARE NEVER COMPARED. Seek AU and Seek NZ both print a bare "$"
+    and neither returns a currency field, so "$81,083" is AUD or NZD depending
+    only on which market the ad came from. Comparing across them is not a
+    rounding error — at roughly 0.9 NZD to the AUD it silently keeps NZ jobs
+    that fall below an AUD floor.
+
+    So a mismatch is treated as "cannot compare", and cannot-compare keeps the
+    job: dropping an ad because its currency is unknown would hide real work,
+    while keeping it costs one manual look. An unconverted comparison is the
+    only outcome ruled out entirely.
     """
     if not floor:
         return False
     if job.salary_max is None and job.salary_min is None:
         return not keep_unstated
+
+    # salary_currency is set by the sources that know it. Where it is absent,
+    # job.region gives it — that column is NOT NULL, so a currency is always
+    # derivable and the floor never quietly stops filtering. Only a job whose
+    # region is genuinely unknowable (a duck-typed object in a test, a future
+    # source that sets neither) reaches the None case below.
+    job_currency = getattr(job, "salary_currency", None) or currency_for(
+        getattr(job, "region", None)
+    )
+
+    if floor_currency and job_currency and job_currency != floor_currency:
+        log.info(
+            "salary_floor_not_comparable",
+            job_id=getattr(job, "id", None),
+            job_currency=job_currency,
+            floor_currency=floor_currency,
+            note="different currencies; keeping the job rather than comparing",
+        )
+        return False
+
     ceiling = job.salary_max if job.salary_max is not None else job.salary_min
     return ceiling is not None and ceiling < floor
 
@@ -103,7 +141,10 @@ def apply_hard_filters(
             continue
 
         if _salary_below_floor(
-            job, getattr(campaign, "salary_floor", None), keep_unstated=keep_unstated
+            job,
+            getattr(campaign, "salary_floor", None),
+            keep_unstated=keep_unstated,
+            floor_currency=currency_for(getattr(campaign, "region", None)),
         ):
             outcome.rejected.append(
                 Rejection(

@@ -27,7 +27,7 @@ from typing import Any
 from rapidfuzz import fuzz
 
 from backend.logging_setup import get_logger
-from backend.models import AnswerBank, AnswerType, MatchType
+from backend.models import AnswerBank, AnswerType, MatchType, Region
 
 log = get_logger(__name__)
 
@@ -91,6 +91,14 @@ class AbstainReason(str, Enum):
     BLANK_ANSWER = "blank_answer"
     TYPE_MISMATCH = "type_mismatch"
     INVALID_CHOICE = "invalid_choice"
+    CROSS_REGION = "cross_region"
+    """The only candidate answers belong to a different country.
+
+    Work rights, tax numbers, licences and notice periods are different
+    questions in AU and NZ. The trans-Tasman arrangement makes the wrong answer
+    *plausible* rather than obviously absurd, which is worse — a plausible wrong
+    answer about work rights goes onto a real application and is not caught.
+    """
 
 
 @dataclass(frozen=True)
@@ -556,6 +564,7 @@ def resolve_answer(
     *,
     answers: Sequence[AnswerBank],
     choices: Sequence[str] | None = None,
+    region: Region | None = None,
 ) -> Resolution:
     """Resolve one screening question. Never returns None; never guesses.
 
@@ -599,6 +608,23 @@ def resolve_answer(
     answers = [
         row for row in answers if row.campaign_id is None or row.campaign_id == campaign_id
     ]
+
+    # Region is a harder boundary than campaign. A row scoped to NZ is not a
+    # weaker answer for an AU application, it is an answer to a different
+    # question, so it is removed from the pool entirely rather than outranked.
+    #
+    # Dropping them can empty the pool, and that is the correct outcome: the
+    # abstention below reports CROSS_REGION so the user is asked the question
+    # for the region that actually needs it, instead of the system reusing the
+    # other country's answer because it was the only one available.
+    region_conflicted = []
+    if region is not None:
+        region_conflicted = [
+            row for row in answers if row.region is not None and row.region != region
+        ]
+        answers = [
+            row for row in answers if row.region is None or row.region == region
+        ]
 
     # --- the deliberate override: a declared EXACT row, matched verbatim -----
     declared_exact = [
@@ -669,6 +695,29 @@ def resolve_answer(
             candidates.append((float(score), MatchType.FUZZY, row))
 
     if not candidates:
+        # Distinguish "nothing in the bank" from "the only thing in the bank was
+        # the other country's answer". They call for different fixes: the first
+        # needs any answer, the second needs this region's answer specifically,
+        # and reporting them identically is how someone ends up "fixing" it by
+        # widening the existing row to cover both countries.
+        if region_conflicted:
+            other = sorted({row.region.value for row in region_conflicted if row.region})
+            log.warning(
+                "answer_cross_region_abstain",
+                question=question[:120],
+                asked_for=region.value if region else None,
+                available_for=other,
+            )
+            return Abstain(
+                question=question,
+                reason=AbstainReason.CROSS_REGION,
+                detail=(
+                    f"the answer bank only has this for {', '.join(other)}, and the "
+                    f"application is {region.value if region else 'unknown'}; "
+                    "work rights and licences differ by country"
+                ),
+                candidates=[row.question_pattern for row in region_conflicted],
+            )
         return Abstain(
             question=question,
             reason=AbstainReason.NO_MATCH,

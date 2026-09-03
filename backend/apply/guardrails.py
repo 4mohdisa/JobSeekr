@@ -34,6 +34,7 @@ from sqlmodel import Session, select
 
 from backend.boards import BOARDS
 from backend.config import settings
+from backend.regions import config_for
 from backend.discovery.normalize import canonical_company
 from backend.logging_setup import get_logger
 from backend.models import Application, ApplicationOutcome, Job
@@ -261,28 +262,38 @@ def _parse_hhmm(value: str, fallback: time) -> time:
         return fallback
 
 
-def _within_window(now: datetime, platform: str) -> tuple[bool, str]:
-    """Whether submitting is allowed at this instant.
+def _within_window(
+    now: datetime, platform: str, *, timezone: str | None = None
+) -> tuple[bool, str]:
+    """Whether submitting is allowed at this instant, in the JOB's local time.
 
     LinkedIn is restricted to weekday business hours; applications arriving at
     3am Sunday are a pattern nobody wants attached to their account. Other
     platforms use the configured window. The policy is data, not branches, so
     adding a platform does not mean editing this function.
+
+    ``timezone`` is the market's, not the machine's. An application to an
+    Auckland employer should land inside Auckland business hours — NZ runs two
+    to two and a half hours ahead of South Australia, and the gap is not fixed
+    because the two observe DST on different schedules. Using the machine's
+    timezone would put an NZ application at 7am local for half the year, which
+    is exactly the "applied at an odd hour" pattern the window exists to avoid.
     """
-    tz = ZoneInfo(settings.timezone)
+    zone_name = timezone or settings.timezone
+    tz = ZoneInfo(zone_name)
     local = now.astimezone(tz)
 
     policy = _WINDOW_POLICY.get(platform, _WINDOW_POLICY["_default"])
     if policy["weekdays_only"] and local.weekday() >= 5:
-        return False, f"{local:%A} is a weekend in {settings.timezone}"
+        return False, f"{local:%A} is a weekend in {zone_name}"
 
     start = _parse_hhmm(settings.apply_window_start, time(9, 0))
     end = _parse_hhmm(settings.apply_window_end, time(17, 0))
     if not (start <= local.time() < end):
         return False, (
-            f"{local:%H:%M} {settings.timezone} is outside {start:%H:%M}-{end:%H:%M}"
+            f"{local:%H:%M} {zone_name} is outside {start:%H:%M}-{end:%H:%M}"
         )
-    return True, f"{local:%a %H:%M} {settings.timezone}"
+    return True, f"{local:%a %H:%M} {zone_name}"
 
 
 # Which platforms are restricted to business days. Read from the board
@@ -494,8 +505,9 @@ def check_can_submit(
             log.exception("auth_check_failed", platform=platform, error=str(exc))
         add("session_authenticated", authed, f"{platform} session")
 
-    # 12 — inside the allowed window.
-    in_window, window_detail = _within_window(now, platform)
+    # 12 — inside the allowed window, measured where the JOB is.
+    job_timezone = config_for(getattr(job, "region", None)).timezone
+    in_window, window_detail = _within_window(now, platform, timezone=job_timezone)
     add("inside_window", in_window, window_detail)
 
     # 13 — randomised minimum interval elapsed.

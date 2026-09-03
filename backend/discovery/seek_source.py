@@ -37,6 +37,8 @@ from bs4 import BeautifulSoup
 
 from backend.base import RawJob, SourceUnavailable
 from backend.config import settings
+from backend.models import Region
+from backend.regions import config_for, currency_for, region_of_job
 from backend.discovery.http import build_client, get_with_retry
 from backend.logging_setup import get_logger
 
@@ -163,7 +165,9 @@ def _apply_type(value: Any) -> str:
     return "unknown"
 
 
-def _record_to_rawjob(record: dict[str, Any]) -> RawJob | None:
+def _record_to_rawjob(
+    record: dict[str, Any], *, default_base: str | None = None
+) -> RawJob | None:
     """Map one Seek record. Returns None (with a log) rather than raising."""
     job_id = _as_text(_first(record, "id"))
     title = _as_text(_first(record, "title"))
@@ -174,7 +178,7 @@ def _record_to_rawjob(record: dict[str, Any]) -> RawJob | None:
     # Search records carry no url of their own — it is built from the id. Uses
     # the configured base so it points at the live host directly instead of
     # taking a redirect on every fetch.
-    base = settings.seek_base_url.rstrip("/")
+    base = (default_base or settings.seek_base_url).rstrip("/")
     url = _as_text(_first(record, "url")) or f"{base}/job/{job_id}"
     if url.startswith("/"):
         url = f"{base}{url}"
@@ -197,6 +201,11 @@ def _record_to_rawjob(record: dict[str, Any]) -> RawJob | None:
     elif salary_text:
         description = salary_text
 
+    # From the ad, never from the campaign: a campaign searching NZ can still
+    # surface an Australian listing, and the ad is the authority on where it is.
+    # None stays None — guessing the country is guessing the currency.
+    region = region_of_job(record)
+
     return RawJob(
         source=_SOURCE,
         source_job_id=job_id,
@@ -207,6 +216,8 @@ def _record_to_rawjob(record: dict[str, Any]) -> RawJob | None:
         description=description,
         posted_at=None,  # normalise parses whatever shape this is
         apply_type=_apply_type(_first(record, "apply")),
+        region=region.value if region is not None else None,
+        salary_currency=currency_for(region),
         raw={**record, "_posted_raw": _first(record, "posted")},
     )
 
@@ -216,7 +227,9 @@ def _record_to_rawjob(record: dict[str, Any]) -> RawJob | None:
 # --------------------------------------------------------------------------
 
 
-def parse_json_payload(payload: dict[str, Any]) -> list[RawJob]:
+def parse_json_payload(
+    payload: dict[str, Any], *, base_url: str | None = None
+) -> list[RawJob]:
     """Pull records out of a search response without assuming the envelope.
 
     One list of dotted paths rather than two hand-rolled loops, so the JSON API
@@ -247,7 +260,7 @@ def parse_json_payload(payload: dict[str, Any]) -> list[RawJob]:
     for record in records:
         if not isinstance(record, dict):
             continue
-        mapped = _record_to_rawjob(record)
+        mapped = _record_to_rawjob(record, default_base=base_url)
         if mapped is not None:
             out.append(mapped)
     return out
@@ -357,9 +370,18 @@ class SeekSource:
 
     name = _SOURCE
 
-    def __init__(self, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        *,
+        region: Region | str = Region.AU,
+    ) -> None:
         self._client = client
         self._owns_client = client is None
+        #: Configuration, not a subclass. Seek NZ is the same API with a
+        #: different site key — verified live, see backend/regions.py.
+        self.region = Region(region) if isinstance(region, str) else region
+        self.config = config_for(self.region)
 
     # -- request builders ---------------------------------------------------
 
@@ -367,12 +389,14 @@ class SeekSource:
         self, *, term: str, where: str, page: int, hours_old: int | None
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
-            "siteKey": settings.seek_site_key,
+            # The site key is what actually selects the market. The host alone
+            # does not: au.seek.com with siteKey=NZ-Main returns NZ jobs.
+            "siteKey": self.config.site_key,
             "sourcesystem": settings.seek_source_system,
             "keywords": term,
             "page": page,
             "pageSize": settings.seek_page_size,
-            "locale": settings.seek_locale,
+            "locale": self.config.locale,
         }
         if where:
             params["where"] = where
@@ -402,7 +426,7 @@ class SeekSource:
             return None
         if not isinstance(payload, dict):
             return None
-        return parse_json_payload(payload)
+        return parse_json_payload(payload, base_url=self.config.base_url)
 
     def _fetch_html(
         self, client: httpx.Client, *, term: str, where: str, page: int
@@ -420,7 +444,7 @@ class SeekSource:
         try:
             response = get_with_retry(
                 client,
-                settings.seek_html_search_url,
+                self.config.html_search_url,
                 params=params,
                 headers={"Accept": "text/html,application/xhtml+xml"},
             )
@@ -469,10 +493,10 @@ class SeekSource:
                         params = self._json_params(
                             term=term, where=where, page=page, hours_old=hours_old
                         )
-                        jobs = self._fetch_json(client, settings.seek_search_url, params)
+                        jobs = self._fetch_json(client, self.config.search_url, params)
                         if jobs is None:
                             jobs = self._fetch_json(
-                                client, settings.seek_search_url_fallback, params
+                                client, self.config.fallback_search_url, params
                             )
                         if jobs is None:
                             jobs = self._fetch_html(
