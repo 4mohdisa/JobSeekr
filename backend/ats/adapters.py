@@ -9,9 +9,15 @@ called once, inside the flow.
 It enumerates through the accessibility tree, consults the form-map cache, and
 asks the model only about fields the cache does not already know.
 
-SELECTORS ARE UNVERIFIED against live sites — the same network restriction that
-applied to Seek and LinkedIn. Use the HAR workflow in ``backend.apply.har`` to
-confirm them before enabling live submit.
+NO SELECTORS IN THIS FILE. Where things are on each ATS is data, in
+``data/siteknowledge/<platform>/``, exactly as for Seek and LinkedIn — the
+multi-strategy resolution and self-healing in ``backend.siteknowledge`` apply
+here identically, and these platforms drift at least as often as the primary
+boards do.
+
+THE STRATEGIES ARE UNVERIFIED against live sites — the same network restriction
+that applied to Seek and LinkedIn. Use the HAR workflow in
+``backend.apply.har`` to confirm them before enabling live submit.
 """
 
 from __future__ import annotations
@@ -26,72 +32,13 @@ from backend.ats.generic import (
     fields_from_accessibility,
 )
 from backend.logging_setup import get_logger
+from backend.siteknowledge import DEFAULTS_DIR, SiteKnowledge, load
 from backend.models import ApplyType, Document, Job
 
 log = get_logger(__name__)
 
 __all__ = ["ATS_APPLIERS", "AtsApplier", "GenericAtsApplier", "build_ats_appliers"]
 
-
-# Per-platform selector sets. Multiple candidates each, most durable first —
-# these platforms all expose stable data attributes, which outlive class names.
-SELECTORS: dict[str, dict[str, tuple[str, ...]]] = {
-    "jobadder": {
-        "apply_button": ("a.ja-apply", "a:has-text('Apply')", "button:has-text('Apply')"),
-        "submit_button": ("button[type='submit']", "button:has-text('Submit application')"),
-        "file_input": ("input[type='file']",),
-        "confirmation": (
-            "text=/thank you for (your )?applic/i",
-            "text=/application (received|submitted)/i",
-        ),
-    },
-    "pageup": {
-        "apply_button": (
-            "a#apply-button",
-            "a:has-text('Apply now')",
-            "button:has-text('Apply')",
-        ),
-        "submit_button": ("input[type='submit']", "button:has-text('Submit')"),
-        "file_input": ("input[type='file']",),
-        "confirmation": (
-            "text=/thank you for (your )?applic/i",
-            "text=/successfully submitted/i",
-        ),
-    },
-    "smartrecruiters": {
-        "apply_button": ("button:has-text('I'm interested')", "a:has-text('Apply')"),
-        "submit_button": ("button[type='submit']", "button:has-text('Submit')"),
-        "file_input": ("input[type='file']",),
-        "confirmation": ("text=/thank you/i", "text=/application (sent|received)/i"),
-    },
-    "greenhouse": {
-        "apply_button": ("a#apply_button", "button:has-text('Apply')"),
-        "submit_button": ("input#submit_app", "button:has-text('Submit Application')"),
-        "file_input": ("input[type='file']",),
-        "confirmation": ("text=/thank you for applying/i", "#application_confirmation"),
-    },
-    "lever": {
-        "apply_button": ("a.postings-btn", "a:has-text('Apply')"),
-        "submit_button": ("button:has-text('Submit application')", "button[type='submit']"),
-        "file_input": ("input[type='file'][name='resume']", "input[type='file']"),
-        "confirmation": ("text=/thank you for applying/i", ".application-confirmation"),
-    },
-    "workday": {
-        "apply_button": (
-            "a[data-automation-id='adventureButton']",
-            "button:has-text('Apply')",
-        ),
-        "submit_button": (
-            "button[data-automation-id='bottom-navigation-next-button']",
-            "button:has-text('Submit')",
-        ),
-        "file_input": ("input[type='file']",),
-        "confirmation": (
-            "text=/submitted/i",
-            "[data-automation-id='successMessage']",
-        ),
-    },
-}
 
 # Platforms whose forms are the same everywhere, so a learned map is safe to
 # share at the platform tier rather than per company.
@@ -120,6 +67,32 @@ def _first_present(page: Any, selectors: tuple[str, ...]) -> Any | None:
     return None
 
 
+#: Where an uploaded filename is echoed back. Generic on purpose: this is not
+#: platform knowledge but the handful of shapes every upload widget uses, and
+#: nine near-identical copies in nine JSON files would be nine things to fix.
+_READBACK_SELECTORS: tuple[str, ...] = (
+    "[class*='file-name']",
+    "[class*='fileName']",
+    "[data-automation-id*='file']",
+    ".attachment-name",
+    "input[type='file'] + span",
+)
+
+
+def _readback_texts(page: Any) -> list[str]:
+    """Every filename-ish string near an upload control."""
+    found: list[str] = []
+    for selector in _READBACK_SELECTORS:
+        try:
+            for text in page.locator(selector).all_inner_texts():
+                cleaned = text.strip()
+                if cleaned and cleaned not in found:
+                    found.append(cleaned)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("readback_selector_absent", selector=selector, error=str(exc)[:100])
+    return found
+
+
 class GenericAtsApplier:
     """One adapter, configured per platform. Selectors are data.
 
@@ -127,9 +100,13 @@ class GenericAtsApplier:
     differing only in their selector dict — the duplication Claude.md forbids.
     """
 
-    def __init__(self, platform_key: str) -> None:
+    def __init__(self, platform_key: str, knowledge: SiteKnowledge | None = None) -> None:
         self.platform = platform_key
-        self._selectors = SELECTORS.get(platform_key, {})
+        #: Same layer the primary boards use. An ATS redesign is a JSON edit in
+        #: data/siteknowledge/<platform>/, not a code change, and the
+        #: multi-strategy resolution and self-healing apply here identically —
+        #: these platforms drift as often as Seek and LinkedIn do.
+        self.knowledge = knowledge if knowledge is not None else load(platform_key)
         self._last_snapshot: dict[str, Any] | None = None
 
     # -- selection ----------------------------------------------------------
@@ -141,15 +118,17 @@ class GenericAtsApplier:
         detection = detect_from_url(job.url)
         return detection.key == self.platform
 
-    def _select(self, key: str) -> tuple[str, ...]:
-        return self._selectors.get(key, ())
+    def _selectors_for(self, key: str) -> tuple[str, ...]:
+        """Every strategy for an element, flattened. For the multi-slot walk."""
+        element = self.knowledge.elements.get(key)
+        return tuple(s.selector for s in element.ordered()) if element else ()
 
     # -- navigation ---------------------------------------------------------
 
     def open(self, page: Any, job: Job) -> None:
         page.goto(job.url, wait_until="domcontentloaded")
 
-        button = _first_visible(page, self._select("apply_button"))
+        button = self.knowledge.resolve(page, "apply_button")
         if button is not None:
             button.click()
             page.wait_for_load_state("domcontentloaded")
@@ -273,7 +252,7 @@ class GenericAtsApplier:
         return sum(1 for f in fields if f.kind == "file") or 1
 
     def attach(self, page: Any, documents: list[Document]) -> None:
-        target = _first_present(page, self._select("file_input"))
+        target = self.knowledge.resolve(page, "file_input", visible=False)
         if target is None:
             raise RuntimeError(f"no file input on {self.platform}")
 
@@ -281,7 +260,7 @@ class GenericAtsApplier:
             target.set_input_files(documents[0].path)
             return
 
-        inputs = page.locator(self._select("file_input")[0])
+        inputs = page.locator(self._selectors_for("file_input")[0])
         for index, document in enumerate(documents):
             try:
                 inputs.nth(index).set_input_files(document.path)
@@ -290,22 +269,13 @@ class GenericAtsApplier:
 
     def read_back_attachments(self, page: Any) -> list[str]:
         """Read the filenames the form displays. Mandatory on every platform."""
-        names: list[str] = []
-        for selector in (
-            "[class*='file-name']",
-            "[class*='fileName']",
-            "[data-automation-id*='file']",
-            ".attachment-name",
-            "input[type='file'] + span",
-        ):
-            try:
-                for text in page.locator(selector).all_inner_texts():
-                    cleaned = text.strip()
-                    if cleaned and "." in cleaned:
-                        names.append(cleaned)
-            except Exception as exc:  # noqa: BLE001
-                log.debug("readback_selector_absent", selector=selector, error=str(exc)[:100])
-
+        names = [
+            name
+            for name in _readback_texts(page)
+            # A filename has an extension. Without this the read-back collects
+            # every label near the upload control and "matches" anything.
+            if "." in name
+        ]
         if not names:
             log.error("attachment_readback_empty", platform=self.platform)
         return names
@@ -313,7 +283,7 @@ class GenericAtsApplier:
     # -- steps --------------------------------------------------------------
 
     def is_last_step(self, page: Any, fields: list[FormField]) -> bool:
-        return _first_visible(page, self._select("submit_button"), timeout_ms=1500) is not None
+        return self.knowledge.present(page, "submit_button", timeout_ms=1500)
 
     def advance(self, page: Any) -> None:
         button = _first_visible(
@@ -325,13 +295,10 @@ class GenericAtsApplier:
         page.wait_for_load_state("domcontentloaded")
 
     def submit(self, page: Any) -> None:
-        button = _first_visible(page, self._select("submit_button"))
-        if button is None:
-            raise RuntimeError(f"no submit control on {self.platform}")
-        button.click()
+        self.knowledge.resolve(page, "submit_button").click()
 
     def confirmed(self, page: Any) -> bool:
-        return _first_visible(page, self._select("confirmation"), timeout_ms=10000) is not None
+        return self.knowledge.present(page, "confirmation", timeout_ms=10000)
 
 
 # Alias so the name reads properly at call sites.
@@ -349,8 +316,18 @@ def build_ats_appliers() -> list[GenericAtsApplier]:
     return [
         GenericAtsApplier(platform.key)
         for platform in sorted(ATS_REGISTRY, key=lambda p: p.priority)
-        if platform.key in SELECTORS
+        if _has_knowledge(platform.key)
     ]
+
+
+def _has_knowledge(platform_key: str) -> bool:
+    """Whether a platform ships site knowledge, and so has a working adapter.
+
+    Replaces the old ``key in SELECTORS`` check. A platform that ``detect`` can
+    recognise but has no strategies for is not one this adapter can drive —
+    listing it would produce an applier that fails on its first resolve.
+    """
+    return (DEFAULTS_DIR / platform_key / "elements.json").exists()
 
 
 ATS_APPLIERS = build_ats_appliers

@@ -50,7 +50,7 @@ from backend.apply.answers import (
 )
 from backend.apply.draft import ApplicationDraft, FormField
 from backend.ats.formmaps import fingerprint_fields, record_outcome
-from backend.ats.generic import map_fields
+from backend.ats.generic import last_map_trusted, map_fields
 from backend.base import ApplyOutcome, ApplyResult
 from backend import failures
 from backend.config import settings
@@ -81,6 +81,7 @@ MAX_STEPS = 12
 
 # Set by the integrations layer, same convention as ``canary.on_drift``.
 on_element_unresolvable: Any = None
+on_form_approval_needed: Any = None
 
 
 class RestrictionDetected(RuntimeError):
@@ -206,6 +207,13 @@ def build_draft(
             campaign_id=campaign_id,
         )
         draft.answers.update(rescued)
+        # An LLM-mapped form is a draft until it has graduated. The guardrail
+        # below turns this into a blocked submit and a Telegram approval
+        # request; recording it on the draft keeps that decision inspectable in
+        # a dry run too.
+        draft.form_map_trusted = (
+            all(last_map_trusted.values()) if last_map_trusted else True
+        )
 
     draft.abstentions = abstentions
     return draft
@@ -239,6 +247,7 @@ def _resolve_via_form_map(
         return {}, abstentions
 
     mapped = {m.identifier: m for m in map_fields(unresolved, platform=platform, session=session)}
+
 
     rescued: dict[str, Any] = {}
     cleared: set[str] = set()
@@ -395,6 +404,18 @@ def run_apply(
         )
     except ElementNotFound as exc:
         return _park_unresolvable(session, job, adapter.platform, exc)
+
+
+
+def _blocked_only_on_form_trust(verdict: Any) -> bool:
+    """Whether the sole reason this was blocked is an ungraduated form map.
+
+    Only then is asking the user useful. If the switch is also off, or the
+    window is closed, approving the form changes nothing and the message would
+    be a question whose answer does not unblock anything.
+    """
+    failures = [check.name for check in getattr(verdict, "checks", []) if not check.passed]
+    return failures == ["form_map_trusted"]
 
 
 def _park_unresolvable(
@@ -635,6 +656,23 @@ def _run_apply(
         )
 
     if not verdict.allowed:
+        # An ungraduated form map is not an ordinary block. Everything else
+        # blocked here is environmental — the switch is off, the window closed,
+        # a cap is reached — and needs no decision from the user. This one is a
+        # question only they can answer, and the drafted application plus a
+        # screenshot is what makes it answerable.
+        if _blocked_only_on_form_trust(verdict) and on_form_approval_needed is not None:
+            try:
+                on_form_approval_needed(
+                    job.id,
+                    draft.form_fingerprint or "",
+                    draft.platform,
+                    draft.screenshot_pre,
+                    {a.question: a.value for a in draft.answers.values()},
+                )
+            except Exception as exc:  # noqa: BLE001 - asking must not abort
+                log.warning("form_approval_request_failed", error=str(exc)[:150])
+
         return _abort(
             session, job, draft, ApplyOutcome.BLOCKED, verdict.summary(), status=JobStatus.QUEUED
         )

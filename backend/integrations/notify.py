@@ -86,6 +86,19 @@ def _record_drift(platform: str, key: str, was: str, now: str) -> None:
         log.warning("drift_not_recorded", error=str(exc)[:150])
 
 
+def _request_form_approval(job_id, fingerprint, platform, screenshot, answers) -> None:
+    """Hand an unknown form to the user with a screenshot rather than sending it."""
+    from backend.integrations.telegram import request_form_approval
+
+    request_form_approval(
+        job_id,
+        fingerprint=fingerprint,
+        platform=platform,
+        screenshot=screenshot,
+        answers=answers,
+    )
+
+
 def register_hooks() -> None:
     """Wire the safety layers' notification hooks to this module.
 
@@ -111,6 +124,12 @@ def register_hooks() -> None:
         f"Tried {len(tried)} strategies.\n\n"
         f"Fix: edit data/siteknowledge/{platform}/elements.json, or re-record a HAR.",
         Priority.IMMEDIATE,
+    )
+
+    flow.on_form_approval_needed = (
+        lambda job_id, fingerprint, platform, screenshot, answers: (
+            _request_form_approval(job_id, fingerprint, platform, screenshot, answers)
+        )
     )
 
     siteknowledge.on_all_strategies_failed = lambda platform, key, tried: log.error(

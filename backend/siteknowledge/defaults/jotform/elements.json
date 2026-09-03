@@ -1,0 +1,86 @@
+{
+  "elements": {
+    "confirmation": {
+      "fail_count": 0,
+      "key": "confirmation",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "A returned click is not evidence a submission landed.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "migrated from ats/adapters.SELECTORS; unverified against the live platform",
+          "role": "",
+          "type": "text",
+          "value": "your submission has been received"
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "migrated from ats/adapters.SELECTORS; unverified against the live platform",
+          "role": "",
+          "type": "text",
+          "value": "thank you"
+        }
+      ],
+      "success_count": 0
+    },
+    "file_input": {
+      "fail_count": 0,
+      "key": "file_input",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Hidden behind a styled button; resolve with visible=False.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "migrated from ats/adapters.SELECTORS; unverified against the live platform",
+          "role": "",
+          "type": "css",
+          "value": "input[type='file']"
+        }
+      ],
+      "success_count": 0
+    },
+    "submit_button": {
+      "fail_count": 0,
+      "key": "submit_button",
+      "last_verified_at": null,
+      "last_working_strategy": null,
+      "notes": "Presence is how the flow knows it is on the last step.",
+      "required": true,
+      "strategies": [
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "migrated from ats/adapters.SELECTORS; unverified against the live platform",
+          "role": "",
+          "type": "css",
+          "value": "button#input_2"
+        },
+        {
+          "attr": "data-testid",
+          "name": "Submit",
+          "note": "migrated from ats/adapters.SELECTORS; unverified against the live platform",
+          "role": "button",
+          "type": "role",
+          "value": ""
+        },
+        {
+          "attr": "data-testid",
+          "name": "",
+          "note": "migrated from ats/adapters.SELECTORS; unverified against the live platform",
+          "role": "",
+          "type": "text",
+          "value": "Submit"
+        }
+      ],
+      "success_count": 0
+    }
+  },
+  "platform": "jotform"
+}

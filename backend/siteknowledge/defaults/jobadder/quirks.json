@@ -1,0 +1,12 @@
+{
+  "platform": "jobadder",
+  "quirks": [
+    {
+      "key": "platform_note",
+      "learned_at": "2026-09-03",
+      "severity": "info",
+      "source": "ATS priority order",
+      "summary": "Leading AU/NZ-native ATS. First in the priority order because it is what Australian employers actually use."
+    }
+  ]
+}

@@ -505,6 +505,29 @@ def check_can_submit(
             log.exception("auth_check_failed", platform=platform, error=str(exc))
         add("session_authenticated", authed, f"{platform} session")
 
+    # 11b — an LLM-mapped form that has not graduated yet.
+    #
+    # A form whose fields were mapped by a model is a hypothesis about where the
+    # values go. Three clean applications on the same fingerprint is what turns
+    # it into knowledge (formmaps.TRUST_THRESHOLD). Until then the application is
+    # built in full, shown to the user with a screenshot, and NOT submitted.
+    #
+    # This is the half of trust graduation that was missing: record_outcome
+    # already counted successes and set `trusted`, and nothing ever read it, so
+    # a form the model guessed at thirty seconds ago was submitted exactly like
+    # one proven three times.
+    map_trusted = bool(getattr(draft, "form_map_trusted", True))
+    add(
+        "form_map_trusted",
+        map_trusted,
+        ""
+        if map_trusted
+        else (
+            "this form's shape has not graduated yet — the application is drafted "
+            "for your approval instead of submitted"
+        ),
+    )
+
     # 12 — inside the allowed window, measured where the JOB is.
     job_timezone = config_for(getattr(job, "region", None)).timezone
     in_window, window_detail = _within_window(now, platform, timezone=job_timezone)

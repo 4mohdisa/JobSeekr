@@ -1,0 +1,12 @@
+{
+  "platform": "pageup",
+  "quirks": [
+    {
+      "key": "platform_note",
+      "learned_at": "2026-09-03",
+      "severity": "info",
+      "source": "ATS priority order",
+      "summary": "Government, universities and enterprise. Very common on careers.<employer>.com.au, which is why detect_from_html matters more here than anywhere."
+    }
+  ]
+}

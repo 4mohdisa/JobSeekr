@@ -23,6 +23,8 @@ from typing import Any
 
 from sqlmodel import select
 
+from pathlib import Path
+
 from backend.config import settings
 from backend import failures, preferences
 from backend.db import session_scope
@@ -41,7 +43,14 @@ from backend.models import (
 
 log = get_logger(__name__)
 
-__all__ = ["build_application", "escalate_question", "send_digest", "send_message"]
+__all__ = [
+    "build_application",
+    "escalate_question",
+    "request_form_approval",
+    "send_digest",
+    "send_message",
+    "send_photo",
+]
 
 
 def _configured() -> bool:
@@ -80,6 +89,93 @@ def send_message(text: str, priority: Priority = Priority.NORMAL) -> bool:
 # ==========================================================================
 # Escalation
 # ==========================================================================
+
+
+def send_photo(path: str, caption: str = "") -> bool:
+    """Send one image. Returns False rather than raising when unconfigured.
+
+    Used for form approvals: a screenshot is the only way the user can judge
+    whether a model put the right values in the right boxes without opening the
+    site themselves. A text description of a form is not reviewable.
+    """
+    if not _configured():
+        log.warning("telegram_unconfigured", caption=caption[:200])
+        return False
+
+    import httpx
+
+    file_path = Path(path)
+    if not file_path.exists():
+        log.warning("telegram_photo_missing", path=path)
+        return False
+
+    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendPhoto"
+    try:
+        with file_path.open("rb") as handle:
+            response = httpx.post(
+                url,
+                data={
+                    "chat_id": settings.telegram_chat_id,
+                    "caption": caption[:1024],
+                    "parse_mode": "Markdown",
+                },
+                files={"photo": handle},
+                timeout=30,
+            )
+        if response.status_code != 200:
+            log.warning("telegram_photo_failed", status=response.status_code)
+            return False
+        return True
+    except Exception as exc:  # noqa: BLE001 - notification must never abort a run
+        log.warning("telegram_photo_error", error=str(exc)[:200])
+        return False
+
+
+def request_form_approval(
+    job_id: int,
+    *,
+    fingerprint: str,
+    platform: str,
+    screenshot: str | None = None,
+    answers: dict[str, str] | None = None,
+) -> bool:
+    """Show the user a drafted application on an unknown form and ask.
+
+    Sent instead of a submission, not after one. The application is fully built
+    — documents through the parse gate, answers resolved, guardrails run — and
+    then stopped, because the field mapping came from a model and has not been
+    proven on this form shape yet.
+
+    Three approvals on the same fingerprint graduate it to automatic
+    (``formmaps.TRUST_THRESHOLD``). The fingerprint is the form's SHAPE, not the
+    company, so two employers using the same template share the graduation and
+    the user is asked once rather than once per employer.
+    """
+    lines = [
+        f"*Form approval needed* — job {job_id} on {platform}",
+        "",
+        "This form's field mapping came from the model and has not been proven "
+        "on this shape yet, so nothing was submitted.",
+    ]
+    if answers:
+        lines.append("")
+        lines.append("*What it would send:*")
+        for question, value in list(answers.items())[:10]:
+            lines.append(f"· {question[:70]}: {value[:60]}")
+    lines.append("")
+    lines.append(f"`/approve {job_id}` to send it · `/skip {job_id}` to drop it")
+    lines.append(f"_shape {fingerprint[:12]} — 3 approvals graduate it to automatic_")
+
+    body = "\n".join(lines)
+
+    if screenshot:
+        # Caption first: if the photo fails the user still gets the question,
+        # rather than silently getting nothing.
+        if send_photo(screenshot, caption=body[:1024]):
+            return True
+        log.warning("form_approval_photo_failed_falling_back_to_text", job_id=job_id)
+
+    return send_message(body, Priority.IMMEDIATE)
 
 
 def escalate_question(job_id: int, question: str, *, choices: list[str] | None = None) -> bool:

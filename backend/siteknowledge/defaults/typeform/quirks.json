@@ -1,0 +1,12 @@
+{
+  "platform": "typeform",
+  "quirks": [
+    {
+      "key": "platform_note",
+      "learned_at": "2026-09-03",
+      "severity": "info",
+      "source": "ATS priority order",
+      "summary": "One question per screen. The step loop matters more than the selectors: is_last_step is the only thing that knows the form ended."
+    }
+  ]
+}
