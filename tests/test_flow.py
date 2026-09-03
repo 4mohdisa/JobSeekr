@@ -651,3 +651,165 @@ def test_mapping_is_skipped_entirely_when_disabled(session, monkeypatch):
 
     assert mapper.calls == 0
     assert len(draft.abstentions) == 2
+
+
+# --------------------------------------------------------------------------
+# Unresolvable elements: park and alert, never guess
+# --------------------------------------------------------------------------
+
+
+def test_an_unresolvable_element_parks_the_job_for_a_human(session):
+    """Acceptance: killing every strategy parks the application.
+
+    MANUAL_QUEUE rather than FAILED on purpose. Nothing is wrong with this job;
+    retrying it changes nothing until either the site changes back or someone
+    updates the strategies, and a person can finish it by hand meanwhile.
+    """
+    from backend.siteknowledge import ElementNotFound
+
+    adapter = FakeAdapter(steps=simple_steps())
+
+    def explode(page, job):
+        raise ElementNotFound("seek", "apply_button", ["[data-automation='x']", ".y"])
+
+    adapter.open = explode
+
+    result = run(session, adapter)
+
+    assert not result.ok
+    assert session.get(Job, 1).status is JobStatus.MANUAL_QUEUE
+    assert "apply_button" in result.failure_reason
+    assert not adapter.submitted
+
+
+def test_an_unresolvable_element_alerts_with_what_it_tried(session):
+    """Acceptance: parks AND alerts. Silence here is the failure mode."""
+    from backend.siteknowledge import ElementNotFound
+
+    alerts: list[tuple] = []
+    flow.on_element_unresolvable = lambda *args: alerts.append(args)
+
+    adapter = FakeAdapter(steps=simple_steps())
+
+    def explode(page, job):
+        raise ElementNotFound("seek", "submit_button", ["a", "b", "c"])
+
+    adapter.open = explode
+    try:
+        run(session, adapter)
+    finally:
+        flow.on_element_unresolvable = None
+
+    assert len(alerts) == 1
+    platform, key, tried, job_id = alerts[0]
+    assert (platform, key, job_id) == ("seek", "submit_button", 1)
+    assert tried == ["a", "b", "c"], "the alert must say what was tried"
+
+
+def test_an_unresolvable_element_mid_flow_still_parks(session):
+    """It can surface from any adapter call, not just open()."""
+    from backend.siteknowledge import ElementNotFound
+
+    adapter = FakeAdapter(steps=simple_steps())
+
+    def explode(page):
+        raise ElementNotFound("seek", "attachment_readback", ["x"])
+
+    adapter.read_back_attachments = explode
+
+    result = run(session, adapter)
+
+    assert not result.ok
+    assert session.get(Job, 1).status is JobStatus.MANUAL_QUEUE
+    assert not adapter.submitted, "never submit when the read-back could not be read"
+
+
+def test_a_failing_alert_hook_does_not_mask_the_parking(session):
+    """The alert is best-effort; the park is not."""
+    from backend.siteknowledge import ElementNotFound
+
+    flow.on_element_unresolvable = lambda *a: 1 / 0
+
+    adapter = FakeAdapter(steps=simple_steps())
+
+    def explode(page, job):
+        raise ElementNotFound("seek", "apply_button", [])
+
+    adapter.open = explode
+    try:
+        result = run(session, adapter)
+    finally:
+        flow.on_element_unresolvable = None
+
+    assert not result.ok
+    assert session.get(Job, 1).status is JobStatus.MANUAL_QUEUE
+
+
+def test_no_broad_handler_around_an_adapter_call_swallows_element_not_found():
+    """Structural guard: this bug was introduced once and is easy to reintroduce.
+
+    Every ``try:`` whose body calls the adapter must re-raise ElementNotFound
+    before its broad ``except Exception``. Without that the wrapper never sees
+    it, the job is reported as an ordinary failure, and the retry loop keeps
+    opening browser sessions against a site that has moved.
+
+    Checked structurally rather than by exercising all eleven adapter methods:
+    the next one added would not be covered by a behavioural test nobody
+    remembered to extend.
+    """
+    import ast
+    import pathlib
+
+    source = pathlib.Path("backend/apply/flow.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+
+    def calls_adapter(node: ast.AST) -> bool:
+        return any(
+            isinstance(child, ast.Attribute)
+            and isinstance(child.value, ast.Name)
+            and child.value.id == "adapter"
+            for child in ast.walk(node)
+        )
+
+    def reraises_element_not_found(handlers: list[ast.ExceptHandler]) -> bool:
+        return any(
+            isinstance(h.type, ast.Name) and h.type.id == "ElementNotFound"
+            for h in handlers
+        )
+
+    # Deliberate exceptions, with the reason. A predicate whose broad handler
+    # returns a safe default is not swallowing anything — it is answering.
+    exempt_functions = {
+        "_restricted": (
+            "answers 'is there a restriction notice?'. A detector that cannot "
+            "find its element means no notice is showing, which is the normal "
+            "case on every healthy page. Raising here would park every job."
+        ),
+    }
+    exempt_lines = {
+        node.lineno
+        for func in ast.walk(tree)
+        if isinstance(func, ast.FunctionDef) and func.name in exempt_functions
+        for node in ast.walk(func)
+        if isinstance(node, ast.Try)
+    }
+
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        if node.lineno in exempt_lines:
+            continue
+        if not any(calls_adapter(stmt) for stmt in node.body):
+            continue
+        broad = any(
+            h.type is None or (isinstance(h.type, ast.Name) and h.type.id == "Exception")
+            for h in node.handlers
+        )
+        if broad and not reraises_element_not_found(node.handlers):
+            offenders.append(node.lineno)
+
+    assert not offenders, (
+        f"flow.py lines {offenders}: a broad handler around an adapter call that "
+        "does not re-raise ElementNotFound first"
+    )

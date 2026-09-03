@@ -66,7 +66,8 @@ def register_hooks() -> None:
     Called once at startup. Each hook is a plain callable on the target module
     so that module never imports an integration.
     """
-    from backend.apply import canary, guardrails, session
+    from backend import siteknowledge
+    from backend.apply import canary, flow, guardrails, session
 
     guardrails.on_notify = lambda title, body: notify(title, body, Priority.IMMEDIATE)
 
@@ -75,6 +76,27 @@ def register_hooks() -> None:
         f"The {platform} session is no longer signed in. Applications are halted.\n\n"
         f"Run: uv run python -m backend.apply.session login --platform {platform}",
         Priority.IMMEDIATE,
+    )
+
+    flow.on_element_unresolvable = lambda platform, key, tried, job_id: notify(
+        "Element not found",
+        f"{platform}: nothing resolved `{key}` on job {job_id}, so it has gone to "
+        f"the manual queue rather than being guessed at.\n"
+        f"Tried {len(tried)} strategies.\n\n"
+        f"Fix: edit data/siteknowledge/{platform}/elements.json, or re-record a HAR.",
+        Priority.IMMEDIATE,
+    )
+
+    siteknowledge.on_all_strategies_failed = lambda platform, key, tried: log.error(
+        "all_strategies_failed", platform=platform, key=key, tried=tried
+    )
+
+    siteknowledge.on_strategy_drift = lambda platform, key, was, now: notify(
+        "Strategy drift",
+        f"{platform}: `{key}` stopped resolving via `{was}` and now resolves via "
+        f"`{now}`. Applications continue — the working strategy has been promoted "
+        f"in data/siteknowledge/{platform}/elements.json.",
+        Priority.DIGEST,
     )
 
     canary.on_drift = lambda platform, missing: notify(

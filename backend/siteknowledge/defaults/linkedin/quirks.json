@@ -1,0 +1,54 @@
+{
+  "platform": "linkedin",
+  "quirks": [
+    {
+      "detail": "The upload appears to succeed and the modal shows a filename that is not the file just sent. Reading the filename back before submit is the only defence \u2014 hard rule 4.",
+      "key": "stale_uploads",
+      "learned_at": "2026-09-03",
+      "severity": "critical",
+      "source": "adapter design note",
+      "summary": "LinkedIn silently reuses a previous upload when the document library is full."
+    },
+    {
+      "capacity": 4,
+      "detail": "prune_document_library deletes down to three before uploading. It is capped so it can never remove more than the overflow \u2014 silently deleting a user's documents would be worse than a failed upload.",
+      "key": "library_holds_four",
+      "learned_at": "2026-09-03",
+      "severity": "critical",
+      "source": "adapter design note",
+      "summary": "The document library holds four documents; beyond that uploads start reusing."
+    },
+    {
+      "detail": "detect_redirect catches it and the job is marked manual_only rather than fought.",
+      "key": "claims_easy_apply_then_redirects",
+      "learned_at": "2026-09-03",
+      "severity": "warning",
+      "source": "adapter design note",
+      "summary": "A listing can advertise Easy Apply and then send you off-site."
+    },
+    {
+      "detail": "Never hardcode a step count. The loop runs until Submit appears or a step repeats; a repeated step means a validation error is silently blocking progress.",
+      "key": "variable_step_count",
+      "learned_at": "2026-09-03",
+      "severity": "warning",
+      "source": "adapter design note",
+      "summary": "Easy Apply is two steps for some employers and up to six for others."
+    },
+    {
+      "detail": "An id captured on one job (\u2026jobPosting:4012345678\u2026, ember1234) cannot match the next. Store wildcard patterns, never literals.",
+      "key": "ember_and_urn_ids",
+      "learned_at": "2026-09-03",
+      "severity": "warning",
+      "source": "adapter design note",
+      "summary": "Field ids embed the job URN and Ember's per-render counter."
+    },
+    {
+      "detail": "Restriction notices trip the global halt through guardrails. The correct response is stopping everything, not skipping one job.",
+      "key": "restriction_is_unrecoverable",
+      "learned_at": "2026-09-03",
+      "severity": "critical",
+      "source": "adapter design note",
+      "summary": "A restricted account is not recoverable by retrying."
+    }
+  ]
+}

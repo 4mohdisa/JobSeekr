@@ -54,6 +54,7 @@ from backend.ats.generic import map_fields
 from backend.base import ApplyOutcome, ApplyResult
 from backend.config import settings
 from backend.logging_setup import get_logger
+from backend.siteknowledge import ElementNotFound
 from backend.models import (
     Application,
     ApplicationOutcome,
@@ -74,6 +75,10 @@ __all__ = ["Adapter", "RestrictionDetected", "build_draft", "run_apply"]
 # How many form steps to walk before concluding something is wrong. Not a step
 # count for any particular platform — a runaway guard.
 MAX_STEPS = 12
+
+
+# Set by the integrations layer, same convention as ``canary.on_drift``.
+on_element_unresolvable: Any = None
 
 
 class RestrictionDetected(RuntimeError):
@@ -369,7 +374,78 @@ def run_apply(
     Returns an ``ApplyResult`` on every path, including every abort — a silent
     return would violate "never fail silently" and leave the dashboard unable
     to explain what happened.
+
+    This wrapper exists for one reason: ``ElementNotFound`` can surface from any
+    adapter call — open, attach, read back, advance, submit — and the response is
+    the same wherever it came from. A platform that no longer matches any
+    recorded strategy is a platform we must stop guessing at, so the job goes to
+    the manual queue and the user is told which element went missing. Catching it
+    per call site would be eleven copies of one decision.
     """
+    try:
+        return _run_apply(
+            page,
+            session,
+            job,
+            adapter=adapter,
+            is_authenticated=is_authenticated,
+            dry_run=dry_run,
+        )
+    except ElementNotFound as exc:
+        return _park_unresolvable(session, job, adapter.platform, exc)
+
+
+def _park_unresolvable(
+    session: Session, job: Job, platform: str, exc: ElementNotFound
+) -> ApplyResult:
+    """Hand a job to the human because the page no longer matches what we know.
+
+    Not FAILED: nothing about this job is wrong, and retrying it changes
+    nothing until either the site changes back or someone updates the strategies.
+    MANUAL_QUEUE says exactly that — a person can finish this one by hand while
+    the knowledge file is corrected.
+
+    The failure is also recorded against the circuit breaker. One missing element
+    is drift; the same element missing on every job is a platform that has moved,
+    and continuing to open browser sessions into it is how an account gets
+    flagged.
+    """
+    job.status = JobStatus.MANUAL_QUEUE
+    session.add(job)
+    guardrails.record_failure(platform, f"unresolvable element: {exc.key}")
+
+    log.error(
+        "element_unresolvable_parked",
+        job_id=job.id,
+        platform=platform,
+        element=exc.key,
+        tried=exc.tried,
+    )
+    if on_element_unresolvable is not None:
+        try:
+            on_element_unresolvable(platform, exc.key, exc.tried, job.id)
+        except Exception as hook_exc:  # noqa: BLE001 - alerting must not mask it
+            log.warning("unresolvable_hook_failed", error=str(hook_exc)[:150])
+
+    return ApplyResult(
+        ok=False,
+        outcome=ApplyOutcome.FAILED,
+        failure_reason=(
+            f"no strategy resolved {exc.key!r} on {platform}; "
+            "queued for manual completion and the site knowledge needs updating"
+        ),
+    )
+
+
+def _run_apply(
+    page: Any,
+    session: Session,
+    job: Job,
+    *,
+    adapter: Adapter,
+    is_authenticated: Callable[[str], bool] | None = None,
+    dry_run: bool = False,
+) -> ApplyResult:
     assert job.id is not None
 
     # 1 — preconditions. Re-asserted here as well as in the guardrails: defence
@@ -386,6 +462,12 @@ def run_apply(
 
     try:
         adapter.open(page, job)
+    except ElementNotFound:
+        # Not an ordinary failure: the page no longer matches anything we know,
+        # and run_apply's wrapper turns that into a manual-queue park with an
+        # alert. Swallowing it here would report "could not open form" and
+        # retry forever against a site that has moved.
+        raise
     except Exception as exc:
         log.exception("adapter_open_failed", job_id=job.id, platform=adapter.platform)
         guardrails.record_failure(adapter.platform, f"open failed: {exc}")
@@ -449,6 +531,8 @@ def run_apply(
                 continue
             try:
                 adapter.fill_field(page, field, answer.value)
+            except ElementNotFound:
+                raise
             except Exception as exc:
                 log.exception("fill_failed", job_id=job.id, field=field.identifier)
                 return _abort(
@@ -547,6 +631,12 @@ def run_apply(
     # 10 — submit.
     try:
         adapter.submit(page)
+    except ElementNotFound:
+        # Not an ordinary failure: the page no longer matches anything we know,
+        # and run_apply's wrapper turns that into a manual-queue park with an
+        # alert. Swallowing it here would report "could not open form" and
+        # retry forever against a site that has moved.
+        raise
     except Exception as exc:  # noqa: BLE001
         guardrails.record_failure(adapter.platform, f"submit raised: {exc}")
         return _abort(session, job, draft, ApplyOutcome.FAILED, f"submit failed: {exc}")

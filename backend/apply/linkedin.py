@@ -1,126 +1,50 @@
-"""LinkedIn Easy Apply. Selectors and step logic ONLY.
+"""LinkedIn Easy Apply. Step logic only — every selector lives in site knowledge.
 
 The most failure-prone surface in the system, and the one with the most
 expensive failure mode: a restricted LinkedIn account is not recoverable by
 retrying. Three behaviours here exist specifically because of that:
 
-* **Never hardcode a step count.** The modal has anywhere from two to six
-  steps depending on the posting. The loop runs until Submit appears or a step
-  repeats; a repeated step means a validation error is silently blocking
-  progress, which the flow detects by fingerprinting each step's fields.
+* **Never hardcode a step count.** The modal has anywhere from two to six steps
+  depending on the posting. The loop runs until Submit appears or a step
+  repeats. The structures actually observed are fingerprinted and accumulated in
+  ``flows.json``, so a five-step employer seen twice is recognised the second
+  time rather than rediscovered.
 * **Filename read-back is mandatory.** LinkedIn silently reuses a previous
   upload when its document library is full or the upload quietly fails. The
   read-back is the only thing between the user and sending last month's resume.
 * **Prune the document library.** LinkedIn keeps four documents; past that,
   uploads start silently reusing.
 
-SELECTORS ARE UNVERIFIED — linkedin.com is unreachable from the environment
-this was written in. Each carries a confidence note; verify with the HAR
-workflow before enabling live submit. See NOTES.md.
+NO SELECTORS IN THIS FILE. Where things are on LinkedIn is data, in
+``data/siteknowledge/linkedin/``. That matters more here than anywhere: field
+ids embed the job URN and Ember's per-render counter, so the identifiers are
+stored as wildcard patterns rather than literals captured from one job. See
+``backend.siteknowledge``.
+
+THE STRATEGIES ARE STILL UNVERIFIED — seeded from the previous hardcoded
+selectors, which were themselves written without access to the live site.
+Confirming them needs the HAR capture.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+from backend.apply import formdom
 from backend.apply.draft import FormField
 from backend.apply.session import has_restriction_notice
 from backend.logging_setup import get_logger
 from backend.models import ApplyType, Document, Job
+from backend.siteknowledge import ElementNotFound, SiteKnowledge, load
 
 log = get_logger(__name__)
 
-__all__ = ["MAX_LIBRARY_DOCUMENTS", "SELECTORS", "LinkedInApplier", "decide_upload_slots"]
+__all__ = ["MAX_LIBRARY_DOCUMENTS", "LinkedInApplier", "decide_upload_slots"]
 
 
 # LinkedIn's document library holds this many; beyond it, uploads silently
 # reuse an existing file instead of adding a new one.
 MAX_LIBRARY_DOCUMENTS = 4
-
-
-SELECTORS: dict[str, tuple[str, ...]] = {
-    # confidence: high — this class has been stable for a long time
-    "easy_apply_button": (
-        "button.jobs-apply-button",
-        "button[aria-label*='Easy Apply' i]",
-        "button:has-text('Easy Apply')",
-    ),
-    # confidence: high
-    "modal": (
-        "div.jobs-easy-apply-modal",
-        "div[role='dialog'][aria-labelledby*='easy-apply' i]",
-        "div[data-test-modal]",
-    ),
-    # confidence: medium
-    "next_button": (
-        "button[aria-label='Continue to next step']",
-        "button[aria-label*='Next' i]",
-        "footer button:has-text('Next')",
-    ),
-    "review_button": ("button[aria-label*='Review' i]", "footer button:has-text('Review')"),
-    # confidence: medium
-    "submit_button": (
-        "button[aria-label='Submit application']",
-        "button[aria-label*='Submit' i]",
-        "footer button:has-text('Submit application')",
-    ),
-    # confidence: medium
-    "file_input": ("input[type='file']",),
-    "resume_file_input": (
-        "input[type='file'][name*='resume' i]",
-        "input[type='file'][id*='resume' i]",
-    ),
-    "cover_letter_file_input": (
-        "input[type='file'][name*='cover' i]",
-        "input[type='file'][id*='cover' i]",
-    ),
-    # confidence: medium — the uploaded filename LinkedIn echoes back
-    "uploaded_filename": (
-        "h3.jobs-document-upload__title",
-        ".jobs-document-upload-redesign-card__file-name",
-        "[class*='document-upload'] [class*='file-name']",
-        "[class*='jobs-document-upload'] h3",
-    ),
-    # confidence: low — the library UI changes often
-    "library_document_card": (
-        ".jobs-document-upload-redesign-card",
-        "[class*='document-upload'] li",
-    ),
-    "library_delete_button": (
-        "button[aria-label*='Delete' i]",
-        "button[aria-label*='Remove' i]",
-    ),
-    # confidence: medium
-    "confirmation": (
-        "text=/your application was sent/i",
-        "text=/application sent/i",
-        "h2:has-text('Your application was sent')",
-        "[data-test-modal] :text('Done')",
-    ),
-    # confidence: medium — the most serious thing this file can detect
-}
-
-
-def _first_visible(page: Any, key: str, timeout_ms: int = 2500) -> Any | None:
-    for selector in SELECTORS.get(key, ()):
-        try:
-            locator = page.locator(selector).first
-            if locator.is_visible(timeout=timeout_ms):
-                return locator
-        except Exception as exc:  # noqa: BLE001 - absence is the normal case
-            log.debug("selector_absent", key=key, selector=selector, error=str(exc)[:100])
-    return None
-
-
-def _first_present(page: Any, key: str) -> Any | None:
-    for selector in SELECTORS.get(key, ()):
-        try:
-            locator = page.locator(selector).first
-            if locator.count() > 0:
-                return locator
-        except Exception as exc:  # noqa: BLE001
-            log.debug("selector_absent", key=key, selector=selector, error=str(exc)[:100])
-    return None
 
 
 def decide_upload_slots(fields: list[FormField]) -> int:
@@ -151,6 +75,10 @@ class LinkedInApplier:
 
     platform = "linkedin"
 
+    def __init__(self, knowledge: SiteKnowledge | None = None) -> None:
+        self.knowledge = knowledge if knowledge is not None else load(self.platform)
+        self._steps_seen: list[list[FormField]] = []
+
     def can_handle(self, job: Job) -> bool:
         """Easy Apply only. Anything else belongs to a different path."""
         return job.source == "linkedin" and job.apply_type is ApplyType.EASY_APPLY
@@ -159,16 +87,14 @@ class LinkedInApplier:
 
     def open(self, page: Any, job: Job) -> None:
         page.goto(job.url, wait_until="domcontentloaded")
+        self._steps_seen = []
 
         if self.detect_restriction(page):
             raise RuntimeError("LinkedIn restriction notice on the job page")
 
-        button = _first_visible(page, "easy_apply_button")
-        if button is None:
-            raise RuntimeError("no Easy Apply button — this listing is not Easy Apply")
-        button.click()
+        self.knowledge.resolve(page, "easy_apply_button").click()
 
-        if _first_visible(page, "modal", timeout_ms=8000) is None:
+        if not self.knowledge.present(page, "modal", timeout_ms=8000):
             raise RuntimeError("Easy Apply modal did not open")
 
     def detect_restriction(self, page: Any) -> bool:
@@ -189,98 +115,62 @@ class LinkedInApplier:
 
         The flow marks these ``manual_only`` rather than fighting them.
         """
+        from backend.boards import board
+
+        entry = board(self.platform)
+        domains = entry.domains if entry else ()
         try:
             url = page.url or ""
         except Exception:  # noqa: BLE001
             return False
-        if "linkedin.com" not in url:
+        if not any(domain in url for domain in domains):
             return True
         # The modal never opened but the page navigated away from the job view.
-        return _first_visible(page, "modal", timeout_ms=1000) is None and "/jobs/" not in url
+        return not self.knowledge.present(page, "modal", timeout_ms=1000) and (
+            "/jobs/" not in url
+        )
 
     # -- fields -------------------------------------------------------------
 
     def enumerate_fields(self, page: Any, step: int) -> list[FormField]:
-        modal = _first_visible(page, "modal", timeout_ms=5000)
-        scope = modal if modal is not None else page
+        """Describe the current modal step.
 
-        fields: list[FormField] = []
-        for handle in scope.locator("input, textarea, select").all():
-            try:
-                input_type = (handle.get_attribute("type") or "text").lower()
-                is_file = input_type == "file"
-                if not is_file and not handle.is_visible(timeout=400):
-                    continue
+        Scoped to the modal where one is present: LinkedIn's job page behind the
+        overlay is full of its own inputs — search boxes, message composers —
+        and enumerating those would feed the answer bank questions no employer
+        asked.
+        """
+        try:
+            scope = self.knowledge.resolve(page, "modal", timeout_ms=5000) or page
+        except ElementNotFound:
+            scope = page
 
-                identifier = (
-                    handle.get_attribute("id")
-                    or handle.get_attribute("name")
-                    or handle.get_attribute("aria-describedby")
-                    or ""
-                )
-                if not identifier:
-                    continue
+        fields = formdom.enumerate_form_fields(
+            page if scope is page else scope,
+            step,
+            # `id` first: LinkedIn's ids carry the URN and are what its own
+            # labels point at, while `name` is frequently absent.
+            identifier_attributes=("id", "name", "aria-describedby"),
+            visibility_timeout_ms=400,
+        )
+        self._steps_seen.append(fields)
 
-                label = (
-                    handle.get_attribute("aria-label")
-                    or self._label_text(scope, identifier)
-                    or identifier
-                )
-                tag = handle.evaluate("el => el.tagName.toLowerCase()")
-                kind = (
-                    "file"
-                    if is_file
-                    else {
-                        "radio": "radio",
-                        "checkbox": "checkbox",
-                    }.get(input_type, "textarea" if tag == "textarea" else "text")
-                )
-                if tag == "select":
-                    kind = "select"
-
-                choices: list[str] = []
-                if kind == "select":
-                    choices = [
-                        option.strip()
-                        for option in handle.locator("option").all_inner_texts()
-                        if option.strip() and option.strip().lower() != "select an option"
-                    ]
-
-                fields.append(
-                    FormField(
-                        identifier=identifier,
-                        label=label.strip(),
-                        kind=kind,
-                        required=handle.get_attribute("required") is not None,
-                        choices=choices,
-                        step=step,
-                    )
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.debug("field_enumeration_skipped", error=str(exc)[:120])
+        # Recognised on repeat, walked cautiously when new. An unknown shape is
+        # not an error — a five-step Easy Apply is a variant we had not seen, not
+        # a failure — but it is worth saying so in the log, because "the modal
+        # got longer than we expected" and "a validation error is silently
+        # blocking progress" look identical until someone reads the trail.
+        if self.knowledge.known_variant(self._steps_seen) is None:
+            log.info(
+                "easy_apply_structure_unrecognised",
+                platform=self.platform,
+                steps_so_far=len(self._steps_seen),
+                note="walking cautiously; recorded on completion",
+            )
         return fields
 
-    @staticmethod
-    def _label_text(scope: Any, identifier: str) -> str | None:
-        try:
-            label = scope.locator(f"label[for='{identifier}']").first
-            if label.count() > 0:
-                return label.inner_text()
-        except Exception:  # noqa: BLE001
-            return None
-        return None
-
     def fill_field(self, page: Any, field: FormField, value: str) -> None:
-        locator = page.locator(f"#{field.identifier}, [name='{field.identifier}']").first
-        if field.kind == "select":
-            locator.select_option(label=value)
-        elif field.kind in {"radio", "checkbox"}:
-            page.locator(
-                f"[name='{field.identifier}'][value='{value}'], "
-                f"label:has-text('{value}')"
-            ).first.check()
-        else:
-            locator.fill(value)
+        formdom.fill(page, field, value)
 
     # -- attachments --------------------------------------------------------
 
@@ -291,11 +181,9 @@ class LinkedInApplier:
         self.prune_document_library(page)
 
         if len(documents) == 1:
-            target = _first_present(page, "resume_file_input") or _first_present(
-                page, "file_input"
-            )
-            if target is None:
-                raise RuntimeError("no file input in the Easy Apply modal")
+            target = self.knowledge.resolve(
+                page, "resume_file_input", visible=False
+            ) or self.knowledge.resolve(page, "file_input", visible=False)
             target.set_input_files(documents[0].path)
             return
 
@@ -305,26 +193,18 @@ class LinkedInApplier:
                 if document.kind.value == "cover_letter"
                 else "resume_file_input"
             )
-            target = _first_present(page, key) or _first_present(page, "file_input")
-            if target is None:
-                raise RuntimeError(f"no file input for {document.kind.value}")
+            target = self.knowledge.resolve(
+                page, key, visible=False
+            ) or self.knowledge.resolve(page, "file_input", visible=False)
             target.set_input_files(document.path)
 
     def read_back_attachments(self, page: Any) -> list[str]:
-        """Read the filenames LinkedIn displays. MANDATORY — see module docstring."""
-        names: list[str] = []
-        for selector in SELECTORS["uploaded_filename"]:
-            try:
-                for text in page.locator(selector).all_inner_texts():
-                    cleaned = text.strip()
-                    if cleaned:
-                        names.append(cleaned)
-            except Exception as exc:  # noqa: BLE001
-                log.debug("readback_selector_absent", selector=selector, error=str(exc)[:100])
-
-        if not names:
+        """Read the filenames LinkedIn displays. MANDATORY — see the docstring."""
+        try:
+            return self.knowledge.read_all_text(page, "uploaded_filename")
+        except ElementNotFound:
             log.error("attachment_readback_empty", platform=self.platform)
-        return names
+            raise
 
     def prune_document_library(self, page: Any, *, keep: int = MAX_LIBRARY_DOCUMENTS - 1) -> int:
         """Delete the oldest library entries so a fresh upload is not reused.
@@ -333,11 +213,24 @@ class LinkedInApplier:
         floor, deletions are counted, and each one is logged. Silently deleting
         a user's documents would be worse than a failed upload.
         """
-        keep = max(0, min(keep, MAX_LIBRARY_DOCUMENTS))
+        # The cap is a learned fact about LinkedIn, so it is read from the
+        # quirks file: if LinkedIn changes it, that is a JSON edit like every
+        # other piece of site knowledge. MAX_LIBRARY_DOCUMENTS stays as the
+        # fallback for a knowledge file that predates the quirk.
+        quirk = self.knowledge.quirk("library_holds_four")
+        capacity = int((quirk or {}).get("capacity", MAX_LIBRARY_DOCUMENTS))
+        keep = max(0, min(keep, capacity))
+        card = self.knowledge.elements.get("library_document_card")
+        delete = self.knowledge.elements.get("library_delete_button")
+        if card is None or delete is None:  # pragma: no cover - structural
+            return 0
+
+        card_selector = card.ordered()[0].selector
+        delete_selector = delete.ordered()[0].selector
+
         deleted = 0
         try:
-            cards = page.locator(SELECTORS["library_document_card"][0])
-            total = cards.count()
+            total = page.locator(card_selector).count()
         except Exception as exc:  # noqa: BLE001 - no library UI on this modal
             log.debug("document_library_absent", error=str(exc)[:120])
             return 0
@@ -345,8 +238,7 @@ class LinkedInApplier:
         overflow = max(0, total - keep)
         for _ in range(overflow):
             try:
-                card = page.locator(SELECTORS["library_document_card"][0]).last
-                button = card.locator(SELECTORS["library_delete_button"][0]).first
+                button = page.locator(card_selector).last.locator(delete_selector).first
                 if button.count() == 0:
                     break
                 button.click()
@@ -361,19 +253,33 @@ class LinkedInApplier:
 
     def is_last_step(self, page: Any, fields: list[FormField]) -> bool:
         """Submit is visible. Never a step count — the modal length varies."""
-        return _first_visible(page, "submit_button", timeout_ms=1500) is not None
+        return self.knowledge.present(page, "submit_button", timeout_ms=1500)
 
     def advance(self, page: Any) -> None:
-        button = _first_visible(page, "next_button") or _first_visible(page, "review_button")
-        if button is None:
-            raise RuntimeError("no Next or Review control in the modal")
-        button.click()
+        for key in ("next_button", "review_button"):
+            try:
+                self.knowledge.resolve(page, key).click()
+                return
+            except ElementNotFound:
+                continue
+        raise ElementNotFound(self.platform, "next_button|review_button", [])
 
     def submit(self, page: Any) -> None:
-        button = _first_visible(page, "submit_button")
-        if button is None:
-            raise RuntimeError("no submit control")
-        button.click()
+        self.knowledge.resolve(page, "submit_button").click()
 
     def confirmed(self, page: Any) -> bool:
-        return _first_visible(page, "confirmation", timeout_ms=10000) is not None
+        confirmed = self.knowledge.present(page, "confirmation", timeout_ms=10000)
+        if confirmed:
+            # Only record a variant the whole way through. A structure captured
+            # from a run that failed halfway is not a flow LinkedIn serves, it
+            # is a flow we failed to walk, and storing it would teach the wrong
+            # shape.
+            variant = self.knowledge.observe_flow(self._steps_seen)
+            log.info(
+                "easy_apply_variant",
+                fingerprint=variant.fingerprint,
+                steps=variant.step_count,
+                seen_before=variant.observed_count - 1,
+            )
+        self.knowledge.save()
+        return confirmed
