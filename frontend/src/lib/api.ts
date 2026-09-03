@@ -15,6 +15,7 @@ import type {
   Job,
   JobDetail,
   Page,
+  Preference,
   Profile,
   QueueCard,
   Template,
@@ -122,6 +123,18 @@ export const api = {
   bulkAnswers: (values: Record<number, string>) =>
     request<Answer[]>("/answers/bulk", { method: "POST", body: body(values) }),
   deleteAnswer: (id: number) => request<void>(`/answers/${id}`, { method: "DELETE" }),
+
+  // ------------------------------------------------------------ preferences
+  listPreferences: (params?: { status?: string }) =>
+    request<Preference[]>("/preferences", { params }),
+  createPreference: (payload: Partial<Preference>) =>
+    request<Preference>("/preferences", { method: "POST", body: body(payload) }),
+  confirmPreference: (id: number) =>
+    request<Preference>(`/preferences/${id}/confirm`, { method: "POST" }),
+  rejectPreference: (id: number) =>
+    request<Preference>(`/preferences/${id}/reject`, { method: "POST" }),
+  deletePreference: (id: number) =>
+    request<void>(`/preferences/${id}`, { method: "DELETE" }),
 
   // -------------------------------------------------------------- templates
   listTemplates: () => request<Template[]>("/templates"),

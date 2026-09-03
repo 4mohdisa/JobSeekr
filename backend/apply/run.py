@@ -22,6 +22,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
+from backend import preferences
 from backend.apply import guardrails
 from backend.apply.flow import RestrictionDetected, run_apply
 from backend.apply.pacing import sleep_between_submits
@@ -343,6 +344,15 @@ def run_apply_pass(
     # Outside the session: the parks are committed, so a reply that arrives
     # immediately finds the job in NEEDS_ANSWER and re-queues it.
     _escalate_parked(pending_escalations)
+
+    # Look for patterns in what the user skipped. Nothing here is applied —
+    # every result is a PROPOSED row that reaches the user in the evening
+    # digest and changes no behaviour until they confirm it.
+    try:
+        with session_scope() as session:
+            preferences.propose_from_skips(session)
+    except Exception as exc:  # noqa: BLE001 - inference must not fail a pass
+        log.warning("skip_inference_failed", error=str(exc)[:150])
 
     log.info("apply_pass_complete", **counts, dry_run=dry_run, errors=len(errors))
     return run

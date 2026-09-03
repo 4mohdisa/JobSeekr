@@ -252,3 +252,29 @@ export interface ControlState {
   stop_file: string;
   reason: string | null;
 }
+
+
+/** Where a preference came from. This is a safety boundary, not metadata:
+ *  facts about the user are never "inferred". */
+export type PreferenceSource = "user_set" | "asked" | "inferred";
+
+/** Only "active" affects behaviour. "proposed" is waiting on the user. */
+export type PreferenceStatus = "active" | "proposed" | "rejected" | "retired";
+
+export interface Preference {
+  id: number;
+  key: string;
+  value: string;
+  value_type: AnswerType;
+  scope: "global" | "campaign";
+  campaign_id: number | null;
+  source: PreferenceSource;
+  status: PreferenceStatus;
+  confidence: number;
+  times_confirmed: number;
+  times_ignored: number;
+  /** Why it was proposed, in the user's terms. */
+  evidence: string | null;
+  learned_at: string;
+  confirmed_at: string | null;
+}
