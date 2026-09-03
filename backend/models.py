@@ -554,6 +554,15 @@ class Score(SQLModel, table=True):
     job_id: int = Field(foreign_key="job.id")
     profile_version: int
     rubric_version: int
+
+    rubric_hash: str | None = None
+    """Content hash of the rubric this score was computed against.
+
+    rubric_version only changes when someone remembers to bump it, so an edited
+    rubric produced scores indistinguishable from ones computed before the edit
+    — a silently stale shortlist. The hash changes whenever the text does.
+    """
+
     stage1: float | None = None
     stage2: float | None = None
     final: float | None = None

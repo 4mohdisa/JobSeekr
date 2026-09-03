@@ -43,7 +43,6 @@ __all__ = [
     "build_environment",
     "find_ai_slots",
     "render_string",
-    "render_template_file",
     "template_root",
     "validate_placeholders",
 ]
@@ -227,10 +226,6 @@ def render_string(body: str, context: dict[str, Any], *, latex: bool = True) -> 
     env = _env_for_latex() if latex else build_environment()
     return env.from_string(body).render(**context)
 
-
-def render_template_file(name: str, context: dict[str, Any]) -> str:
-    """Render one of the shipped templates by filename."""
-    return _env_for_latex().get_template(name).render(**context)
 
 
 def find_ai_slots(body: str) -> list[AISlot]:

@@ -2652,3 +2652,198 @@ Unchanged: BasicTeX via `tlmgr`, `PDFLATEX_PATH`, and real discovery against
 live boards. Nothing in this section has been exercised against a real job
 board — the sources' *failure* path is now well covered, their success path
 still only by the fixtures and by the previous Windows run.
+
+---
+
+# Overnight session — 2026-09-03 (macOS)
+
+Nine phases, eight branches, eight PRs. Everything below was run on this
+machine unless it says otherwise. **Nothing was submitted; `ALLOW_LIVE_SUBMIT`
+was never touched and is still false.**
+
+## The PR stack
+
+Phases 2–8 genuinely build on each other, so they are a **linear stack** rather
+than eight branches off `main` as the brief specified. Merge in order and each
+retargets cleanly.
+
+```
+main
+├── #5  chore/docs              (independent)
+└── #6  feat/siteknowledge
+    └── #7  feat/har-pipeline
+        └── #8  feat/failure-memory
+            └── #9  feat/preferences
+                └── #10 feat/seek-nz
+                    └── #11 feat/ats-adapters
+                        └── #12 chore/reachability
+```
+
+Stacking was a judgement call, not an oversight. Phase 3's extractor emits
+`Strategy` objects, Phase 4 keys failures on `element_id` and `flow_variant`,
+Phase 7 rewrites the ATS adapters onto the same layer — branching those off
+`main` would have meant re-implementing Phase 2 three times or resolving the
+same conflicts three times at merge.
+
+## What was built
+
+| Phase | Branch | PR | Substance |
+|---|---|---|---|
+| 1 | `chore/docs` | #5 | tlmgr correction, platform-aware pdflatex hint |
+| 2 | `feat/siteknowledge` | #6 | Site knowledge layer, both primary boards |
+| 3 | `feat/har-pipeline` | #7 | Capture → knowledge, offline replay harness |
+| 4 | `feat/failure-memory` | #8 | `FailureEvent` ledger, digest trends |
+| 5 | `feat/preferences` | #9 | Preference memory, proposals, Preferences page |
+| 6 | `feat/seek-nz` | #10 | NZ as configuration, currency + work-rights safety |
+| 7 | `feat/ats-adapters` | #11 | Nine ATS platforms on site knowledge, trust graduation |
+| 8 | `chore/reachability` | #12 | 11 unreachable → 5, all five deliberate |
+
+**804 tests pass** (622 at session start; 182 added). Rehearsal 12/12 on every
+branch. Frontend typechecks.
+
+## Decisions taken without asking
+
+The brief said to pick a sensible default and note it. These are those.
+
+1. **Stacked branches** rather than eight off `main`. Reasoning above.
+2. **Site knowledge ships in `backend/siteknowledge/defaults/` and seeds into
+   `data/siteknowledge/` on first load.** The brief specified the `data/` path,
+   but `data/` is gitignored, so defaults living only there would not survive a
+   clone. The live copy under `data/` is never overwritten after seeding — it
+   is what the user edits and what promotion writes into.
+3. **Generic HTML stayed in Python.** "No Seek or LinkedIn selector remains in
+   Python" is enforced by a test, but `input, textarea, select` and
+   `label[for=...]` live in `backend/apply/formdom.py`, shared. They are the
+   HTML standard, identical on every site; filing them under "facts about Seek"
+   would be filing a fact about HTML in nine places.
+4. **Captured element keys are namespaced `captured_*`.** A capture cannot
+   silently rewire a curated adapter key — mapping "a button labelled Submit"
+   onto `submit_button` would be a guess, and a wrong guess repoints the adapter
+   at a different control. Promotion is a human reading the merge report.
+5. **`FailureEvent.job_id` is `ON DELETE SET NULL`.** RESTRICT would let the
+   ledger pin every job it ever touched; CASCADE would erase the record that
+   anything failed. SET NULL keeps every dimension anything aggregates on.
+6. **Cross-currency salary comparison keeps the job.** Dropping an ad because
+   its currency is unknown hides real work; keeping it costs one manual look.
+   Only the unconverted comparison is ruled out.
+7. **The outbound email trio stays unwired.** See "Needs you" below.
+
+## What broke, and what found it
+
+Eight real bugs. Every one was caught by a test or the rehearsal, not by
+reading.
+
+- **Three broad `except Exception` handlers swallowed `ElementNotFound`**
+  before `run_apply`'s wrapper could see it, so a moved site reported "could
+  not open form" and retried forever. An AST test now fails if a fourth
+  appears. (Phase 2)
+- **The capture extractor skipped `<a>` with no `href`** — which is exactly
+  Seek's Quick Apply control, the single most important element on the page.
+  (Phase 3)
+- **Short identifiers were patterned into near-universal selectors.** `q1`
+  became `[id*='q']`, which matches nearly every element on the page. An
+  over-broad strategy is worse than none: resolution finds *something*, reports
+  success, and the adapter clicks the wrong control. (Phase 3)
+- **Two naive-vs-aware datetime crashes**, in the failure digest and in
+  `propose_from_skips`. The second would have raised inside the apply pass.
+  (Phases 4, 5)
+- **Two fact-detection patterns were wrong**: the work-rights pattern did not
+  match "full working rights in Australia", and the salary pattern matched
+  "salary expectations" but not "current_salary". Both would have let the
+  system infer a fact about the user. (Phase 5)
+- **The first cross-currency rule silently disabled the salary floor** for
+  every job discovered before the currency column existed. (Phase 6)
+- **Wiring `ensure_logged_in` halted the pass on every external application.**
+  An employer ATS has no login, so `is_logged_in` returns False for Greenhouse.
+  The rehearsal caught it within a minute. (Phase 8)
+
+## Tests that could not fail
+
+Your standing note was right to insist on this. **Every new assertion was
+mutation-checked** — 36 mutations across the eight phases. Three tests passed
+against a mutation that should have broken them:
+
+1. **Phase 4** — an assertion ending in `or "resume_file_input" in body`, where
+   the right operand was always true. Split into two tests that each fail on
+   their own mutation.
+2. **Phase 6** — the headline test, "an AU answer must not answer an NZ
+   question", passed with the region filter *deleted*. The two questions score
+   below the fuzzy threshold, so it abstained via `NO_MATCH` regardless. Added a
+   regex-row case where `working rights` matches both phrasings outright and the
+   Australian "Yes" really would be used.
+3. **Phase 7** — nothing covered the form-map trust verdict travelling from disk
+   to the draft, which is precisely where it was being discarded. Added both
+   directions.
+
+A fourth artefact was not a code bug but worth recording: **`.pyc` staleness
+made a restored file look mutated.** `AU-Main` and `NZ-Main` are the same byte
+length, so size+mtime cache invalidation missed the change. Mutation runs now
+clear `__pycache__` between iterations.
+
+## Live findings
+
+**Seek NZ, probed 2026-09-03** — the brief said not to assume it mirrors AU, and
+the important finding is one an assumption would have missed:
+
+```
+www.seek.co.nz                        308 -> nz.seek.com
+nz.seek.com/api/jobsearch/v5/search   200, envelope identical to AU
+siteKey=NZ-Main is the market selector, NOT the host
+```
+
+`au.seek.com` with `siteKey=NZ-Main` returns NZ jobs. The host is cosmetic. So
+sending the wrong site key returns the wrong country's listings from the right
+host, and nothing in the response says so.
+
+**Neither market returns a currency field.** AU prints `$75,000 – $90,000 per
+year`, NZ prints `$81,083 - $110,618`. Identical notation, ~0.9 NZD/AUD.
+`locations[].countryCode` is the only reliable discriminator.
+
+**jobspy supports New Zealand** — `Country.NEWZEALAND`, Indeed domain `nz`,
+confirmed against the installed 1.1.82 rather than its docs. `country_indeed`
+was hardcoded to `"Australia"`; it is now per region. LinkedIn needs no country
+parameter, its location string drives the market.
+
+## Unverified
+
+Unchanged from the last handoff, and this session did not move any of it:
+
+- **Nothing has ever been submitted.** `ALLOW_LIVE_SUBMIT` has never been true.
+- **No browser has ever been driven.** Chrome and the Playwright browsers are
+  still not installed. Every apply-path test uses a fake page, a snapshot page,
+  or a fake adapter.
+- **Every strategy value is a guess.** Phase 2 and Phase 7 changed the
+  *structure* — multi-strategy, self-healing, stored as data. The values were
+  migrated from the previous hardcoded selectors, which were themselves written
+  without access to the live sites. The HAR capture is what makes them real.
+- **The capture pipeline has never seen a real HAR.** It is tested against
+  synthetic fixtures shaped like both platforms' real markup.
+- **No real scoring or document content.** No API key, no profile, so every LLM
+  call in the rehearsal is a deterministic stub.
+- **Telegram, Gmail inbound, outbound email** — no credentials, never run. The
+  new `/yes`, `/no` and form-approval paths are tested but have never sent a
+  message.
+
+## Needs you
+
+1. **Run the HAR capture.** Everything around it is built. `uv run python -m
+   backend.apply.har record --platform seek --variant quick_apply`, press
+   Shift+Enter at each step, then `... har ingest --platform seek --variant
+   quick_apply --dry-run` to see what it would learn before writing anything.
+   This is the single highest-value thing left — it turns every strategy from a
+   guess into something verified.
+
+2. **Decide on outbound email.** `send_draft` sends mail *as you*, from your
+   address, to a real recruiter. It is the one action here whose blast radius is
+   someone else's inbox, and unlike an application it cannot be undone by a
+   switch after the fact. Wiring is one call in `apply/run.py` plus the approval
+   token it already requires. Left off deliberately — say the word.
+
+3. **Review the starter campaign's search terms.** Still the placeholder guess
+   (`data analyst`, `software engineer`, Adelaide SA). It is active from the
+   bring-up, so discovery is running against terms nobody chose.
+
+4. **Set a region on any NZ campaign.** Existing campaigns are AU by migration
+   default, which is what they actually are.
+
+5. **Merge the stack in order**, #5 and #6 first.
