@@ -192,9 +192,29 @@ def build_draft(
             screening.append(field)
 
     campaign_id = campaign.id if campaign else None
+    # From the JOB, not the campaign: a campaign searching NZ can still surface
+    # an Australian ad, and work rights are a different question in each
+    # country. Same rule the answer bank already applies to region-scoped rows.
+    region = getattr(job, "region", None)
     bank = load_answers(session, campaign_id)
     resolved, abstentions = resolve_all(screening, campaign_id, answers=bank)
     draft.answers.update(resolved)
+
+    # Facts before the form map. The form map answers "where does this field's
+    # value come from"; facts answer "what is the value". A question the bank
+    # cannot answer but a fact can is not a mapping problem, and routing it
+    # through the LLM field-mapper would cost a call to rediscover that the
+    # answer bank is where screening answers live.
+    if abstentions:
+        rescued, abstentions = _resolve_via_facts(
+            session,
+            abstentions,
+            screening=screening,
+            bank=bank,
+            region=region,
+            job_id=job.id,
+        )
+        draft.answers.update(rescued)
 
     if abstentions and settings.apply_form_mapping_enabled:
         draft.form_fingerprint = fingerprint_fields(screening)
@@ -218,6 +238,88 @@ def build_draft(
 
     draft.abstentions = abstentions
     return draft
+
+
+
+def _resolve_via_facts(
+    session: Session,
+    abstentions: list[Abstain],
+    *,
+    screening: list[FormField],
+    bank: Sequence[Any],
+    region: Region | None,
+    job_id: int | None,
+) -> tuple[dict[str, Any], list[Abstain]]:
+    """Try to answer each abstention from a stated fact.
+
+    An answer only comes back when a derivation has already been CONFIRMED by
+    the user. A first derivation writes a proposal, asks over Telegram, and
+    still abstains — so this pass parks the job exactly as it would have without
+    facts, and the next pass has the answer. That is deliberate: the model's
+    reading of someone's licence is a proposal until they agree with it.
+
+    The routing comes from the answer-bank row that matched, not from a second
+    question matcher. Two matchers disagreeing about what a question is asking
+    is how the wrong fact answers it.
+    """
+    from backend import facts as facts_module
+
+    still: list[Abstain] = []
+    rescued: dict[str, Any] = {}
+
+    by_key = {normalise_question(question_key(f)): f for f in screening}
+
+    for abstention in abstentions:
+        key = normalise_question(abstention.question)
+        field_ = by_key.get(key)
+        category = _fact_category_for(abstention.question, bank, region)
+
+        answer = None
+        try:
+            answer = facts_module.resolve_from_facts(
+                session,
+                question=(field_.label if field_ else abstention.question),
+                question_key=key,
+                category=category,
+                choices=list(field_.choices) if field_ else None,
+                answer_type=_answer_type_for(abstention.question, bank, region),
+                region=region,
+                job_id=job_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - a derivation fault is an abstention
+            log.warning("fact_resolution_failed", error=str(exc)[:200])
+
+        if answer:
+            rescued[field_.label if field_ else abstention.question] = _synthetic_answer(
+                field_ or FormField(identifier=key, label=abstention.question), answer
+            )
+            log.info("answered_from_fact", question=key[:80])
+        else:
+            still.append(abstention)
+
+    return rescued, still
+
+
+def _fact_category_for(
+    question: str, bank: Sequence[Any], region: Region | None = None
+) -> Any:
+    """Which fact category the matching bank row points at, if any."""
+    from backend.apply.answers import matching_rows
+
+    for row in matching_rows(question, bank, region=region):
+        if getattr(row, "fact_category", None) is not None:
+            return row.fact_category
+    return None
+
+
+def _answer_type_for(question: str, bank: Sequence[Any], region: Region | None = None):
+    """The answer type the matching bank row expects."""
+    from backend.apply.answers import matching_rows
+    from backend.models import AnswerType
+
+    for row in matching_rows(question, bank, region=region):
+        return row.answer_type
+    return AnswerType.TEXT
 
 
 def _resolve_via_form_map(

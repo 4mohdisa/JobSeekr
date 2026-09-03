@@ -35,6 +35,7 @@ from sqlmodel import col, select
 from backend.db import session_scope
 from backend.logging_setup import get_logger
 from backend.models import (
+    FactCategory,
     AnswerBank,
     AnswerType,
     Campaign,
@@ -65,6 +66,15 @@ class AnswerBankSeed:
     answer_type: AnswerType
     notes: str
 
+    fact_category: FactCategory | None = None
+    """Which category of fact can answer this, once the user has written one.
+
+    Routing, not an answer. The pattern above already knows how to recognise the
+    question in all its spellings; this says which fact to consult when the row
+    itself is blank. Reusing the bank's matcher rather than building a second
+    one keeps a single answer to "what is this question asking".
+    """
+
 
 # Fuzzy is the default: most screening questions are a full sentence and a
 # fuzzy ratio against a canonical phrasing handles the variation. Regex is used
@@ -81,6 +91,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". Must match the work rights recorded in '
             "your profile exactly — this is a legal declaration, never soften it."
         ),
+        fact_category=FactCategory.WORK_RIGHTS,
     ),
     AnswerBankSeed(
         # Must not swallow sponsorship questions, which need the opposite answer.
@@ -94,6 +105,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'e.g. "Australian citizen", "Permanent resident", '
             '"Subclass 500 student visa".'
         ),
+        fact_category=FactCategory.WORK_RIGHTS,
     ),
     AnswerBankSeed(
         # Every apostrophe placement and both spellings: "driver's licence",
@@ -106,12 +118,14 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". "true" only if the licence is current and '
             "Australian — an overseas or expired licence is a false here."
         ),
+        fact_category=FactCategory.LICENCE,
     ),
     AnswerBankSeed(
         question_pattern="Do you have your own reliable transport?",
         match_type=MatchType.FUZZY,
         answer_type=AnswerType.BOOLEAN,
         notes='Answer "true" or "false".',
+        fact_category=FactCategory.TRANSPORT,
     ),
     AnswerBankSeed(
         question_pattern=(
@@ -124,6 +138,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". "true" only if you hold a National Police '
             "Certificate issued inside the window the ad asks for, usually 12 months."
         ),
+        fact_category=FactCategory.CHECKS,
     ),
     AnswerBankSeed(
         question_pattern=(
@@ -136,6 +151,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". The check is state-issued — WWCC in SA, NSW '
             'and VIC, Blue Card in QLD, WWVP in the ACT. "true" only if current.'
         ),
+        fact_category=FactCategory.CHECKS,
     ),
     AnswerBankSeed(
         question_pattern="What is your notice period with your current employer?",
@@ -145,6 +161,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Short free text expressed as a period, e.g. "4 weeks", "2 weeks", '
             '"Immediate".'
         ),
+        fact_category=FactCategory.AVAILABILITY,
     ),
     AnswerBankSeed(
         question_pattern="What is the earliest date you can start?",
@@ -154,6 +171,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'ISO date, YYYY-MM-DD, e.g. 2026-09-15. Not "ASAP" — the applier '
             "needs a real date it can type into a date field."
         ),
+        fact_category=FactCategory.AVAILABILITY,
     ),
     AnswerBankSeed(
         # Two lookaheads so either word order matches; "hour" excluded so this
@@ -168,24 +186,28 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             "Annual gross in AUD, digits only — no dollar sign, no commas, no "
             '"k". e.g. 95000.'
         ),
+        fact_category=FactCategory.COMPENSATION,
     ),
     AnswerBankSeed(
         question_pattern=r"(?i)(?=.*\bhour)(?=.*\b(rate|pay|expect|charge))",
         match_type=MatchType.REGEX,
         answer_type=AnswerType.NUMBER,
         notes=("Hourly rate in AUD, digits only, decimals allowed — e.g. 55 or 62.50."),
+        fact_category=FactCategory.COMPENSATION,
     ),
     AnswerBankSeed(
         question_pattern="Are you willing to relocate for this role?",
         match_type=MatchType.FUZZY,
         answer_type=AnswerType.BOOLEAN,
         notes='Answer "true" or "false".',
+        fact_category=FactCategory.AVAILABILITY,
     ),
     AnswerBankSeed(
         question_pattern="Are you willing to travel for this role?",
         match_type=MatchType.FUZZY,
         answer_type=AnswerType.BOOLEAN,
         notes='Answer "true" or "false".',
+        fact_category=FactCategory.AVAILABILITY,
     ),
     AnswerBankSeed(
         # The field named varies per ad, so there is no canonical sentence to
@@ -201,6 +223,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             "field-agnostic: if an ad asks about one specific technology and your "
             "real figure differs, leave it blank so the applier asks instead."
         ),
+        fact_category=FactCategory.EXPERIENCE,
     ),
     AnswerBankSeed(
         question_pattern="What is your highest level of education or qualification?",
@@ -210,12 +233,14 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             "Free text. Use the award's full name as it appears in your profile, "
             'e.g. "Bachelor of Engineering (Honours)".'
         ),
+        fact_category=FactCategory.EDUCATION,
     ),
     AnswerBankSeed(
         question_pattern="Are you currently residing in Australia?",
         match_type=MatchType.FUZZY,
         answer_type=AnswerType.BOOLEAN,
         notes='Answer "true" or "false".',
+        fact_category=FactCategory.WORK_RIGHTS,
     ),
     AnswerBankSeed(
         question_pattern=(
@@ -227,12 +252,14 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". Watch the polarity: "true" means you DO '
             "require sponsorship, which is the opposite of the working-rights answer."
         ),
+        fact_category=FactCategory.WORK_RIGHTS,
     ),
     AnswerBankSeed(
         question_pattern="Are you available for weekend, evening or shift work?",
         match_type=MatchType.FUZZY,
         answer_type=AnswerType.BOOLEAN,
         notes='Answer "true" or "false".',
+        fact_category=FactCategory.AVAILABILITY,
     ),
     AnswerBankSeed(
         question_pattern=(
@@ -241,6 +268,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
         match_type=MatchType.FUZZY,
         answer_type=AnswerType.BOOLEAN,
         notes='Answer "true" or "false".',
+        fact_category=FactCategory.HEALTH,
     ),
     AnswerBankSeed(
         question_pattern=r"(?i)\b(abn|australian\s+business\s+number)\b",
@@ -250,6 +278,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". "true" only if you hold a current ABN and '
             "are willing to contract under it."
         ),
+        fact_category=FactCategory.BUSINESS,
     ),
     AnswerBankSeed(
         question_pattern="Can you provide contactable referees?",
@@ -259,6 +288,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". Referee names and phone numbers are never '
             "auto-filled — a form that demands them gets parked for you."
         ),
+        fact_category=FactCategory.REFEREES,
     ),
     AnswerBankSeed(
         question_pattern=(
@@ -272,6 +302,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             "Leaving it blank makes the applier ask you rather than disclose a "
             "health fact you have not approved."
         ),
+        fact_category=FactCategory.HEALTH,
     ),
 )
 
@@ -285,6 +316,7 @@ def seed_answer_bank() -> int:
     anything this file has to say about the question.
     """
     inserted = 0
+    backfilled = 0
 
     with session_scope() as session:
         existing = set(
@@ -295,8 +327,24 @@ def seed_answer_bank() -> int:
             ).all()
         )
 
+        # Backfill fact_category onto rows seeded before it existed. Without
+        # this, an upgraded install keeps all 21 questions and none of them can
+        # ever reach a fact — the patterns survive, the routing does not, and the
+        # failure is silent because a blank bank row already means "ask".
+        by_pattern = {
+            row.question_pattern: row
+            for row in session.exec(
+                select(AnswerBank).where(col(AnswerBank.campaign_id).is_(None))
+            ).all()
+        }
+
         for spec in ANSWER_BANK_SEEDS:
             if spec.question_pattern in existing:
+                row = by_pattern.get(spec.question_pattern)
+                if row is not None and row.fact_category is None and spec.fact_category:
+                    row.fact_category = spec.fact_category
+                    session.add(row)
+                    backfilled += 1
                 continue
             session.add(
                 AnswerBank(
@@ -310,6 +358,7 @@ def seed_answer_bank() -> int:
                     choices=None,
                     verified_at=None,
                     notes=spec.notes,
+                    fact_category=spec.fact_category,
                 )
             )
             # Guards against a duplicated pattern inside ANSWER_BANK_SEEDS, which
@@ -320,6 +369,7 @@ def seed_answer_bank() -> int:
     log.info(
         "answer_bank_seeded",
         inserted=inserted,
+        backfilled=backfilled,
         skipped=len(ANSWER_BANK_SEEDS) - inserted,
         defined=len(ANSWER_BANK_SEEDS),
     )
@@ -346,6 +396,68 @@ def seed_default_profile() -> bool:
 
     log.info("profile_seeded", version=DEFAULT_PROFILE_VERSION)
     return True
+
+
+FACT_SHELLS: tuple[tuple[str, str, str], ...] = (
+    # key, category, the prompt shown above the textarea on the Facts page
+    ("work_rights", "WORK_RIGHTS",
+     "Your right to work: citizenship or visa, any conditions, whether you need "
+     "sponsorship."),
+    ("licence", "LICENCE",
+     "Driver's or other licences: which state issued it, what class, how long "
+     "you have held it, any restrictions."),
+    ("checks", "CHECKS",
+     "Police checks, working-with-children checks, security clearances — which "
+     "ones you hold and when they were issued."),
+    ("education", "EDUCATION",
+     "Your highest qualification, where and when, plus anything else relevant."),
+    ("experience", "EXPERIENCE",
+     "Years of experience, and in what. Write it the way you would say it."),
+    ("availability", "AVAILABILITY",
+     "Notice period, earliest start date, and whether you will relocate, "
+     "travel, or work weekends and shifts."),
+    ("compensation", "COMPENSATION",
+     "Salary or rate expectations, and whether they are negotiable."),
+    ("transport", "TRANSPORT", "Whether you have your own reliable transport."),
+    ("referees", "REFEREES", "Whether you can provide contactable referees."),
+    ("health", "HEALTH",
+     "Anything about medicals, drug tests or vaccination status you are willing "
+     "to declare."),
+    ("business", "BUSINESS",
+     "ABN, company, or contracting arrangements, if you have any."),
+)
+"""The categories the Facts page offers, in the order it shows them.
+
+Seeded EMPTY. A fact with placeholder text would be a fabricated fact about the
+user (hard rule 1) sitting in the one place the system treats as verbatim
+truth, and the derivation layer would happily reason from it. Empty means the
+page shows the prompt and nothing else, and no derivation can happen until the
+user writes something real.
+"""
+
+
+def seed_facts() -> int:
+    """Create the empty fact shells. Returns how many were added.
+
+    Nothing is invented. Each shell is a key, a category and an empty string;
+    the prompts live in FACT_SHELLS and are rendered by the page, never stored
+    as the fact text.
+    """
+    from backend.models import Fact, FactCategory
+
+    added = 0
+    with session_scope() as session:
+        existing = {row.key for row in session.exec(select(Fact)).all()}
+        for key, category, _prompt in FACT_SHELLS:
+            if key in existing:
+                continue
+            session.add(
+                Fact(key=key, text="", category=FactCategory[category], jurisdiction=None)
+            )
+            added += 1
+
+    log.info("facts_seeded", added=added, total=len(FACT_SHELLS))
+    return added
 
 
 def seed_starter_campaign() -> bool:
@@ -413,11 +525,13 @@ def seed_all() -> None:
     """Seed everything. Safe to run on every startup and after every migration."""
     profile_created = seed_default_profile()
     answers_inserted = seed_answer_bank()
+    facts_created = seed_facts()
     campaign_created = seed_starter_campaign()
     log.info(
         "seed_complete",
         profile_created=profile_created,
         answer_bank_inserted=answers_inserted,
+        facts_created=facts_created,
         starter_campaign_created=campaign_created,
     )
 

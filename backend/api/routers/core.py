@@ -15,13 +15,16 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlmodel import Session, select
 
-from backend import preferences
+from backend import facts, preferences
 from backend.api.schemas import (
     AnswerIn,
     AnswerOut,
     CampaignIn,
     CampaignOut,
     ControlState,
+    DerivedAnswerOut,
+    FactIn,
+    FactOut,
     PlaceholderIssueOut,
     PreferenceIn,
     PreferenceOut,
@@ -39,6 +42,9 @@ from backend.logging_setup import get_logger
 from backend.models import (
     AnswerBank,
     Application,
+    DerivedAnswer,
+    Fact,
+    Region,
     Preference,
     PreferenceSource,
     ApplicationOutcome,
@@ -58,6 +64,7 @@ templates_router = APIRouter(prefix="/templates", tags=["templates"])
 settings_router = APIRouter(prefix="/settings", tags=["settings"])
 control_router = APIRouter(prefix="/control", tags=["control"])
 preferences_router = APIRouter(prefix="/preferences", tags=["preferences"])
+facts_router = APIRouter(prefix="/facts", tags=["facts"])
 
 
 # ==========================================================================
@@ -625,4 +632,91 @@ def delete_preference(preference_id: int, session: Session = Depends(get_session
     if row is None:
         raise HTTPException(404, "no such preference")
     session.delete(row)
+    session.commit()
+
+
+# ==========================================================================
+# Facts — layer 1, the user's own words
+# ==========================================================================
+
+
+@facts_router.get("", response_model=list[FactOut])
+def list_facts(session: Session = Depends(get_session)) -> list[Fact]:
+    """Every fact, in the order the Facts page shows them.
+
+    Ordered by the seed list rather than alphabetically or by id: the page is a
+    form the user fills top to bottom, and reordering it between visits makes
+    it harder to see what is still blank.
+    """
+    from backend.seed import FACT_SHELLS
+
+    order = {key: index for index, (key, _c, _p) in enumerate(FACT_SHELLS)}
+    rows = list(session.exec(select(Fact)).all())
+    return sorted(rows, key=lambda row: (order.get(row.key, 999), row.key))
+
+
+@facts_router.put("/{key}", response_model=FactOut)
+def update_fact(
+    key: str, payload: FactIn, session: Session = Depends(get_session)
+) -> Fact:
+    """Write a fact verbatim. Editing one invalidates its derived answers."""
+    row = session.exec(select(Fact).where(Fact.key == key)).first()
+    if row is None:
+        raise HTTPException(404, f"no fact {key!r}; run `uv run python -m backend.seed`")
+
+    facts.set_fact(
+        session,
+        key=key,
+        text=payload.text,
+        category=row.category,
+        jurisdiction=Region(payload.jurisdiction) if payload.jurisdiction else None,
+    )
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+@facts_router.get("/derived", response_model=list[DerivedAnswerOut])
+def list_derived(
+    fact_id: int | None = None, session: Session = Depends(get_session)
+) -> list[Any]:
+    """Derived answers, optionally just the ones from one fact.
+
+    Each carries ``stale``, so the page can show that an edited fact has
+    invalidated an answer rather than leaving the user to infer it.
+    """
+    stale_ids = {row.id for row in facts.stale_derivations(session)}
+    rows = list(session.exec(select(DerivedAnswer)).all())
+    if fact_id is not None:
+        rows = [row for row in rows if row.fact_id == fact_id]
+    return [
+        DerivedAnswerOut(
+            **{
+                field: getattr(row, field)
+                for field in DerivedAnswerOut.model_fields
+                if field != "stale"
+            },
+            stale=row.id in stale_ids,
+        )
+        for row in rows
+    ]
+
+
+@facts_router.post("/derived/{derivation_id}/confirm", response_model=DerivedAnswerOut)
+def confirm_derived(
+    derivation_id: int, session: Session = Depends(get_session)
+) -> Any:
+    row = facts.confirm(session, derivation_id)
+    if row is None:
+        raise HTTPException(404, "no such derivation")
+    session.commit()
+    session.refresh(row)
+    return DerivedAnswerOut.model_validate(row)
+
+
+@facts_router.delete("/derived/{derivation_id}", status_code=204)
+def reject_derived(derivation_id: int, session: Session = Depends(get_session)) -> None:
+    """The user disagreed. Deleted so the next pass re-derives."""
+    if not facts.reject(session, derivation_id):
+        raise HTTPException(404, "no such derivation")
     session.commit()

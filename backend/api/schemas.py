@@ -28,6 +28,9 @@ from backend.models import (
 
 __all__ = [
     "AnalyticsBucket",
+    "DerivedAnswerOut",
+    "FactIn",
+    "FactOut",
     "PreferenceIn",
     "PreferenceOut",
     "AnalyticsResponse",
@@ -419,3 +422,43 @@ class PreferenceIn(BaseModel):
     value: str = Field(max_length=2000)
     value_type: AnswerType = AnswerType.TEXT
     campaign_id: int | None = None
+
+
+class FactOut(BaseModel):
+    """One stated fact, plus what has been derived from it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    key: str
+    text: str
+    category: str
+    jurisdiction: str | None
+    updated_at: datetime
+
+
+class FactIn(BaseModel):
+    """A fact as typed. Stored verbatim — nothing here normalises the text."""
+
+    text: str = Field(max_length=8000)
+    jurisdiction: str | None = None
+
+
+class DerivedAnswerOut(BaseModel):
+    """An answer worked out from a fact, and whether it has been confirmed."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    question_key: str
+    question_text: str
+    answer_value: str
+    answer_type: str
+    fact_id: int | None
+    region: str | None
+    reasoning: str | None
+    confirmed_at: datetime | None
+    stale: bool = False
+    """True when the source fact has been edited since. A stale derivation does
+    not answer anything — it is shown so the change is visible rather than
+    silent."""

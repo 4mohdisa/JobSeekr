@@ -278,3 +278,30 @@ export interface Preference {
   learned_at: string;
   confirmed_at: string | null;
 }
+
+
+export interface Fact {
+  id: number;
+  key: string;
+  /** The user's own words. Never rewritten by the system. */
+  text: string;
+  category: string;
+  /** null means the fact holds everywhere. "AU"/"NZ" scopes it to one country. */
+  jurisdiction: string | null;
+  updated_at: string;
+}
+
+export interface DerivedAnswer {
+  id: number;
+  question_key: string;
+  question_text: string;
+  answer_value: string;
+  answer_type: AnswerType;
+  fact_id: number | null;
+  region: string | null;
+  reasoning: string | null;
+  /** null until confirmed. An unconfirmed derivation answers nothing. */
+  confirmed_at: string | null;
+  /** The source fact was edited, so this no longer applies. */
+  stale: boolean;
+}

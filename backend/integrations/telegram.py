@@ -26,7 +26,7 @@ from sqlmodel import select
 from pathlib import Path
 
 from backend.config import settings
-from backend import failures, preferences
+from backend import facts, failures, preferences
 from backend.db import session_scope
 from backend.integrations.notify import Priority, set_sender
 from backend.logging_setup import configure_logging, get_logger
@@ -46,6 +46,7 @@ log = get_logger(__name__)
 __all__ = [
     "build_application",
     "escalate_question",
+    "request_derivation_confirmation",
     "request_form_approval",
     "send_digest",
     "send_message",
@@ -129,6 +130,40 @@ def send_photo(path: str, caption: str = "") -> bool:
     except Exception as exc:  # noqa: BLE001 - notification must never abort a run
         log.warning("telegram_photo_error", error=str(exc)[:200])
         return False
+
+
+def request_derivation_confirmation(
+    derivation_id: int,
+    question: str,
+    answer: str,
+    fact_key: str,
+    fact_text: str,
+    reasoning: str,
+) -> bool:
+    """Ask once whether an answer derived from a fact is right.
+
+    Once. After confirmation it is cached and this question never comes back —
+    which is the whole reason facts exist rather than one stored value per
+    question. The fact text is quoted in full so the user is checking the
+    model's reading against their own words, not against a summary of them.
+    """
+    body = "\n".join(
+        [
+            "*Derived an answer — confirm once*",
+            "",
+            f"*Question:* {question[:200]}",
+            f"*Answer:*  {answer[:120]}",
+            "",
+            f"*From your `{fact_key}` fact:*",
+            f"_{fact_text[:400]}_",
+            "",
+            f"*Reasoning:* {reasoning[:300]}" if reasoning else "",
+            "",
+            f"`/yes d{derivation_id}` to confirm · `/no d{derivation_id}` if wrong",
+            "_Confirmed once, then never asked again._",
+        ]
+    )
+    return send_message(body, Priority.NORMAL)
 
 
 def request_form_approval(
@@ -347,6 +382,21 @@ def build_digest(*, hours: int = 24) -> str:
         preferences.sweep_ignored(session)
         lines.extend(preferences.digest_lines(session))
 
+        # A reminder, not a second ask. resolve_from_facts already messaged when
+        # it derived each of these; what the digest adds is that they are still
+        # outstanding, and each one is a screening question no application can
+        # answer until it is confirmed.
+        waiting = facts.pending_confirmations(session)
+        if waiting:
+            lines.append(
+                f"\n*Derived answers awaiting you* — {len(waiting)}"
+            )
+            for row in waiting[:5]:
+                lines.append(
+                    f"· {row.question_text[:60]} -> {row.answer_value[:30]} "
+                    f"(`/yes d{row.id}` · `/no d{row.id}`)"
+                )
+
     from backend.llm.client import budget_status
 
     spend = budget_status()
@@ -510,6 +560,25 @@ def _cmd_digest(_: str) -> str:
     return build_digest()
 
 
+
+def _decide_derivation(derivation_id: int, *, confirm: bool) -> str:
+    """Confirm or reject an answer derived from a fact."""
+    from backend import facts
+
+    with session_scope() as session:
+        if confirm:
+            row = facts.confirm(session, derivation_id)
+            if row is None:
+                return f"No derivation {derivation_id}."
+            return f"Confirmed: {row.question_text[:80]} -> {row.answer_value[:60]}"
+
+        if not facts.reject(session, derivation_id):
+            return f"No derivation {derivation_id}."
+        return (
+            "Rejected. It will be re-derived next time — if the fact itself is "
+            "wrong, fix it on the Facts page first."
+        )
+
 def _cmd_yes(argument: str) -> str:
     """Confirm a proposed preference. Only this makes an inference take effect."""
     return _decide_preference(argument, confirm=True)
@@ -522,8 +591,15 @@ def _cmd_no(argument: str) -> str:
 
 def _decide_preference(argument: str, *, confirm: bool) -> str:
     identifier = argument.strip().split()[0] if argument.strip() else ""
+
+    # A "d" prefix means a derived answer rather than a preference. One command
+    # pair for both because the user should not have to remember which kind of
+    # thing they are confirming — the id in the message says which.
+    if identifier.startswith("d") and identifier[1:].isdigit():
+        return _decide_derivation(int(identifier[1:]), confirm=confirm)
+
     if not identifier.isdigit():
-        return "Usage: /yes <id> or /no <id> — the id is in the digest line."
+        return "Usage: /yes <id> or /no <id> — the id is in the message."
 
     with session_scope() as session:
         row = (

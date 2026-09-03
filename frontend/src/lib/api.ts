@@ -11,7 +11,9 @@ import type {
   AppSettings,
   Campaign,
   ControlState,
+  DerivedAnswer,
   DocumentRef,
+  Fact,
   Job,
   JobDetail,
   Page,
@@ -135,6 +137,17 @@ export const api = {
     request<Preference>(`/preferences/${id}/reject`, { method: "POST" }),
   deletePreference: (id: number) =>
     request<void>(`/preferences/${id}`, { method: "DELETE" }),
+
+  // ------------------------------------------------------------------ facts
+  listFacts: () => request<Fact[]>("/facts"),
+  updateFact: (key: string, payload: { text: string; jurisdiction?: string | null }) =>
+    request<Fact>(`/facts/${key}`, { method: "PUT", body: body(payload) }),
+  listDerived: (params?: { fact_id?: number }) =>
+    request<DerivedAnswer[]>("/facts/derived", { params }),
+  confirmDerived: (id: number) =>
+    request<DerivedAnswer>(`/facts/derived/${id}/confirm`, { method: "POST" }),
+  rejectDerived: (id: number) =>
+    request<void>(`/facts/derived/${id}`, { method: "DELETE" }),
 
   // -------------------------------------------------------------- templates
   listTemplates: () => request<Template[]>("/templates"),

@@ -99,13 +99,22 @@ def _request_form_approval(job_id, fingerprint, platform, screenshot, answers) -
     )
 
 
+def _confirm_derivation(derivation_id, question, answer, fact_key, fact_text, reasoning):
+    """Ask the user to confirm an answer derived from one of their facts."""
+    from backend.integrations.telegram import request_derivation_confirmation
+
+    request_derivation_confirmation(
+        derivation_id, question, answer, fact_key, fact_text, reasoning
+    )
+
+
 def register_hooks() -> None:
     """Wire the safety layers' notification hooks to this module.
 
     Called once at startup. Each hook is a plain callable on the target module
     so that module never imports an integration.
     """
-    from backend import siteknowledge
+    from backend import facts, siteknowledge
     from backend.apply import canary, flow, guardrails, session
 
     guardrails.on_notify = lambda title, body: notify(title, body, Priority.IMMEDIATE)
@@ -129,6 +138,14 @@ def register_hooks() -> None:
     flow.on_form_approval_needed = (
         lambda job_id, fingerprint, platform, screenshot, answers: (
             _request_form_approval(job_id, fingerprint, platform, screenshot, answers)
+        )
+    )
+
+    facts.on_confirmation_needed = (
+        lambda derivation_id, question, answer, fact_key, fact_text, reasoning: (
+            _confirm_derivation(
+                derivation_id, question, answer, fact_key, fact_text, reasoning
+            )
         )
     )
 

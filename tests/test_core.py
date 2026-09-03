@@ -26,7 +26,9 @@ from backend.models import (
     Application,
     ApplyType,
     Campaign,
+    DerivedAnswer,
     Document,
+    Fact,
     FailureEvent,
     FormMap,
     Job,
@@ -46,7 +48,9 @@ EXPECTED_TABLES = {
     "answer_bank",
     "application",
     "campaign",
+    "derived_answer",
     "document",
+    "fact",
     "failure_event",
     "form_map",
     "job",
@@ -62,7 +66,9 @@ MODEL_CLASSES = (
     AnswerBank,
     Application,
     Campaign,
+    DerivedAnswer,
     Document,
+    Fact,
     FailureEvent,
     FormMap,
     Job,
@@ -198,8 +204,8 @@ def test_a_narrower_static_mount_is_allowed() -> None:
 
 
 def test_every_model_imports_and_registers_its_table() -> None:
-    """All 13 tables are on SQLModel.metadata, and nothing extra is."""
-    assert len(EXPECTED_TABLES) == 13
+    """All 15 tables are on SQLModel.metadata, and nothing extra is."""
+    assert len(EXPECTED_TABLES) == 15
     assert {model.__tablename__ for model in MODEL_CLASSES} == EXPECTED_TABLES
     assert set(SQLModel.metadata.tables) == EXPECTED_TABLES
 

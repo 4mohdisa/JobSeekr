@@ -39,6 +39,7 @@ __all__ = [
     "Answer",
     "coerce_to_choices",
     "load_answers",
+    "matching_rows",
     "normalise_question",
     "question_key",
     "resolve_all",
@@ -558,6 +559,84 @@ def _finalise(
     return answer
 
 
+def _candidates(
+    question_text: str, question: str, answers: Sequence[AnswerBank]
+) -> list[tuple[float, MatchType, AnswerBank]]:
+    """Every bank row that plausibly matches this question, with its score.
+
+    Extracted so the facts layer can ask "which row matched?" without a second
+    matcher. Two matchers disagreeing about what a question is asking is how a
+    licence fact ends up answering a police-check question.
+    """
+    candidates: list[tuple[float, MatchType, AnswerBank]] = []
+    loose_question = _loose(question)
+
+    for row in answers:
+        pattern = normalise_question(row.question_pattern)
+
+        if row.match_type == MatchType.REGEX:
+            try:
+                compiled = re.compile(row.question_pattern, re.IGNORECASE)
+            except re.error as exc:
+                # A bad pattern is a data problem in one row; it must not stop
+                # the other rows from resolving this question.
+                log.warning(
+                    "answer_bank_invalid_regex",
+                    row_id=row.id,
+                    pattern=row.question_pattern,
+                    error=str(exc),
+                )
+                continue
+            if not (compiled.search(question_text) or compiled.search(question)):
+                continue
+            # A regex is a deliberate pattern, but it was written against one
+            # framing of the question. It must not answer the negation of it.
+            reason = _conflicts_with_pattern_source(question, pattern)
+            if reason:
+                log.debug("candidate_rejected", pattern=pattern, reason=reason)
+                continue
+            candidates.append((100.0, MatchType.REGEX, row))
+            continue
+
+        reason = _conflicts(question, pattern)
+        if reason:
+            # Not a weak match — a confident wrong one.
+            log.debug("candidate_rejected", pattern=pattern, reason=reason)
+            continue
+        score = max(
+            fuzz.token_sort_ratio(loose_question, _loose(pattern)),
+            fuzz.partial_ratio(loose_question, _loose(pattern)),
+        )
+        if score >= FUZZY_THRESHOLD:
+            candidates.append((float(score), MatchType.FUZZY, row))
+
+    return candidates
+
+
+def matching_rows(
+    question_text: str, answers: Sequence[AnswerBank], *, region: Region | None = None
+) -> list[AnswerBank]:
+    """Bank rows matching this question, best first. Same matcher as resolution.
+
+    Used by the facts layer to find which row a question belongs to, and so
+    which category of fact could answer it. Region-scoped rows for a different
+    country are excluded here for the same reason resolution excludes them: they
+    are answers to a different question.
+    """
+    question = normalise_question(question_text)
+    if not question:
+        return []
+    in_region = [
+        row
+        for row in answers
+        if region is None or row.region is None or row.region == region
+    ]
+    ranked = sorted(
+        _candidates(question_text, question, in_region), key=lambda c: c[0], reverse=True
+    )
+    return [row for _, _, row in ranked]
+
+
 def resolve_answer(
     question_text: str,
     campaign_id: int | None = None,
@@ -652,47 +731,7 @@ def resolve_answer(
         )
 
     # --- one candidate pool: regex hits and fuzzy hits together -------------
-    candidates: list[tuple[float, MatchType, AnswerBank]] = []
-    loose_question = _loose(question)
-
-    for row in answers:
-        pattern = normalise_question(row.question_pattern)
-
-        if row.match_type == MatchType.REGEX:
-            try:
-                compiled = re.compile(row.question_pattern, re.IGNORECASE)
-            except re.error as exc:
-                # A bad pattern is a data problem in one row; it must not stop
-                # the other rows from resolving this question.
-                log.warning(
-                    "answer_bank_invalid_regex",
-                    row_id=row.id,
-                    pattern=row.question_pattern,
-                    error=str(exc),
-                )
-                continue
-            if not (compiled.search(question_text) or compiled.search(question)):
-                continue
-            # A regex is a deliberate pattern, but it was written against one
-            # framing of the question. It must not answer the negation of it.
-            reason = _conflicts_with_pattern_source(question, pattern)
-            if reason:
-                log.debug("candidate_rejected", pattern=pattern, reason=reason)
-                continue
-            candidates.append((100.0, MatchType.REGEX, row))
-            continue
-
-        reason = _conflicts(question, pattern)
-        if reason:
-            # Not a weak match — a confident wrong one.
-            log.debug("candidate_rejected", pattern=pattern, reason=reason)
-            continue
-        score = max(
-            fuzz.token_sort_ratio(loose_question, _loose(pattern)),
-            fuzz.partial_ratio(loose_question, _loose(pattern)),
-        )
-        if score >= FUZZY_THRESHOLD:
-            candidates.append((float(score), MatchType.FUZZY, row))
+    candidates = _candidates(question_text, question, answers)
 
     if not candidates:
         # Distinguish "nothing in the bank" from "the only thing in the bank was
