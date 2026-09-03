@@ -27,6 +27,7 @@ from backend.api.schemas import (
     FactOut,
     PlaceholderIssueOut,
     PreferenceIn,
+    SessionHealthOut,
     PreferenceOut,
     ProfileIn,
     ProfileOut,
@@ -42,6 +43,8 @@ from backend.logging_setup import get_logger
 from backend.models import (
     AnswerBank,
     Application,
+    SessionHealth,
+    SessionStatus,
     DerivedAnswer,
     Fact,
     Region,
@@ -65,6 +68,7 @@ settings_router = APIRouter(prefix="/settings", tags=["settings"])
 control_router = APIRouter(prefix="/control", tags=["control"])
 preferences_router = APIRouter(prefix="/preferences", tags=["preferences"])
 facts_router = APIRouter(prefix="/facts", tags=["facts"])
+sessions_router = APIRouter(prefix="/sessions", tags=["sessions"])
 
 
 # ==========================================================================
@@ -720,3 +724,27 @@ def reject_derived(derivation_id: int, session: Session = Depends(get_session)) 
     if not facts.reject(session, derivation_id):
         raise HTTPException(404, "no such derivation")
     session.commit()
+
+
+# ==========================================================================
+# Sessions — which sites are signed in, and when that was last confirmed
+# ==========================================================================
+
+
+@sessions_router.get("", response_model=list[SessionHealthOut])
+def list_sessions(session: Session = Depends(get_session)) -> list[SessionHealth]:
+    """Every site's session state, worst first.
+
+    Ordered by trouble rather than alphabetically: the page exists to answer
+    "is anything signed out", and a dead session at the bottom of an
+    alphabetical list is a dead session nobody sees.
+    """
+    rank = {
+        SessionStatus.DEAD: 0,
+        SessionStatus.UNREACHABLE: 1,
+        SessionStatus.UNKNOWN: 2,
+        SessionStatus.NO_SESSION: 3,
+        SessionStatus.LIVE: 4,
+    }
+    rows = list(session.exec(select(SessionHealth)).all())
+    return sorted(rows, key=lambda row: (rank.get(row.status, 9), row.site))

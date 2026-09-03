@@ -159,6 +159,23 @@ def _knowledge_selectors(platform: str) -> Callable[[], dict[str, tuple[str, ...
     return build
 
 
+def _seek_domains() -> tuple[str, ...]:
+    """Every host Seek serves, across both markets, from one source.
+
+    ``backend.regions`` is that source: its hosts were verified against the live
+    site, and the redirect behaviour is recorded there. This keeps the registry
+    accurate without a second list to forget to update.
+    """
+    from backend.regions import REGIONS
+
+    hosts: list[str] = []
+    for config in REGIONS.values():
+        for host in config.domains:
+            if host not in hosts:
+                hosts.append(host)
+    return tuple(hosts)
+
+
 # --------------------------------------------------------------------------
 # The registry
 # --------------------------------------------------------------------------
@@ -167,7 +184,11 @@ BOARDS: tuple[Board, ...] = (
     Board(
         key="seek",
         label="Seek",
-        domains=("seek.com.au",),
+        # Derived from the region configs rather than restated. regions.py
+        # holds the hosts the 2026-09-03 probe verified live — Seek now serves
+        # au.seek.com and nz.seek.com — and a second hand-maintained copy here
+        # is how the registry came to be missing the host Seek actually uses.
+        domains=_seek_domains(),
         weekdays_only=False,
         session=BoardSession(
             login_url="https://www.seek.com.au/oauth/login/",

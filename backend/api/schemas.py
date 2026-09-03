@@ -28,6 +28,7 @@ from backend.models import (
 
 __all__ = [
     "AnalyticsBucket",
+    "SessionHealthOut",
     "DerivedAnswerOut",
     "FactIn",
     "FactOut",
@@ -462,3 +463,18 @@ class DerivedAnswerOut(BaseModel):
     """True when the source fact has been edited since. A stale derivation does
     not answer anything — it is shown so the change is visible rather than
     silent."""
+
+
+class SessionHealthOut(BaseModel):
+    """One site's signed-in state, as the Sessions page shows it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    site: str
+    status: str
+    detail: str | None
+    cookie_count: int
+    last_checked_at: datetime | None
+    last_verified_at: datetime | None
+    consecutive_failures: int

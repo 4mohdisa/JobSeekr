@@ -6,6 +6,7 @@ import { Button, cx } from "./components/ui";
 
 import { AnswerBank } from "./pages/AnswerBank";
 import { Facts } from "./pages/Facts";
+import { Sessions } from "./pages/Sessions";
 import { Preferences } from "./pages/Preferences";
 import { Analytics } from "./pages/Analytics";
 import { Applications } from "./pages/Applications";
@@ -27,6 +28,7 @@ const NAV = [
   { to: "/preferences", label: "Preferences" },
   { to: "/templates", label: "Templates" },
   { to: "/profile", label: "Profile" },
+  { to: "/sessions", label: "Sessions" },
   { to: "/settings", label: "Settings" },
 ];
 
@@ -150,6 +152,7 @@ export default function App() {
             <Route path="/preferences" element={<Preferences />} />
             <Route path="/templates" element={<Templates />} />
             <Route path="/profile" element={<ProfilePage />} />
+            <Route path="/sessions" element={<Sessions />} />
             <Route path="/settings" element={<SettingsPage />} />
           </Routes>
         </main>

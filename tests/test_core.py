@@ -38,6 +38,7 @@ from backend.models import (
     Profile,
     Run,
     Score,
+    SessionHealth,
     Template,
 )
 from backend.seed import ANSWER_BANK_SEEDS, seed_answer_bank
@@ -59,6 +60,7 @@ EXPECTED_TABLES = {
     "profile",
     "run",
     "score",
+    "session_health",
     "template",
 }
 
@@ -77,6 +79,7 @@ MODEL_CLASSES = (
     Profile,
     Run,
     Score,
+    SessionHealth,
     Template,
 )
 
@@ -204,8 +207,8 @@ def test_a_narrower_static_mount_is_allowed() -> None:
 
 
 def test_every_model_imports_and_registers_its_table() -> None:
-    """All 15 tables are on SQLModel.metadata, and nothing extra is."""
-    assert len(EXPECTED_TABLES) == 15
+    """All 16 tables are on SQLModel.metadata, and nothing extra is."""
+    assert len(EXPECTED_TABLES) == 16
     assert {model.__tablename__ for model in MODEL_CLASSES} == EXPECTED_TABLES
     assert set(SQLModel.metadata.tables) == EXPECTED_TABLES
 

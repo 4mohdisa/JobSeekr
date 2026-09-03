@@ -196,6 +196,18 @@ def _handle_gray_zone(session: Session, job: Job, action: str) -> bool:
     return False
 
 
+
+class _FakeCookieJar:
+    """Stands in for a browser context when one was injected rather than built.
+
+    A test supplying its own page has no real context, and reading cookies off
+    nothing would be the only reason the session check could not run there.
+    """
+
+    def cookies(self) -> list[dict[str, str]]:
+        return []
+
+
 def run_apply_pass(
     *,
     campaign_id: int | None = None,
@@ -241,6 +253,18 @@ def run_apply_pass(
                     context = launch_context(playwright)
                     page = context.pages[0] if context.pages else context.new_page()
             return page
+
+        # Check every stored session before any work. This is broader than the
+        # per-platform check below: it covers the ATS accounts the user signed
+        # into themselves, whose expiry is the silent failure that shows up days
+        # later as a pile of parked jobs.
+        if context is not None or page_factory is not None:
+            try:
+                from backend.sessions import check_all
+
+                check_all(session, context or _FakeCookieJar(), start_page())
+            except Exception as exc:  # noqa: BLE001 - never block a pass on this
+                log.warning("session_health_check_failed", error=str(exc)[:200])
 
         # Verify the session ONCE, before any work, rather than discovering it
         # is dead after building documents for a job that cannot be submitted.

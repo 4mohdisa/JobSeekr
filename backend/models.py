@@ -194,6 +194,25 @@ class Region(str, Enum):
     NZ = "NZ"
 
 
+class SessionStatus(str, Enum):
+    """What the last check found for one site's stored session.
+
+    UNKNOWN is a first-class outcome, not a failure to decide. A page that shows
+    neither a login form nor a recognised signed-in element tells us nothing,
+    and reporting that as DEAD would page the user about a working session every
+    time a site reshuffles its header.
+    """
+
+    LIVE = "live"
+    DEAD = "dead"
+    UNKNOWN = "unknown"
+    NO_SESSION = "no_session"
+    """No cookies stored for this site at all — nothing has ever signed in."""
+
+    UNREACHABLE = "unreachable"
+    """The check itself failed. Says nothing about the session."""
+
+
 class FactCategory(str, Enum):
     """What area of the user's situation a fact describes.
 
@@ -924,6 +943,46 @@ class DerivedAnswer(SQLModel, table=True):
     """NULL until the user says yes. An unconfirmed derivation never answers."""
 
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class SessionHealth(SQLModel, table=True):
+    """The last thing we learned about one site's signed-in state.
+
+    WHY THIS IS A TABLE
+        Session expiry is the silent failure. The adapter lands on a login page,
+        cannot find the form, and parks the job — so the symptom is a pile of
+        parked jobs days later, with nothing naming the cause. This makes the
+        cause checkable before any application is attempted, and nameable in an
+        alert.
+
+    TWO TIMESTAMPS, DELIBERATELY
+        ``last_checked_at`` moves on every check. ``last_verified_at`` moves
+        only when the session was actually found LIVE. The gap between them is
+        the interesting number: "checked a minute ago, last known good four days
+        ago" is a session that has been dead for four days, and one timestamp
+        cannot say that.
+    """
+
+    __tablename__ = "session_health"
+    __table_args__ = (UniqueConstraint("site", name="uq_session_health_site"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    site: str = Field(index=True)
+    """The site key — a platform key where one exists, else the cookie domain."""
+
+    status: SessionStatus = Field(sa_column=_enum_column(SessionStatus))
+    detail: str | None = None
+    """What the check saw, in the user's terms. Shown in the alert."""
+
+    cookie_count: int = 0
+    """How many cookies are stored for this site. Zero means never signed in."""
+
+    last_checked_at: datetime | None = None
+    last_verified_at: datetime | None = None
+    """Last time the session was confirmed LIVE. See the docstring."""
+
+    consecutive_failures: int = 0
+    """Resets on a LIVE check. Used to alert once rather than on every pass."""
 
 
 class LLMSpend(SQLModel, table=True):

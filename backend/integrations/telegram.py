@@ -26,7 +26,7 @@ from sqlmodel import select
 from pathlib import Path
 
 from backend.config import settings
-from backend import facts, failures, preferences
+from backend import facts, failures, preferences, sessions
 from backend.db import session_scope
 from backend.integrations.notify import Priority, set_sender
 from backend.logging_setup import configure_logging, get_logger
@@ -379,6 +379,10 @@ def build_digest(*, hours: int = 24) -> str:
         # lands is how this channel becomes one the user mutes. sweep_ignored
         # first, so a proposal nobody answered ages out instead of reappearing
         # forever.
+        # Sessions first: a dead session is the reason a run did nothing, and
+        # burying it under the application list is how it gets missed.
+        lines.extend(sessions.digest_lines(session))
+
         preferences.sweep_ignored(session)
         lines.extend(preferences.digest_lines(session))
 
