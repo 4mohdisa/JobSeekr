@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Any
 
@@ -123,6 +123,19 @@ class Abstain:
     reason: AbstainReason
     detail: str = ""
     candidates: list[str] = field(default_factory=list)
+    """The option LABELS, for a human to read. See ``choices`` for the values."""
+
+    choices: list[Any] = field(default_factory=list)
+    """The form's full option set, as ``Choice`` objects, when it was a closed list.
+
+    Carried on the abstention rather than looked up again by the caller: the
+    escalation has to show the site's own wording verbatim and store the value
+    the reply maps to, and re-deriving either from the question text is exactly
+    the guessing this module exists to refuse.
+    """
+
+    multi_select: bool = False
+    """Whether the field accepts more than one option."""
 
     source_row_id: int | None = None
     """The bank row that matched but could not answer (BLANK_ANSWER, INVALID_CHOICE).
@@ -528,34 +541,67 @@ _YES = {"yes", "y", "true", "1"}
 _NO = {"no", "n", "false", "0"}
 
 
-def coerce_to_choices(value: str, choices: Sequence[str] | None) -> str | None:
+def coerce_to_choices(value: str, choices: Sequence[Any] | None) -> str | None:
     """Map an answer onto a form's offered options, or None if unclear.
 
-    Only an unambiguous mapping is accepted. "Yes" onto ["Yes", "No"] is
-    obvious; "Yes" onto ["Australian Citizen", "Permanent Resident", "Visa
-    holder"] is not an answer to that question at all, and returning a
-    best-effort pick would silently assert a visa status.
+    Returns the option's **submitted value**, which is what goes on the form —
+    not the label, which is only what the user reads. On a ``<select>`` the two
+    routinely differ ("1 - 2 weeks" submits ``2``).
+
+    Two tiers, and deliberately no third:
+
+    * the answer names an option exactly, by value or by label, ignoring case
+    * the answer is a yes/no synonym and exactly one option is a yes/no synonym
+
+    There used to be a substring tier — an answer contained in exactly one
+    option won. That is guessing at the nearest match, and it is wrong in the
+    way that matters: a stored "2 weeks" is contained in "1 - 2 weeks" and in
+    nothing else, so it would win and assert a notice period the user never
+    gave. A different wording is a different answer; abstain and ask.
+
+    A multi-value answer is mapped option by option and rejected whole if any
+    part is unknown — half a multi-select is not a partial answer, it is a
+    different one.
     """
+    from backend.apply.draft import as_choices
+    from backend.apply.formdom import MULTI_VALUE_SEPARATOR, split_values
+
     if not choices:
         return value
-    folded = value.strip().casefold()
+    options = as_choices(choices)
+    if not options:
+        return value
 
-    exact = [choice for choice in choices if choice.strip().casefold() == folded]
-    if len(exact) == 1:
-        return exact[0]
+    parts = split_values(value) or [value]
+    mapped: list[str] = []
+    for part in parts:
+        one = _coerce_one(part, options)
+        if one is None:
+            return None
+        mapped.append(one)
+    return MULTI_VALUE_SEPARATOR.join(mapped)
+
+
+def _coerce_one(value: str, options: Sequence[Any]) -> str | None:
+    """One answer onto one option set, returning the option's submitted value."""
+    folded = value.strip().casefold()
+    if not folded:
+        return None
+
+    named = [option for option in options if option.matches(value)]
+    if len(named) == 1:
+        return named[0].value
 
     if folded in _YES or folded in _NO:
         wanted = _YES if folded in _YES else _NO
-        hits = [choice for choice in choices if choice.strip().casefold() in wanted]
+        hits = [
+            option
+            for option in options
+            if option.label.strip().casefold() in wanted
+            or option.value.strip().casefold() in wanted
+        ]
         if len(hits) == 1:
-            return hits[0]
-        return None
-
-    contains = [
-        choice for choice in choices if folded and folded in choice.strip().casefold()
-    ]
-    if len(contains) == 1:
-        return contains[0]
+            return hits[0].value
 
     return None
 
@@ -609,7 +655,8 @@ def _finalise(
     question: str,
     match_type: MatchType,
     confidence: float,
-    choices: Sequence[str] | None,
+    choices: Sequence[Any] | None,
+    multi_select: bool = False,
 ) -> Resolution:
     """Apply the blank and choice checks that every tier shares."""
     if _blank(row):
@@ -625,13 +672,26 @@ def _finalise(
 
     answer = _make_answer(row, question, match_type, confidence)
     if choices:
-        mapped = coerce_to_choices(answer.value, choices)
+        from backend.apply.draft import as_choices
+
+        options = as_choices(choices)
+        mapped = coerce_to_choices(answer.value, options)
         if mapped is None:
+            # The stored answer is not one of THIS form's options. It may be a
+            # perfectly good answer to the same question somewhere else — the
+            # employer before this one offered "1-2 weeks" and this one offers
+            # "2 weeks" — and picking the nearest is how a notice period the
+            # user never gave reaches an employer. Ask again instead.
             return Abstain(
                 question=question,
                 reason=AbstainReason.INVALID_CHOICE,
-                detail=f"stored answer {answer.value!r} does not map onto {list(choices)}",
-                candidates=list(choices),
+                detail=(
+                    f"stored answer {answer.value!r} is not one of "
+                    f"{[option.label for option in options]}"
+                ),
+                candidates=[option.label for option in options],
+                choices=options,
+                multi_select=multi_select,
                 source_row_id=row.id,
             )
         answer = Answer(
@@ -730,8 +790,43 @@ def resolve_answer(
     campaign_id: int | None = None,
     *,
     answers: Sequence[AnswerBank],
-    choices: Sequence[str] | None = None,
+    choices: Sequence[Any] | None = None,
     region: Region | None = None,
+    multi_select: bool = False,
+) -> Resolution:
+    """Resolve one screening question, and hand the form's options to the caller.
+
+    Every abstention on a closed-list field carries that field's full option set,
+    whatever the reason it abstained. The escalation needs the options to ask the
+    question — a NO_MATCH on a dropdown is the most common way a choice question
+    reaches the user, and it is the branch that carried nothing before.
+    """
+    from backend.apply.draft import as_choices
+
+    options = as_choices(choices) if choices else []
+    outcome = _resolve_from_bank(
+        question_text,
+        campaign_id,
+        answers=answers,
+        choices=options,
+        region=region,
+        multi_select=multi_select,
+    )
+    if isinstance(outcome, Abstain) and options and not outcome.choices:
+        # candidates is left alone: on AMBIGUOUS and CROSS_REGION it holds the
+        # bank patterns that clashed, which is what the detail line explains.
+        return replace(outcome, choices=options, multi_select=multi_select)
+    return outcome
+
+
+def _resolve_from_bank(
+    question_text: str,
+    campaign_id: int | None = None,
+    *,
+    answers: Sequence[AnswerBank],
+    choices: Sequence[Any] | None = None,
+    region: Region | None = None,
+    multi_select: bool = False,
 ) -> Resolution:
     """Resolve one screening question. Never returns None; never guesses.
 
@@ -819,6 +914,7 @@ def resolve_answer(
             match_type=MatchType.EXACT,
             confidence=100.0,
             choices=choices,
+            multi_select=multi_select,
         )
 
     # --- one candidate pool: regex hits and fuzzy hits together -------------
@@ -884,6 +980,7 @@ def resolve_answer(
         match_type=best_match_type,
         confidence=best_score,
         choices=choices,
+        multi_select=multi_select,
     )
 
 
@@ -955,8 +1052,15 @@ def resolve_all(
     for item in questions:
         label = question_key(item)
         choices = None if isinstance(item, str) else getattr(item, "choices", None)
+        multi = bool(getattr(item, "multi_select", False))
 
-        outcome = resolve_answer(label, campaign_id, answers=answers, choices=choices)
+        outcome = resolve_answer(
+            label,
+            campaign_id,
+            answers=answers,
+            choices=choices,
+            multi_select=multi,
+        )
         if isinstance(outcome, Abstain):
             abstentions.append(outcome)
         else:

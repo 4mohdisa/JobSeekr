@@ -51,11 +51,31 @@ def _neutral_clock(monkeypatch):
 
 @pytest.fixture
 def sent(monkeypatch) -> list[str]:
-    """Capture Telegram sends without configuring or contacting Telegram."""
-    outbox: list[str] = []
+    """Capture Telegram sends without configuring or contacting Telegram.
 
-    def fake_send(text: str, priority: Any = None) -> bool:
+    ``keyboards`` is attached to the returned list so a test can assert on the
+    buttons without a second fixture.
+    """
+
+    class Outbox(list):
+        """A list of message bodies that also remembers each keyboard."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.keyboards: list[Any] = []
+
+    outbox = Outbox()
+    keyboards = outbox.keyboards
+
+    def fake_send(
+        text: str,
+        priority: Any = None,
+        *,
+        keyboard: Any = None,
+        markdown: bool = True,
+    ) -> bool:
         outbox.append(text)
+        keyboards.append(keyboard)
         return True
 
     monkeypatch.setattr(telegram, "send_message", fake_send)
@@ -177,6 +197,38 @@ def _apply_once(job_id: int) -> tuple[Any, FakeAdapter]:
 # =========================================================================
 
 
+def test_the_parked_job_carries_the_forms_options_across_the_process_boundary(
+    parked_job,
+):
+    """The pass that asks and the process that receives the reply are different.
+
+    The apply run ends, the browser closes, and the bot picks the reply up
+    minutes later with nothing but a job id. An in-memory option list does not
+    survive that, and without the options the bot cannot tell a valid reply from
+    an invalid one.
+    """
+    _apply_once(parked_job)
+
+    with session_scope() as session:
+        job = session.get(Job, parked_job)
+        assert job.needs_answer_choices == [
+            {"label": "Yes", "value": "Yes", "is_free_text": False},
+            {"label": "No", "value": "No", "is_free_text": False},
+        ]
+        assert job.needs_answer_multi is False
+
+
+def test_requeueing_clears_the_options_with_the_question(parked_job, sent):
+    """A stale option set would validate the next reply against the last form."""
+    _apply_once(parked_job)
+    telegram.handle_command(f"/answer {parked_job} Yes")
+
+    with session_scope() as session:
+        job = session.get(Job, parked_job)
+        assert job.needs_answer_question is None
+        assert job.needs_answer_choices is None
+
+
 def test_the_full_answer_bank_loop_closes(parked_job, sent):
     """abstain -> escalate -> answer stored -> job re-queued -> resolves.
 
@@ -200,14 +252,12 @@ def test_the_full_answer_bank_loop_closes(parked_job, sent):
         )
 
     # 2 — escalate. This is the half that was never called.
-    apply_run._escalate_parked(
-        [(job_id, result.needs_answer, result.needs_answer_choices)]
-    )
+    apply_run._escalate_parked([(job_id, result.needs_answer)])
     assert len(sent) == 1, "the user was never asked"
     message = sent[0]
     assert "Question needed" in message
-    assert f"/answer {job_id}" in message
-    assert "Yes / No" in message, "the form's own options must reach the user"
+    labels = [button["text"] for row in sent.keyboards[0] for button in row]
+    assert labels == ["Yes", "No"], "the form's own options must reach the user"
 
     # 3 — the user answers. 4 — the job is re-queued.
     reply = telegram.handle_command(f"/answer {job_id} Yes")
@@ -295,7 +345,7 @@ def test_a_failed_send_leaves_the_job_parked_and_says_so(
     monkeypatch.setattr(telegram, "send_message", lambda *a, **k: False)
 
     result, _ = _apply_once(parked_job)
-    apply_run._escalate_parked([(parked_job, result.needs_answer, [])])
+    apply_run._escalate_parked([(parked_job, result.needs_answer)])
 
     with session_scope() as session:
         assert session.get(Job, parked_job).status == JobStatus.NEEDS_ANSWER
@@ -312,6 +362,6 @@ def test_an_escalation_that_raises_does_not_end_the_pass(
         raise RuntimeError("telegram is down")
 
     monkeypatch.setattr(telegram, "escalate_question", explode)
-    apply_run._escalate_parked([(parked_job, "some question", [])])
+    apply_run._escalate_parked([(parked_job, "some question")])
 
     assert "escalation_failed" in caplog.text

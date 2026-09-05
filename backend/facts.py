@@ -335,12 +335,25 @@ def derive(
     None is the common and correct outcome. The caller abstains on it, which
     parks the job and asks — the existing loop, unchanged.
     """
+    from backend.apply.draft import as_choices
+
+    options = as_choices(choices)
+    # The exact strings the form will accept, one per line, in its own order.
+    # A repr of a list of Choice objects would put the model's answer inside a
+    # dataclass — and "the model picked an option" has to be checkable by string
+    # equality against something the form actually submits.
+    allowed = "\n".join(f"- {option.label}" for option in options)
     prompt = "\n".join(
         [
             f"FACT (the applicant's own words, verbatim):\n{fact.text}",
             "",
             f"QUESTION ON THE FORM:\n{question}",
-            f"ALLOWED ANSWERS: {choices}" if choices else "",
+            (
+                "ALLOWED ANSWERS — reply with ONE of these, copied exactly. You "
+                f"may not invent a value outside this list:\n{allowed}"
+                if options
+                else ""
+            ),
             f"EXPECTED ANSWER TYPE: {answer_type.value}",
         ]
     )
@@ -377,17 +390,23 @@ def derive(
     if not answer:
         return None
 
-    if choices and answer not in choices:
-        # The model was told to pick one of the choices and did not. Coercing it
-        # would be guessing which option it meant, on a form the user has not
-        # seen. Abstain instead.
-        log.warning(
-            "derived_answer_not_in_choices",
-            fact=fact.key,
-            answer=answer[:80],
-            choices=choices,
-        )
-        return None
+    if options:
+        # Constrained to the option set, and to it exactly. A fact saying "two
+        # weeks notice" against [Immediately, 1-2 weeks, 1 month] must come back
+        # as "1-2 weeks" — the model picks from the list, it never writes a new
+        # value. Anything else is an abstention: coercing it would be guessing
+        # which option it meant, on a form the user has not seen.
+        named = [option for option in options if option.matches(answer)]
+        if len(named) != 1:
+            log.warning(
+                "derived_answer_not_in_choices",
+                fact=fact.key,
+                answer=answer[:80],
+                choices=[option.label for option in options],
+            )
+            return None
+        # The submitted value, not the label the model echoed back.
+        answer = named[0].value
 
     derivation = Derivation(
         answer=answer,
@@ -436,6 +455,8 @@ def resolve_from_facts(
     confirmation step: the model's reading of a fact is a proposal until the
     person whose fact it is agrees with it.
     """
+    from backend.apply.draft import as_choices
+
     cached = session.exec(
         select(DerivedAnswer).where(
             DerivedAnswer.question_key == question_key,
@@ -457,6 +478,21 @@ def resolve_from_facts(
             session.delete(cached)
             cached = None
         elif cached.confirmed_at is not None:
+            if choices and not any(
+                option.matches(cached.answer_value) for option in as_choices(choices)
+            ):
+                # Confirmed, and not an option THIS employer offers. The same
+                # rule as the answer bank's: a different wording is a different
+                # answer, and picking the nearest option would put a value on the
+                # form that the user never confirmed. Abstain, which parks the
+                # job and asks with this form's own options.
+                log.warning(
+                    "derived_answer_not_offered_here",
+                    question=question_key[:80],
+                    answer=cached.answer_value[:60],
+                    choices=[c.label for c in as_choices(choices)],
+                )
+                return None
             return cached.answer_value
         else:
             # Asked and not yet answered. Asking again on every pass is how the

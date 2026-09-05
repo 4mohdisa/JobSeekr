@@ -18,6 +18,7 @@ Single user, single chat. There is no authorisation model beyond
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from typing import Any
 from sqlmodel import select
 
 from backend import facts, failures, preferences, questions, sessions, telemetry
+from backend.apply.draft import as_choices
 from backend.config import settings
 from backend.db import session_scope
 from backend.integrations.notify import Priority, set_sender
@@ -46,6 +48,7 @@ log = get_logger(__name__)
 __all__ = [
     "build_application",
     "escalate_question",
+    "handle_callback",
     "notify_followup_draft",
     "request_derivation_confirmation",
     "request_form_approval",
@@ -60,8 +63,21 @@ def _configured() -> bool:
     return bool(settings.telegram_bot_token and settings.telegram_chat_id)
 
 
-def send_message(text: str, priority: Priority = Priority.NORMAL) -> bool:
-    """Send one message. Returns False rather than raising when unconfigured."""
+def send_message(
+    text: str,
+    priority: Priority = Priority.NORMAL,
+    *,
+    keyboard: list[list[dict[str, str]]] | None = None,
+    markdown: bool = True,
+) -> bool:
+    """Send one message. Returns False rather than raising when unconfigured.
+
+    ``keyboard`` is an inline keyboard: rows of ``{"text", "callback_data"}``.
+    ``markdown=False`` sends the text verbatim, which is what a message quoting
+    a form's own option labels needs — Markdown eats underscores and asterisks,
+    and an option shown as anything but exactly what the site says is an option
+    the user cannot reliably pick.
+    """
     if not _configured():
         log.warning("telegram_unconfigured", priority=priority.value, text=text[:200])
         return False
@@ -69,17 +85,17 @@ def send_message(text: str, priority: Priority = Priority.NORMAL) -> bool:
     import httpx
 
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
+    payload: dict[str, Any] = {
+        "chat_id": settings.telegram_chat_id,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+    if markdown:
+        payload["parse_mode"] = "Markdown"
+    if keyboard:
+        payload["reply_markup"] = {"inline_keyboard": keyboard}
     try:
-        response = httpx.post(
-            url,
-            json={
-                "chat_id": settings.telegram_chat_id,
-                "text": text,
-                "parse_mode": "Markdown",
-                "disable_web_page_preview": True,
-            },
-            timeout=15,
-        )
+        response = httpx.post(url, json=payload, timeout=15)
         if response.status_code != 200:
             log.error(
                 "telegram_send_failed",
@@ -258,35 +274,115 @@ def request_form_approval(
     return send_message(body, Priority.IMMEDIATE)
 
 
+MAX_KEYBOARD_OPTIONS = 8
+"""Above this many options, a numbered list beats a wall of buttons.
+
+Telegram will render twenty buttons; it renders them unreadably on a phone,
+and an option the user cannot read is one they cannot pick correctly. Past this
+the message lists the options numbered and accepts the number.
+"""
+
+
+def _option_rows(
+    job_id: int, options: list[Any], selected: list[int]
+) -> list[list[dict[str, str]]]:
+    """One button per option, ticked where already chosen, plus Done for multi.
+
+    The callback data carries the whole selection — ``c:<job>:<index>:<sel>`` —
+    so a tap needs no server-side state between messages. The bot is a separate
+    process from the pass that asked, and remembering a half-made selection
+    across a restart is not worth a table.
+    """
+    rows: list[list[dict[str, str]]] = []
+    current = ",".join(str(index) for index in selected)
+    for index, option in enumerate(options):
+        tick = "\u2713 " if index in selected else ""
+        rows.append(
+            [
+                {
+                    "text": f"{tick}{option.label}"[:64],
+                    "callback_data": f"c:{job_id}:{index}:{current}",
+                }
+            ]
+        )
+    return rows
+
+
 def escalate_question(
-    job_id: int, question: str, *, choices: list[str] | None = None
+    job_id: int,
+    question: str,
+    *,
+    choices: list[Any] | None = None,
+    multi_select: bool = False,
 ) -> bool:
     """Ask the user one screening question about a parked job.
 
     Called after the job is already parked and the browser is already closed.
     Nothing is waiting on the reply.
+
+    A closed-list question is asked with the form's own options, verbatim. The
+    message body is sent WITHOUT Markdown for exactly that reason: an option
+    reading "1 - 2 weeks" or "3+ years_experience" has to arrive character for
+    character, because the reply is matched against the site's option set and a
+    prettified label is a label that no longer matches.
     """
     with session_scope() as session:
         job = session.get(Job, job_id)
         if job is None:
             return False
         title, company, url = job.title, job.company, job.url
+        # The job is the record of what was asked. A caller that passes options
+        # explicitly is trusted, but the persisted set is what the reply will be
+        # validated against, so they have to be the same list.
+        options = as_choices(
+            choices if choices is not None else job.needs_answer_choices
+        )
+        multi = multi_select or bool(job.needs_answer_multi)
 
-    hint = (
-        f"\nOptions: {' / '.join(choices)}"
-        if choices
-        else "\nReply with the answer as text."
+    header = f"Question needed\n{title} at {company}\n{url}\n\n{question}\n"
+    footer = "\n\nThe answer is saved to the answer bank, so this is asked once."
+
+    if not options:
+        return send_message(
+            f"{header}\nReply with the answer as text."
+            f"{footer}\nReply: /answer {job_id} <your answer>",
+            Priority.IMMEDIATE,
+            markdown=False,
+        )
+
+    free_text = [option.label for option in options if option.is_free_text]
+    note = (
+        f"\n\n\u26a0 {', '.join(free_text)} needs typed detail the answer bank "
+        "cannot supply — pick something else, or answer that job by hand."
+        if free_text
+        else ""
     )
+
+    if len(options) > MAX_KEYBOARD_OPTIONS:
+        listed = "\n".join(
+            f"{index + 1}. {option.label}" for index, option in enumerate(options)
+        )
+        return send_message(
+            f"{header}\nPick one by number:\n{listed}{note}{footer}\n"
+            f"Reply: /answer {job_id} <number>",
+            Priority.IMMEDIATE,
+            markdown=False,
+        )
+
+    instruction = (
+        "Tap every option that applies, then Done."
+        if multi
+        else "Tap the option the form offers."
+    )
+    keyboard = _option_rows(job_id, options, [])
+    if multi:
+        keyboard.append([{"text": "Done", "callback_data": f"d:{job_id}::"}])
+
     return send_message(
-        (
-            f"*Question needed*\n"
-            f"{title} at {company}\n"
-            f"[open the ad]({url})\n\n"
-            f"_{question}_{hint}\n\n"
-            f"The answer is saved to the answer bank, so this is asked once.\n"
-            f"Reply: `/answer {job_id} <your answer>`"
-        ),
+        f"{header}\n{instruction}{note}{footer}",
         Priority.IMMEDIATE,
+        keyboard=keyboard,
+        markdown=False,
     )
 
 
@@ -296,6 +392,7 @@ def save_answer(
     *,
     campaign_id: int | None = None,
     row_id: int | None = None,
+    choices: list[Any] | None = None,
 ) -> int:
     """Store an answer and return its row id.
 
@@ -319,8 +416,20 @@ def save_answer(
                 select(AnswerBank).where(AnswerBank.question_pattern == question)
             ).first()
 
+        # The option set the answer was chosen from, stored on the row. The
+        # value lives in answer_value and the label is the entry whose value
+        # matches it, so all three facts the replay needs are here and cannot
+        # disagree with each other. Written into the existing `choices` column
+        # rather than a parallel one — that column was added for this and has
+        # been NULL on every seeded row since.
+        stored = [asdict(option) for option in as_choices(choices)] or None
+        answer_type = AnswerType.CHOICE if stored else AnswerType.TEXT
+
         if existing is not None:
             existing.answer_value = answer
+            if stored:
+                existing.choices = stored
+                existing.answer_type = AnswerType.CHOICE
             existing.verified_at = datetime.now(UTC)
             existing.updated_at = datetime.now(UTC)
             session.add(existing)
@@ -332,7 +441,8 @@ def save_answer(
             question_pattern=question,
             match_type=MatchType.FUZZY,
             answer_value=answer,
-            answer_type=AnswerType.TEXT,
+            answer_type=answer_type,
+            choices=stored,
             campaign_id=campaign_id,
             verified_at=datetime.now(UTC),
             notes="answered over Telegram",
@@ -355,6 +465,8 @@ def requeue_job(job_id: int) -> bool:
         # overwriting a good answer-bank row with a reply meant for a different
         # question.
         job.needs_answer_question = None
+        job.needs_answer_choices = None
+        job.needs_answer_multi = False
         session.add(job)
         log.info("job_requeued", job_id=job_id)
         return True
@@ -628,6 +740,54 @@ def _matched_row_id(session: Any, question: str, campaign_id: int | None) -> int
     return outcome.source_row_id if isinstance(outcome, Abstain) else None
 
 
+def _selected_options(reply: str, options: list[Any]) -> list[Any] | None:
+    """Which options ``reply`` names, or None when it names none of them.
+
+    Accepts a 1-based number — which is how a list too long for buttons is
+    answered — or the option's own text, by label or by value, ignoring case.
+    Nothing else. There is deliberately no nearest-match tier: a reply of
+    "2 weeks" against an option reading "1 - 2 weeks" is not that option, and
+    silently treating it as one puts a notice period on a real application that
+    the user never gave.
+    """
+    picked: list[Any] = []
+    for part in (piece.strip() for piece in reply.split(",")):
+        if not part:
+            continue
+        if part.isdigit() and 1 <= int(part) <= len(options):
+            picked.append(options[int(part) - 1])
+            continue
+        named = [option for option in options if option.matches(part)]
+        if len(named) != 1:
+            return None
+        picked.append(named[0])
+    return picked or None
+
+
+def _record_choice_answer(job_id: int, values: list[str], options: list[Any]) -> str:
+    """Save a chosen option (or options) and re-queue the job."""
+    from backend.apply.formdom import MULTI_VALUE_SEPARATOR
+
+    with session_scope() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return f"No job {job_id}."
+        question = job.needs_answer_question or f"question for job {job_id}"
+        row_id = _matched_row_id(session, question, job.campaign_id)
+
+    save_answer(
+        question,
+        MULTI_VALUE_SEPARATOR.join(values),
+        row_id=row_id,
+        choices=options,
+    )
+    requeued = requeue_job(job_id)
+    labels = ", ".join(option.label for option in options if option.value in values)
+    return f"Saved: {question} -> {labels}\n" + (
+        "Job re-queued." if requeued else "Job was not parked; answer still saved."
+    )
+
+
 def _cmd_answer(argument: str) -> str:
     """/answer <job_id> <answer> — save it and re-queue the job."""
     parts = argument.strip().split(maxsplit=1)
@@ -638,6 +798,28 @@ def _cmd_answer(argument: str) -> str:
         job_id = int(parts[0])
     except ValueError:
         return "Usage: /answer <job_id> <your answer>"
+
+    with session_scope() as session:
+        parked = session.get(Job, job_id)
+        options = as_choices(parked.needs_answer_choices) if parked else []
+
+    if options:
+        # A closed list. The reply has to name one of the site's own options,
+        # because a free-text answer to a dropdown either fails at submit or —
+        # worse — submits blank. Refusing here is what keeps that from being
+        # discovered by the employer.
+        chosen = _selected_options(parts[1], options)
+        if chosen is None:
+            listed = "\n".join(
+                f"{index + 1}. {option.label}" for index, option in enumerate(options)
+            )
+            return (
+                f"{parts[1]!r} is not one of the options this form offers. "
+                f"Reply with the number or the exact text:\n{listed}"
+            )
+        return _record_choice_answer(
+            job_id, [option.value for option in chosen], options
+        )
 
     with session_scope() as session:
         job = session.get(Job, job_id)
@@ -782,6 +964,65 @@ def _decide_preference(argument: str, *, confirm: bool) -> str:
         return f"{verb}: {row.key} = {row.value}"
 
 
+def handle_callback(data: str) -> tuple[str, list[list[dict[str, str]]] | None]:
+    """One button tap. Returns the reply text and the keyboard to show next.
+
+    ``c:<job>:<index>:<selection>`` toggles an option; ``d:<job>::<selection>``
+    is Done on a multi-select. The whole selection travels in the callback data
+    rather than in a table: the bot restarts, and a half-made selection that
+    survives a restart is not worth a schema change.
+
+    A keyboard comes back only while the question is still open. ``None`` means
+    the question is answered and the buttons should go.
+    """
+    kind, _, rest = data.partition(":")
+    parts = rest.split(":")
+    if kind not in {"c", "d"} or len(parts) < 3 or not parts[0].isdigit():
+        return "That button is from an older message I no longer understand.", None
+
+    job_id = int(parts[0])
+    selected = [int(index) for index in parts[2].split(",") if index.strip().isdigit()]
+
+    with session_scope() as session:
+        job = session.get(Job, job_id)
+        if job is None:
+            return f"No job {job_id}.", None
+        options = as_choices(job.needs_answer_choices)
+        multi = bool(job.needs_answer_multi)
+        question = job.needs_answer_question or ""
+
+    if not options:
+        return "That question is already answered.", None
+
+    if kind == "c":
+        index = int(parts[1]) if parts[1].isdigit() else -1
+        if not 0 <= index < len(options):
+            return "That option is no longer on this form.", None
+        if not multi:
+            return _record_choice_answer(job_id, [options[index].value], options), None
+        selected = (
+            [i for i in selected if i != index]
+            if index in selected
+            else [*selected, index]
+        )
+        keyboard = _option_rows(job_id, options, sorted(selected))
+        keyboard.append(
+            [
+                {
+                    "text": "Done",
+                    "callback_data": f"d:{job_id}::{','.join(str(i) for i in sorted(selected))}",
+                }
+            ]
+        )
+        chosen = ", ".join(options[i].label for i in sorted(selected)) or "nothing yet"
+        return f"{question}\n\nSelected: {chosen}", keyboard
+
+    if not selected:
+        return "Nothing selected — tap at least one option, then Done.", None
+    values = [options[i].value for i in sorted(selected) if 0 <= i < len(options)]
+    return _record_choice_answer(job_id, values, options), None
+
+
 COMMANDS = {
     "/stop": _cmd_stop,
     "/resume": _cmd_resume,
@@ -816,9 +1057,14 @@ def handle_command(text: str) -> str:
 
 def build_application() -> Any:
     """The long-polling bot, for `python -m backend.integrations.telegram`."""
-    from telegram import Update
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
     from telegram.ext import Application as TelegramApplication
-    from telegram.ext import ContextTypes, MessageHandler, filters
+    from telegram.ext import (
+        CallbackQueryHandler,
+        ContextTypes,
+        MessageHandler,
+        filters,
+    )
 
     if not _configured():
         raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
@@ -837,7 +1083,39 @@ def build_application() -> Any:
         reply = handle_command(update.message.text or "")
         await update.message.reply_text(reply, parse_mode="Markdown")
 
+    async def on_callback(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
+        if query is None or query.message is None:
+            return
+        if str(query.message.chat_id) != str(settings.telegram_chat_id):
+            log.warning("telegram_foreign_chat", chat_id=query.message.chat_id)
+            return
+        await query.answer()
+        text, keyboard = handle_callback(query.data or "")
+        # Edited in place rather than sent as a new message: a multi-select
+        # takes several taps, and one message per tap buries the question.
+        # No parse mode — the text quotes the form's own option labels.
+        await query.edit_message_text(
+            text,
+            reply_markup=(
+                InlineKeyboardMarkup(
+                    [
+                        [
+                            InlineKeyboardButton(
+                                button["text"], callback_data=button["callback_data"]
+                            )
+                            for button in row
+                        ]
+                        for row in keyboard
+                    ]
+                )
+                if keyboard
+                else None
+            ),
+        )
+
     application.add_handler(MessageHandler(filters.TEXT, on_message))
+    application.add_handler(CallbackQueryHandler(on_callback))
     return application
 
 

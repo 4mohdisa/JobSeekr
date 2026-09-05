@@ -17,7 +17,67 @@ from typing import Any
 from backend.apply.answers import Abstain, Answer
 from backend.models import Document, DocumentKind
 
-__all__ = ["ApplicationDraft", "FormField"]
+__all__ = ["ApplicationDraft", "Choice", "FormField", "as_choices"]
+
+
+@dataclass(frozen=True)
+class Choice:
+    """One option on a closed-list field: what is read, and what is submitted.
+
+    The two are routinely different. A ``<select>`` offering "1 - 2 weeks"
+    submits ``2``; a radio labelled "Australian citizen" submits ``CITIZEN``.
+    Answering with the label where the form wants the value fails at submit —
+    silently, or by sending a blank — which is exactly the failure this type
+    exists to make impossible to write.
+
+    ``is_free_text`` marks an "Other (please specify)" option, which is a
+    prompt for more text rather than an answer in itself.
+    """
+
+    label: str
+    value: str
+    is_free_text: bool = False
+
+    def matches(self, answer: str) -> bool:
+        """Whether ``answer`` names this option, by value or by label.
+
+        Case-insensitive, and nothing else. Not a fuzzy match, not a substring
+        match: a stored "2 weeks" must NOT satisfy an option reading
+        "1 - 2 weeks". Different wording is a different answer.
+        """
+        folded = answer.strip().casefold()
+        return folded in {self.value.strip().casefold(), self.label.strip().casefold()}
+
+
+def as_choices(items: Any) -> list[Choice]:
+    """Read a choice list from whatever shape it was stored or captured in.
+
+    Three shapes exist in the wild and all three have to keep working: the
+    ``Choice`` objects the enumeration builds, the ``{"label", "value"}`` dicts
+    the answer bank persists as JSON, and the bare strings every answer bank row
+    written before this held. A bare string is a label whose value is itself,
+    which is what a form with no ``value`` attribute actually does.
+    """
+    out: list[Choice] = []
+    for item in items or []:
+        if isinstance(item, Choice):
+            out.append(item)
+        elif isinstance(item, dict):
+            label = str(item.get("label", "")).strip()
+            value = str(item.get("value", label))
+            if label or value:
+                out.append(
+                    Choice(
+                        label=label or value,
+                        value=value,
+                        is_free_text=bool(item.get("is_free_text")),
+                    )
+                )
+        else:
+            text = str(item).strip()
+            if text:
+                out.append(Choice(label=text, value=text))
+    return out
 
 
 @dataclass
@@ -32,9 +92,22 @@ class FormField:
     label: str
     kind: str = "text"  # text | textarea | select | radio | checkbox | file | unknown
     required: bool = False
-    choices: list[str] = field(default_factory=list)
+    choices: list[Choice] = field(default_factory=list)
     step: int = 0
     current_value: str | None = None
+
+    multi_select: bool = False
+    """Whether more than one option may be chosen.
+
+    A ``<select multiple>`` or a checkbox group. Carried rather than inferred
+    from ``kind`` because a lone checkbox is a consent tick, not a one-option
+    multi-select, and the escalation asks a different question for each.
+    """
+
+    @property
+    def choice_labels(self) -> list[str]:
+        """The options as the user reads them, in the form's own order."""
+        return [choice.label for choice in self.choices]
 
 
 @dataclass

@@ -32,6 +32,7 @@ home: ``guardrails.check_can_submit``.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -1203,6 +1204,17 @@ def _park(session: Session, job: Job, draft: ApplicationDraft) -> ApplyResult:
     job.status = JobStatus.NEEDS_ANSWER
     questions = [a.question for a in draft.abstentions]
     job.needs_answer_question = questions[0] if questions else None
+
+    # The options go on the job for the same reason the question does: by the
+    # time a reply arrives the browser is closed and the page is gone, and the
+    # bot has to check that reply against the options the site actually offered.
+    # Read off the abstention rather than looked up again from the draft — the
+    # resolver already matched the field, and matching it a second time here is
+    # a second chance to match a different one.
+    first = draft.abstentions[0] if draft.abstentions else None
+    options = list(getattr(first, "choices", []) or []) if first else []
+    job.needs_answer_choices = [asdict(option) for option in options] or None
+    job.needs_answer_multi = bool(getattr(first, "multi_select", False))
     session.add(job)
 
     # One row per question, not one per park: the trend worth seeing is "this
@@ -1232,21 +1244,8 @@ def _park(session: Session, job: Job, draft: ApplicationDraft) -> ApplyResult:
         failure_reason=f"{len(questions)} unanswered screening questions",
         answers_given=draft.answers_given,
         needs_answer=questions[0] if questions else None,
-        needs_answer_choices=_choices_for(draft, questions[0]) if questions else [],
+        needs_answer_choices=[option.label for option in options],
     )
-
-
-def _choices_for(draft: ApplicationDraft, question: str) -> list[str]:
-    """The form's options for ``question``, if it was a closed list.
-
-    Matched on the normalised question because ``Abstain.question`` is already
-    normalised while ``FormField.label`` is raw.
-    """
-    target = normalise_question(question)
-    for field_ in draft.fields:
-        if normalise_question(question_key(field_)) == target:
-            return list(field_.choices)
-    return []
 
 
 def _abort(

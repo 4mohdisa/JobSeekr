@@ -83,6 +83,15 @@ export interface Campaign {
   applied_today: number;
 }
 
+// One option on a closed-list question. `label` is what the form shows and
+// `value` is what it submits; they routinely differ ("1 - 2 weeks" -> "2"), and
+// storing the label where the value is wanted fails at submit.
+export interface Choice {
+  label: string;
+  value: string;
+  is_free_text: boolean;
+}
+
 export interface Answer {
   id: number;
   question_pattern: string;
@@ -90,7 +99,7 @@ export interface Answer {
   answer_value: string;
   answer_type: AnswerType;
   campaign_id: number | null;
-  choices: string[] | null;
+  choices: Choice[] | null;
   notes: string | null;
   verified_at: string | null;
   updated_at: string;

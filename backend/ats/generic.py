@@ -418,7 +418,11 @@ def _map_via_llm(
 
     described = "\n".join(
         f"- id={f.identifier!r} label={f.label!r} type={f.kind}"
-        + (f" choices={f.choices}" if f.choices else "")
+        + (
+            f" choices={getattr(f, 'choice_labels', None) or f.choices}"
+            if f.choices
+            else ""
+        )
         + (" (required)" if f.required else "")
         for f in fields
     )

@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from backend.models import (
     AnswerType,
@@ -139,15 +139,45 @@ class CampaignOut(CampaignIn):
 # ----------------------------------------------------------------- answer bank
 
 
+class ChoiceOut(BaseModel):
+    """One option on a closed-list question: what is read, what is submitted."""
+
+    label: str
+    value: str
+    is_free_text: bool = False
+
+
+def _normalise_choices(value: Any) -> Any:
+    """Accept every shape a stored option set has ever had.
+
+    Rows seeded before options carried values hold bare strings, and the
+    dashboard hands back whatever it was given. Normalising here rather than
+    migrating means a legacy row still renders instead of 500ing the page — and
+    a bare string is not lossy: a form with no ``value`` attribute submits its
+    own text, which is exactly what this expands to.
+    """
+    if not value:
+        return None
+    from dataclasses import asdict
+
+    from backend.apply.draft import as_choices
+
+    return [asdict(choice) for choice in as_choices(value)] or None
+
+
 class AnswerIn(BaseModel):
     question_pattern: str
     match_type: MatchType = MatchType.FUZZY
     answer_value: str = ""
     answer_type: AnswerType = AnswerType.TEXT
     campaign_id: int | None = None
-    choices: list[str] | None = None
+    choices: list[ChoiceOut] | None = None
     notes: str | None = None
     verified: bool = False
+
+    _fix_choices = field_validator("choices", mode="before")(
+        staticmethod(_normalise_choices)
+    )
 
 
 class AnswerOut(BaseModel):
@@ -159,10 +189,14 @@ class AnswerOut(BaseModel):
     answer_value: str
     answer_type: AnswerType
     campaign_id: int | None
-    choices: list[str] | None
+    choices: list[ChoiceOut] | None
     notes: str | None
     verified_at: datetime | None
     updated_at: datetime
+
+    _fix_choices = field_validator("choices", mode="before")(
+        staticmethod(_normalise_choices)
+    )
 
     @property
     def answered(self) -> bool:
