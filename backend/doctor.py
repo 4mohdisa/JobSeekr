@@ -158,7 +158,12 @@ def check_playwright_channel() -> Finding:
 
 
 def check_llm_keys() -> Finding:
-    """Scoring and embeddings are different providers; both are needed."""
+    """Scoring and embeddings both need a key, whoever provides them.
+
+    They are on one provider by default now, which means one key covers both —
+    but the check stays per-model rather than per-provider, because the models
+    are settings and either can be pointed somewhere else without touching this.
+    """
     make = _finding("API keys", "credentials")
     from backend.llm.client import _api_key_for
 
@@ -167,19 +172,34 @@ def check_llm_keys() -> Finding:
         for model in (settings.llm_model_scoring, settings.llm_model_embedding)
         if not _api_key_for(model)
     ]
+    settings_to_fill = " and ".join(sorted({_key_setting(m) for m in missing}))
     if len(missing) == 2:
         return make(
             BLOCK,
             "no key for scoring or embeddings — nothing can be scored or written",
-            "set GEMINI_API_KEY and OPENAI_API_KEY in .env",
+            f"set {settings_to_fill} in .env",
         )
     if missing:
         return make(
             BLOCK,
             f"no key for {missing[0]}",
-            "set the matching key in .env",
+            f"set {settings_to_fill} in .env",
         )
     return make(OK, "scoring and embedding providers both have keys")
+
+
+def _key_setting(model: str) -> str:
+    """The .env name of the key a model needs, read off the gateway's own map.
+
+    Named rather than left as "the matching key": naming two fixed providers was
+    wrong the moment the embedding model moved to Gemini, and a second copy of
+    the provider table is a second thing to forget to update.
+    """
+    from backend.llm.client import _PROVIDER_KEY_FIELDS
+
+    provider = model.split("/", 1)[0].lower()
+    field = _PROVIDER_KEY_FIELDS.get(provider)
+    return field.upper() if field else f"a key for {provider}"
 
 
 def check_telegram() -> Finding:

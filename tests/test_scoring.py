@@ -277,10 +277,22 @@ def test_budget_exhaustion_halts_stage2_cleanly_and_keeps_earlier_results(monkey
 # --------------------------------------------------------------- cost target
 
 
-def test_stage1_is_negligible_for_two_hundred_jobs():
-    """Embedding 200 ads is fractions of a cent — truncation and batching work."""
+def test_stage1_stays_a_small_fraction_of_the_target():
+    """Embedding 200 ads costs about a cent — truncation and batching work.
+
+    It was a tenth of that on OpenAI's small model. Moving embeddings to Gemini
+    so the whole pipeline runs on one key costs 7.5x per token; the assertion is
+    against the project's own target rather than a round number, because that is
+    the thing the spend has to fit inside.
+    """
     projection = estimate_cost(200)
-    assert projection["stage1_usd"] < 0.01, projection
+
+    # Both bounds. An upper bound alone is satisfied by zero, which is what a
+    # mispriced or unpriced embedding model projects — the failure this is
+    # meant to catch reads as the cheapest possible result.
+    assert projection["stage1_usd"] > 0, projection
+    assert projection["stage1_usd"] < 0.1 * projection["target_usd"], projection
+    assert projection["meets_target"], projection
 
 
 def test_cost_scales_with_volume_when_the_fan_out_is_unlimited():

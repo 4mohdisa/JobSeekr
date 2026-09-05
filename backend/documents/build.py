@@ -272,6 +272,8 @@ def _slot_prompt(
     job: Job,
     requirements: dict[str, Any] | None = None,
     violations: list[Violation] | None = None,
+    variant: int = 1,
+    variants: int = 1,
 ) -> str:
     prompt = (
         f"CANDIDATE FACTS (the only facts you may assert)\n{profile_text}\n\n"
@@ -284,6 +286,19 @@ def _slot_prompt(
         f"TONE: {slot.tone}\n"
         f"HARD LIMIT: {slot.max_words} words.\n"
     )
+    if variants > 1:
+        # This used to be a rising temperature across the variants. It is asked
+        # for in words now because Gemini 3 pins temperature to 1.0 and would
+        # have collapsed the ladder into three samples of the same setting —
+        # silently, since a variant cannot tell you it had nothing to differ
+        # from. Stated in the prompt it works on every provider.
+        prompt += (
+            f"\nThis is draft {variant} of {variants}, written independently of "
+            "the others and judged against them afterwards. Open on a different "
+            "part of this candidate's fit from the one a draft would reach for "
+            f"first, and vary the sentence shapes. Same facts, draft {variant}'s "
+            "own angle.\n"
+        )
     if violations:
         problems = "\n".join(f"- {v}" for v in violations)
         prompt += (
@@ -381,15 +396,13 @@ def generate_ai_slots(
                             job=job,
                             requirements=requirements,
                             violations=violations if attempt == 2 else None,
+                            variant=index + 1,
+                            variants=max(1, settings.document_variants),
                         ),
                         model=settings.llm_model_writing,
                         purpose=f"document_{slot.name}",
                         system=_SLOT_SYSTEM,
                         job_id=job.id,
-                        # Rising temperature across variants: three samples at
-                        # one temperature tend to be three phrasings of the same
-                        # sentence, which is nothing to choose between.
-                        temperature=0.4 + 0.2 * index,
                     ).strip(),
                     slot.max_words,
                 )

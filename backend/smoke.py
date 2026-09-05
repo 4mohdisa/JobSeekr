@@ -130,10 +130,11 @@ def check_llm_completion() -> Result:
 
 
 def check_llm_embedding() -> Result:
-    """One real embedding. Separate check because it is a separate provider.
+    """One real embedding. Separate check because it is a separate endpoint.
 
-    Scoring is on Gemini and embeddings are on OpenAI, so one key working says
-    nothing about the other — and stage 1 failing is a silent, total loss of
+    Both default models are Gemini now, so one key covers both — but a key that
+    works for completions can still be refused for embeddings (a different API
+    enabled, a different quota), and stage 1 failing is a silent, total loss of
     ranking rather than a visible error.
     """
     model = settings.llm_model_embedding
@@ -185,6 +186,11 @@ def check_pdflatex() -> Result:
             return Result("pdflatex", "fail", str(exc)[:200])
 
         size = path.stat().st_size
+        # render_pdf keeps the .tex next to the PDF on purpose — for a real
+        # build it is how you see what was typeset. A smoke test has no such
+        # reader, so it clears its own source and the leftovers list below then
+        # means what it says: aux files render_pdf failed to clean up.
+        path.with_suffix(".tex").unlink(missing_ok=True)
         leftovers = sorted(p.name for p in Path(directory).glob("smoke.*") if p != path)
 
     return Result(
