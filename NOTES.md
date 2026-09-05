@@ -3032,3 +3032,152 @@ Unchanged from the overnight session — none of this moved:
    deleting the merged branch, or the same auto-close that hit #7 will happen
    again.
 6. **`send_draft` is still off**, as instructed. Unchanged and unwired.
+
+---
+
+# Session — 2026-09-05 (macOS)
+
+Six phases. The three-PR stack merged, the tree formatted, and four new
+commands built. **`ALLOW_LIVE_SUBMIT` untouched and still false.
+`OUTBOUND_ENABLED` added, defaulting false — `send_draft` is wired and off.**
+
+## Phase 1 — merged, and formatted
+
+#14, #15, #16 merged in order with no conflicts. **Retargeting each dependent
+to `main` before deleting the merged branch worked** — no auto-closes this
+time, which is the fix for what killed #7 two sessions ago. That ordering is
+now the rule: retarget the dependent, *then* merge-and-delete the parent.
+
+`ruff format` as its own commit: 79 of 126 files. The lint pass underneath it
+found four things worth fixing rather than suppressing, one of them real —
+`flow.py` used `Region` in three annotations without importing it. `from
+__future__ import annotations` makes annotations strings so it never raised,
+but it was still an undefined name, and `get_type_hints` on those signatures
+would have failed. Introduced with the facts layer last session.
+
+## What was built
+
+| Phase | Branch | PR | Substance |
+|---|---|---|---|
+| 1 | — | #14–#16 merged | The stack, on main, plus `ruff format` |
+| 2 | `chore/smoke-tests` | #17 | `backend.smoke` — every real transport, once |
+| 3 | `feat/derivation-preview` | #18 | `backend.facts preview` — dry-run all 21 |
+| 4 | `feat/outbound-wire` | #19 | `send_draft` wired, every guard intact, off |
+| 5 | `feat/setup-doctor` | #20 | `backend.doctor` — traffic-light checklist |
+
+**953 tests** (894 at merge; 59 added). Rehearsal green on every branch.
+Frontend typechecks. Ruff clean.
+
+## Two corrections to this file
+
+**Chrome and Playwright work.** NOTES.md has carried "no browser has ever been
+driven" for three sessions. `backend.smoke` launched real headful Chrome, loaded
+a page and closed it. Chrome is installed at `/Applications/Google Chrome.app`
+and `channel="chrome"` drives it. That claim was true and is not any more.
+
+**`channel="chrome"` needs no Playwright browser download.** It uses the system
+Chrome. The first version of the doctor's Playwright check counted cached
+browser builds and would have reported OK on a chromium-only cache — the exact
+false green it was written to prevent.
+
+## Decisions taken without asking
+
+1. **`OUTBOUND_ENABLED` is separate from `ALLOW_LIVE_SUBMIT`,** not folded into
+   it. They authorise different things: one puts a document on a form the
+   employer asked to be filled in, the other puts a message in a stranger's
+   inbox. Someone may reasonably want the first only.
+2. **The switch is checked inside `send_draft`,** not at the call site. One
+   place that can send, one place that can be off — an approval given before
+   the feature was enabled must not become a send afterwards.
+3. **`OutboundMessage` with `UNIQUE(job_id)`.** "One message per job, ever" was
+   documented and *not enforced*: nothing recorded what had been sent, so
+   nothing could refuse a second. A SKIPPED row holds the slot as SENT does,
+   because declining is a decision.
+4. **A failed send stays DRAFTED.** A transport error is not a decision, and
+   marking it SENT would consume the job's one slot with nothing having arrived.
+5. **The Telegram follow-up notification is not actionable.** Send/Skip/Edit is
+   in the UI: a message that could send an email with one tap is a message one
+   mistap sends an email from.
+6. **Regex seeds carry an `example_question`.** Ten of the 21 match by regex, so
+   their `question_pattern` is a regex — fine for matching, nonsense to hand a
+   model as "the question on the form". The real flow never hits this because
+   the question comes from the form field's label.
+7. **Doctor exits non-zero on BLOCK only.** A warning is not a broken install.
+8. **Smoke skips are not failures** either, for the same reason: the command
+   has to be runnable mid-setup, which is the only time it is useful.
+
+## What broke, and what found it
+
+Six real bugs, plus two self-inflicted ones caught immediately.
+
+- **`Region` used but never imported** in `flow.py` (above). Found by ruff.
+- **`derive()` bypassed the LLM stub seam** with an inline
+  `from backend.llm.client import complete_json` — the same anti-pattern fixed
+  in `verify.py` last session. It would have made a real paid call from a
+  rehearsal. That was the last one of its kind in the tree.
+- **The preview fed raw regexes to the model** for ten of 21 questions.
+- **Two regex seeds shared one example question** — the salary-expectation
+  regex contains `hour` in its own negative lookahead, so the token match gave
+  it the hourly-rate question. Found by *reading the preview output*, which is
+  what the preview is for.
+- **The doctor's Playwright check contradicted its own docstring** (above).
+- **"One message per job" was unenforced** (above).
+- Two name collisions made wired functions look unwired in the name-based
+  reachability audit: a local variable `preview`, and `skip` aliased at its
+  only call site. Renamed rather than allowlisted, so the audit keeps telling
+  the truth.
+
+## Tests that could not fail
+
+**Three of 39 mutations passed on the first attempt.** All three the same shape
+as previous sessions — a *different* condition satisfying the assertion instead
+of the guard under test:
+
+1. **The blank-fact test had no blank fact**, only a *missing* one. `facts_for`
+   returned nothing either way, so the guard was never exercised. The fixture
+   now contains a real blank fact.
+2. **The parse-gate test hit the profile check first.** `draft_for_job` checks
+   for a profile before it checks the gate, so the test passed on "no profile
+   to write from" and never reached the guard it is named for.
+3. **One mutation had simply not applied** — ruff had stripped the trailing
+   comment my match string included, so the edit silently no-opped. Worth
+   recording separately: a mutation that does not apply looks identical to a
+   test that caught it, and the only way to tell is to assert the target was
+   found. The mutation harness now does.
+
+## Unverified
+
+- **Nothing has ever been submitted.** `ALLOW_LIVE_SUBMIT` has never been true.
+- **No email has ever been sent.** `OUTBOUND_ENABLED` has never been true, and
+  `send_draft` has never run against a real SMTP server.
+- **No real LLM call has been made anywhere in this project.** Every
+  derivation, variant judgement and self-check is tested against a stub.
+  `backend.smoke --only gemini` is the thing that changes that.
+- **Every site-knowledge strategy value is still a guess.** No HAR capture has
+  been recorded.
+- **Telegram has never sent a message.**
+- **Session checking has never seen a real cookie jar** — the profile holds no
+  cookies, confirmed by `backend.smoke`.
+- **The derivation prompt has never been run against a real fact**, because the
+  facts are blank. `backend.facts preview` is built and reports 0 of 21
+  answerable.
+
+## Needs you
+
+Run `uv run python -m backend.doctor` — it now tells you this itself. As of
+this session it reports **3 blocking, 4 warnings**:
+
+1. **API keys** (BLOCK) — `GEMINI_API_KEY` and `OPENAI_API_KEY`. This unblocks
+   the most: scoring, cover letters, fact derivation, the variant judge and the
+   fabrication self-check are all stubbed and unexercised. Then
+   `uv run python -m backend.smoke` to confirm they work and see the real cost.
+2. **Profile** (BLOCK) — no name or email. Every document needs both.
+3. **Facts** (BLOCK) — all 11 blank. Then `uv run python -m backend.facts
+   preview` and read all 21 derivations before confirming any: each is
+   confirmed once and cached forever.
+4. **Campaign** (WARN) — still active on the seeded placeholder terms.
+5. **Sessions** (WARN) — sign in to the boards and the ATS accounts.
+6. **Site knowledge** (WARN) — run the HAR capture.
+
+Then merge #17 → #18 → #19 → #20, retargeting each next PR to `main` before
+deleting the merged branch.
