@@ -181,11 +181,13 @@ class ApplyResult(BaseModel):
     """
 
     needs_answer_choices: list[str] = Field(default_factory=list)
-    """The form's own options for ``needs_answer``, when it was a closed list.
+    """The option LABELS for ``needs_answer``, for a caller reporting the result.
 
-    Sent with the question so the reply matches a value the form will accept —
-    a free-text "yes, full working rights" against a strict dropdown resolves to
-    nothing and re-parks the job.
+    Labels only, and not the channel the escalation uses. The full option set —
+    label, submitted value, and whether the option is a free-text "Other" — is
+    written onto the job row by the flow, because the process that asks and the
+    process that receives the reply are different ones and an in-memory list
+    does not survive the gap.
     """
 
 

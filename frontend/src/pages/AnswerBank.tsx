@@ -77,18 +77,40 @@ export function AnswerBank() {
       key: "answer_value",
       header: "Answer",
       width: "26%",
-      render: (row) => (
-        <Input
-          value={edits[row.id] ?? row.answer_value}
-          placeholder="— unanswered —"
-          onChange={(event) =>
-            setEdits((current) => ({ ...current, [row.id]: event.target.value }))
-          }
-          className={cx(
-            !((edits[row.id] ?? row.answer_value).trim()) && "border-warn/50 bg-warn/5",
-          )}
-        />
-      ),
+      // A row that came from a dropdown carries the site's own option set, so
+      // it is edited as a dropdown. Typing free text into one of these is the
+      // exact failure the option capture exists to prevent: the answer looks
+      // right, matches no option, and fails silently at submit.
+      render: (row) =>
+        row.choices && row.choices.length > 0 ? (
+          <Select
+            value={edits[row.id] ?? row.answer_value}
+            onChange={(event) =>
+              setEdits((current) => ({ ...current, [row.id]: event.target.value }))
+            }
+            className={cx(
+              !(edits[row.id] ?? row.answer_value).trim() && "border-warn/50 bg-warn/5",
+            )}
+          >
+            <option value="">— unanswered —</option>
+            {row.choices.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <Input
+            value={edits[row.id] ?? row.answer_value}
+            placeholder="— unanswered —"
+            onChange={(event) =>
+              setEdits((current) => ({ ...current, [row.id]: event.target.value }))
+            }
+            className={cx(
+              !(edits[row.id] ?? row.answer_value).trim() && "border-warn/50 bg-warn/5",
+            )}
+          />
+        ),
       sortValue: (row) => (row.answer_value.trim() ? 1 : 0),
     },
     {

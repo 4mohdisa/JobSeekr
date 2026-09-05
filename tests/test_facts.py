@@ -107,6 +107,156 @@ def test_whitespace_counts_as_a_change():
 # =========================================================================
 
 
+# --- the option set is a hard boundary, not a hint -------------------------
+
+
+def test_derivation_picks_a_value_from_the_option_list_rather_than_writing_one(
+    session, monkeypatch
+):
+    """The user's fact says two weeks. The form offers a range containing it.
+
+    The model's job is to choose from the list. Writing "2 weeks" when the only
+    accepted string is "1-2 weeks" produces an answer that fails at submit, and
+    fails silently.
+    """
+    from backend.apply.draft import Choice
+
+    notice = facts.set_fact(
+        session,
+        key="notice",
+        text="I need to give two weeks notice to my current employer",
+        category=FactCategory.AVAILABILITY,
+    )
+    session.flush()
+
+    seen: dict[str, str] = {}
+
+    def fake(prompt, **kwargs):
+        seen["prompt"] = prompt
+        return {
+            "supported": True,
+            "answer": "1-2 weeks",
+            "reasoning": "two weeks falls inside the one-to-two-week option",
+            "uncertainty": "",
+        }
+
+    monkeypatch.setattr(facts.llm, "complete_json", fake)
+
+    derived = facts.derive(
+        notice,
+        "What notice period do you require?",
+        choices=[
+            Choice(label="Immediately", value="0"),
+            Choice(label="1-2 weeks", value="2"),
+            Choice(label="1 month", value="4"),
+        ],
+    )
+
+    assert derived is not None
+    assert derived.answer == "2", "the submitted value, not the label it echoed"
+    assert "Immediately" in seen["prompt"], "the model must see the options"
+    assert "may not invent a value outside this list" in seen["prompt"]
+
+
+def test_a_derived_value_outside_the_option_list_is_an_abstention(session, monkeypatch):
+    """No option is clearly supported, so nothing is answered."""
+    from backend.apply.draft import Choice
+
+    notice = facts.set_fact(
+        session,
+        key="notice",
+        text="I need to give two weeks notice",
+        category=FactCategory.AVAILABILITY,
+    )
+    session.flush()
+
+    monkeypatch.setattr(
+        facts.llm,
+        "complete_json",
+        lambda *a, **k: {
+            "supported": True,
+            "answer": "2 weeks",
+            "reasoning": "",
+            "uncertainty": "",
+        },
+    )
+
+    assert (
+        facts.derive(
+            notice,
+            "What notice period do you require?",
+            choices=[
+                Choice(label="Immediately", value="0"),
+                Choice(label="1 month", value="4"),
+            ],
+        )
+        is None
+    )
+
+
+def test_a_confirmed_derivation_is_rechecked_against_each_forms_own_options(
+    session, licence, monkeypatch
+):
+    """The cache holds one answer per question; employers offer different lists.
+
+    A confirmed "Yes" is right for a Yes/No dropdown and means nothing on a form
+    offering [Full, Provisional, None]. Replaying it there would put a value on
+    the application that the user never confirmed.
+    """
+    from backend.apply.draft import Choice
+
+    monkeypatch.setattr(
+        facts.llm,
+        "complete_json",
+        lambda *a, **k: {
+            "supported": True,
+            "answer": "Yes",
+            "reasoning": "the fact states a full class C licence",
+            "uncertainty": "",
+        },
+    )
+    answer = facts.resolve_from_facts(
+        session,
+        question="Do you hold a driver's licence?",
+        question_key="do you hold a drivers licence",
+        category=FactCategory.LICENCE,
+        choices=[Choice(label="Yes", value="Y"), Choice(label="No", value="N")],
+    )
+    assert answer is None, "an unconfirmed derivation never answers"
+
+    row = session.exec(select(DerivedAnswer)).first()
+    facts.confirm(session, row.id)
+    session.flush()
+
+    # Same question, same region, a different employer's option list.
+    assert (
+        facts.resolve_from_facts(
+            session,
+            question="Do you hold a driver's licence?",
+            question_key="do you hold a drivers licence",
+            category=FactCategory.LICENCE,
+            choices=[
+                Choice(label="Full", value="F"),
+                Choice(label="Provisional", value="P"),
+                Choice(label="None", value="X"),
+            ],
+        )
+        is None
+    ), "a confirmed answer this form does not offer must abstain, not be coerced"
+
+    # And still answers where the option IS offered.
+    assert (
+        facts.resolve_from_facts(
+            session,
+            question="Do you hold a driver's licence?",
+            question_key="do you hold a drivers licence",
+            category=FactCategory.LICENCE,
+            choices=[Choice(label="Yes", value="Y"), Choice(label="No", value="N")],
+        )
+        == "Y"
+    )
+
+
 def test_a_specific_fact_can_answer_no_for_what_it_excludes(
     session, licence, monkeypatch
 ):

@@ -664,6 +664,21 @@ class Job(SQLModel, table=True):
     nothing and re-parks the job on the next pass.
     """
 
+    needs_answer_choices: list[Any] | None = Field(
+        default=None, sa_column=Column(JSON(none_as_null=True), nullable=True)
+    )
+    """The form's own options for that question, when it was a closed list.
+
+    ``[{"label": ..., "value": ..., "is_free_text": ...}, ...]`` in the form's
+    own order. Persisted for the same reason the question is: the browser is
+    long gone by the time a reply arrives, and the bot has to validate that
+    reply against the options the site actually offered. Without them a tap on
+    "1 - 2 weeks" would be stored as free text and fail at the next submit.
+    """
+
+    needs_answer_multi: bool = False
+    """Whether that question accepts more than one option."""
+
 
 class Document(SQLModel, table=True):
     """A built PDF on disk.

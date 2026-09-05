@@ -439,13 +439,13 @@ def run_apply_pass(
                             # job whose NEEDS_ANSWER status has not been
                             # committed yet, and re-queueing would silently
                             # refuse.
-                            pending_escalations.append(
-                                (
-                                    job.id,
-                                    result.needs_answer,
-                                    result.needs_answer_choices,
-                                )
-                            )
+                            # The options are NOT carried here. _park wrote
+                            # them onto the job row, and escalate_question reads
+                            # them back from it, so the message and the reply
+                            # validation are looking at the same list. Passing
+                            # them alongside would create a second copy that can
+                            # disagree with the persisted one.
+                            pending_escalations.append((job.id, result.needs_answer))
                     elif result.outcome in {ApplyOutcome.BLOCKED, ApplyOutcome.DRY_RUN}:
                         counts["blocked"] += 1
                     else:
@@ -488,7 +488,7 @@ def run_apply_pass(
     return run
 
 
-def _escalate_parked(escalations: list[tuple[int, str, list[str]]]) -> None:
+def _escalate_parked(escalations: list[tuple[int, str]]) -> None:
     """Ask the user about each parked job. Never lets a send failure end the pass.
 
     This is the half of the answer-bank loop that turns a parked job into a
@@ -501,9 +501,9 @@ def _escalate_parked(escalations: list[tuple[int, str, list[str]]]) -> None:
     from backend.integrations.telegram import escalate_question
 
     sent = 0
-    for job_id, question, choices in escalations:
+    for job_id, question in escalations:
         try:
-            if escalate_question(job_id, question, choices=choices or None):
+            if escalate_question(job_id, question):
                 sent += 1
             else:
                 # send_message already logged why. Loud, not silent: the job

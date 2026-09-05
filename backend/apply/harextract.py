@@ -39,13 +39,15 @@ MERGE, NEVER OVERWRITE
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from bs4 import BeautifulSoup, Tag
 
+from backend.apply.draft import Choice
+from backend.apply.formdom import option_choice
 from backend.logging_setup import get_logger
 from backend.siteknowledge import Element, SiteKnowledge, Strategy, fingerprint_steps
 
@@ -106,7 +108,7 @@ class CapturedElement:
     identifier: str = ""
     label: str = ""
     required: bool = False
-    choices: list[str] = field(default_factory=list)
+    choices: list[Choice] = field(default_factory=list)
     strategies: list[Strategy] = field(default_factory=list)
     step: int = 0
 
@@ -362,14 +364,15 @@ def extract_from_html(html: str, *, step: int = 0) -> list[CapturedElement]:
                 identifier = value.strip()
                 break
 
-        choices: list[str] = []
+        choices: list[Choice] = []
         if kind == "select":
             choices = [
-                _text_of(option)
-                for option in tag.find_all("option")
-                if _text_of(option)
-                and _text_of(option).casefold()
-                not in {"select an option", "choose an option", "please select"}
+                choice
+                for choice in (
+                    option_choice(_text_of(option), option.get("value"))
+                    for option in tag.find_all("option")
+                )
+                if choice is not None
             ]
 
         captured.append(
@@ -583,14 +586,18 @@ def push_questions_to_answer_bank(session: Any, capture: Capture) -> int:
                 # designed, primed ahead of time instead of discovered mid-run.
                 answer_value="",
                 answer_type=(AnswerType.CHOICE if element.choices else AnswerType.TEXT),
-                choices=list(element.choices) or None,
+                # Label AND submitted value. A capture is the one place the real
+                # option values are visible offline, so a row seeded from one
+                # carries what the form will actually accept rather than the
+                # text a person reads.
+                choices=[asdict(choice) for choice in element.choices] or None,
                 # verified_at stays NULL: unconfirmed until the user says so.
                 verified_at=None,
                 notes=(
                     f"seen during the {capture.platform}/{capture.variant} capture "
                     f"on {capture.captured_at[:10]}"
                     + (
-                        f"; options: {', '.join(element.choices)}"
+                        f"; options: {', '.join(c.label for c in element.choices)}"
                         if element.choices
                         else ""
                     )

@@ -178,7 +178,7 @@ class FakeAdapter:
         return False
 
     def enumerate_fields(self, page: Any, step: int) -> list[Any]:
-        from backend.apply.draft import FormField
+        from backend.apply.draft import Choice, FormField
 
         if step > 0:
             return []
@@ -189,7 +189,13 @@ class FakeAdapter:
                 identifier="rights",
                 label="Do you have full working rights in Australia?",
                 kind="radio",
-                choices=["Yes", "No"],
+                # A real radio group's value differs from its label, which is
+                # exactly what the rehearsal has to carry end to end: the answer
+                # bank must store RIGHTS_YES and the form must receive it.
+                choices=[
+                    Choice(label="Yes", value="RIGHTS_YES"),
+                    Choice(label="No", value="RIGHTS_NO"),
+                ],
             ),
             FormField(identifier="resume", label="Resume", kind="file"),
         ]

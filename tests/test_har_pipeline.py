@@ -143,7 +143,9 @@ def test_required_fields_and_types_are_identified(seek_capture):
     by_id = {element.identifier: element for element in questions_step}
 
     assert by_id["q_1"].required and by_id["q_1"].kind == "select"
-    assert by_id["q_1"].choices == ["Yes", "No"], "the placeholder option is dropped"
+    assert [c.label for c in by_id["q_1"].choices] == ["Yes", "No"], (
+        "the placeholder option is dropped"
+    )
     assert not by_id["start"].required
 
 
@@ -214,7 +216,12 @@ def test_a_captured_question_carries_its_options(session, seek_capture):
         )
     ).first()
     assert row is not None
-    assert row.choices == ["Yes", "No"]
+    # Stored with the submitted value beside the label, so a replay can put the
+    # right string on the form rather than the text a person reads.
+    assert row.choices == [
+        {"label": "Yes", "value": "Yes", "is_free_text": False},
+        {"label": "No", "value": "No", "is_free_text": False},
+    ]
 
 
 def test_a_blank_captured_row_makes_the_flow_abstain(session, seek_capture):
@@ -466,8 +473,18 @@ def test_the_seek_adapter_enumerates_the_real_questions_step():
     by_id = {field.identifier: field for field in fields}
 
     assert by_id["q_1"].label == "Do you have full working rights in Australia?"
-    assert by_id["q_1"].choices == ["Yes", "No"]
+    assert by_id["q_1"].choice_labels == ["Yes", "No"]
     assert by_id["q_1"].required
+    assert not by_id["q_1"].multi_select
+
+    # Label AND value off the same option, against markup Seek really served.
+    # These options carry no `value` attribute, so the browser submits the text
+    # — which is what the fallback in _option_choice reproduces.
+    assert [(c.label, c.value) for c in by_id["q_2"].choices] == [
+        ("None", "None"),
+        ("1-2", "1-2"),
+        ("3-5", "3-5"),
+    ]
 
 
 def test_a_captured_strategy_resolves_through_the_real_resolution_path(seek_capture):
