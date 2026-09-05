@@ -84,7 +84,9 @@ def estimate_cost(
     ``meets_target`` says plainly whether the current configuration fits the
     project's stated target, and ``levers`` says what to change if not.
     """
-    top_n = top_n or settings.scoring_stage1_top_n
+    # 0 (unlimited) projects the full fan-out, which is the number worth
+    # reporting — an estimate that silently assumed 40 would understate the bill.
+    top_n = top_n or settings.scoring_stage2_max or n_jobs
     scoring_model = scoring_model or settings.llm_model_scoring
     embedding_model = embedding_model or settings.llm_model_embedding
 
@@ -112,7 +114,8 @@ def estimate_cost(
         per_job = stage2_usd / scored if scored else 0.0
         affordable = int((target - stage1_usd) / per_job) if per_job else 0
         levers = [
-            f"lower SCORING_STAGE1_TOP_N from {top_n} to about {max(1, affordable)}",
+            f"set SCORING_STAGE2_MAX to about {max(1, affordable)} "
+            f"(currently {settings.scoring_stage2_max or 'unlimited'})",
             f"lower SCORING_PROMPT_CHAR_BUDGET from {settings.scoring_prompt_char_budget}",
             f"configure a cheaper LLM_MODEL_SCORING than {scoring_model} (your call)",
             f"raise SCORING_COST_TARGET_USD above {target}",
@@ -275,11 +278,21 @@ def score_campaign(
 
     summary = campaign_profile_summary(profile, campaign)
     ranked = rank_jobs(
-        filtered.kept, summary=summary, top_n=settings.scoring_stage1_top_n, cache=cache
+        filtered.kept,
+        summary=summary,
+        # Rank everything when the fan-out is unlimited: truncating here would
+        # discard jobs before stage 2 could see them, which is the prefilter
+        # problem this setting exists to remove.
+        top_n=settings.scoring_stage2_max or len(filtered.kept) or None,
+        cache=cache,
     )
     counts["ranked"] = len(ranked)
 
-    survivors = [job for job, _ in ranked[: settings.scoring_stage1_top_n]]
+    # 0 means every job that passed the hard filters. The ranking still
+    # decides the ORDER, so if the budget cap stops the run partway the best
+    # jobs have already been scored.
+    fan_out = settings.scoring_stage2_max or len(ranked)
+    survivors = [job for job, _ in ranked[:fan_out]]
     stage1_by_id = {job.id: similarity for job, similarity in ranked}
 
     if dry_run:
@@ -312,6 +325,15 @@ def score_campaign(
                 stage2=stage2,
                 final=final,
                 reasoning=result.reasoning if result else None,
+                requirements=(
+                    {
+                        "must_haves": result.must_haves,
+                        "nice_to_haves": result.nice_to_haves,
+                        "tone": result.tone,
+                    }
+                    if result
+                    else {}
+                ),
                 matched_skills=result.matched_skills if result else [],
                 gaps=result.gaps if result else [],
                 red_flags=result.red_flags if result else [],

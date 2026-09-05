@@ -2847,3 +2847,188 @@ Unchanged from the last handoff, and this session did not move any of it:
    default, which is what they actually are.
 
 5. **Merge the stack in order**, #5 and #6 first.
+
+---
+
+# Session — 2026-09-03 (afternoon, macOS)
+
+Five phases. The eight-PR stack from the overnight session merged to main;
+three new phases built on top. **`ALLOW_LIVE_SUBMIT` untouched and still false.
+`send_draft` still unwired** — both were explicit constraints.
+
+## Phase 1 — the stack merged
+
+All eight merged in order with **no conflicts**, so no judgement calls on
+content. One process incident worth recording:
+
+**`gh pr merge --delete-branch` closed #7 instead of retargeting it.** Merging
+#6 deleted `feat/siteknowledge`, and GitHub closes any PR whose base branch is
+deleted. #7 could not be reopened either — GitHub refuses once the base is
+gone — so it was recreated as **#13** with the same branch, commits and body,
+plus a note explaining the replacement.
+
+The fix for the rest of the stack: **retarget every remaining PR to `main`
+before deleting any more branches.** #8–#12 were retargeted first and merged
+cleanly. Worth remembering for the next stack — the safe order is retarget the
+dependent, then merge-and-delete the parent, not the reverse.
+
+`main` afterwards: 809 tests (804 from the stack + 5 from `chore/docs`, which
+branched independently), rehearsal green, all branches deleted.
+
+## What was built
+
+| Phase | Branch | PR | Substance |
+|---|---|---|---|
+| 1 | — | #5–#13 merged | The overnight stack, on main |
+| 2 | `feat/answer-bank-facts` | #14 | Facts verbatim + derived answers, confirmed once |
+| 3 | `feat/session-health` | #15 | Per-site session checking, Sessions page |
+| 4 | `feat/deeper-scoring` | #16 | Unlimited fan-out, ad requirements, variants, self-check |
+
+**894 tests** (809 at merge; 85 added). Rehearsal green on every branch.
+Frontend typechecks.
+
+## The cost delta, as asked
+
+Priced from the configured models (`gemini/gemini-3.1-flash-lite` for scoring):
+
+| stage-2 fan-out | per run | per month @ 6 runs/day |
+|---|---|---|
+| 40 (previous) | $0.0252 | $4.54 |
+| 100 | $0.0608 | $10.94 |
+| **all 200 (new default)** | **$0.1200** | **$21.60** |
+
+Against a $25/month cap, so unlimited fits — but only just, and that is the
+**backfill worst case rather than the steady state**. Scoring is incremental
+(`needs_scoring` skips anything already scored), so the real figure is *new*
+jobs per run: 20–40 at an 8-hour window, about **$4.32/month**. The $21.60 line
+only happens on a 720-hour backfill.
+
+`test_the_worst_case_month_fits_the_cap` pins it, so the day it stops fitting is
+a failing test rather than a surprise. `SCORING_STAGE2_MAX` restores a cap
+exactly if wanted.
+
+Phase 4's other calls are per *application*, not per job, so they do not move
+this much: variants are 3 writing calls instead of 1 per slot, and the judge
+plus the self-check are cheap-model calls.
+
+## Decisions taken without asking
+
+1. **Unlimited fan-out as the default** (`SCORING_STAGE2_MAX=0`). The brief said
+   to allow it; making it the default follows from the arithmetic above.
+2. **Requirements extracted inside the existing stage-2 call** rather than a
+   separate extraction pass. The model is already reading the whole ad there; a
+   second call would pay to read it twice.
+3. **Requirements stored on `Score`, not `Job`.** It is model output about the
+   ad, and re-scoring against a changed rubric can legitimately re-derive it.
+4. **Three variants, not more.** The judge reads every variant, so cost is
+   linear in the count and the gain is not — best-of-three beats best-of-one by
+   far more than best-of-six beats best-of-three.
+5. **The self-check passes when it cannot run.** Every other parse-gate check is
+   deterministic; a model outage failing a document they all accepted would make
+   the one reliable thing unreliable.
+6. **Login pages detected by a password field**, not per-site signed-in
+   selectors. Works on every site with zero configuration, which matters
+   because you create the ATS accounts yourself and there is no list to hold.
+7. **`fact_category` on `AnswerBank`** rather than a second question matcher.
+   Two matchers that can disagree about what a question is asking is how a
+   licence fact answers a police-check question.
+8. **Fact shells seeded empty.** Placeholder text would be a fabricated fact
+   about you in the one store treated as verbatim truth.
+
+## What broke, and what found it
+
+Nine real bugs. Every one caught by a test, the suite, or the rehearsal.
+
+- **The self-check bypassed the LLM stub seam** — an inline
+  `from backend.llm.client import complete_json` instead of the module-level
+  `llm` the rehearsal replaces. Every document build attempted a real API call
+  and retried: **the suite went from 27s to 3m27s.** Caught by watching the
+  runtime, then pinned by a test that fails if the inline import returns.
+- **Cookie domains collapsed to a registrable domain**, turning
+  `careers.acme.com.au` into `acme.com.au` — checking the employer's marketing
+  site, finding no login page, and reporting a dead careers portal as *healthy*.
+- **The ATS session lookup read `platform.domains`**, which is spelled
+  `host_patterns`. It silently matched nothing, so every ATS looked like an
+  unknown site. Now goes through `detect_from_url` — the same logic that names
+  a job URL.
+- **`au.seek.com` did not map to `seek`.** `boards.py` listed only
+  `seek.com.au`; the host Seek actually serves was verified into `regions.py` by
+  the Phase 6 probe. Fixing it in `sessions.py` required naming `"seek"` outside
+  the registry, which `test_no_module_outside_the_registry_names_a_job_board`
+  caught. **Fixed at the registry instead** — `boards.py` now derives Seek's
+  domains from the region configs, so there is one live-verified list.
+- **Two fact-routing gaps**: `Score` was used in `documents/build.py` without
+  being imported, and the 21 seeded `AnswerBank` rows pre-dated
+  `fact_category`, so an upgraded install kept every question and none could
+  reach a fact — silently, because a blank row already means "ask". Backfilled.
+- **`ensure_logged_in` halted the pass on every external application** (carried
+  over from Phase 8 and re-verified here): an employer ATS has no login, so
+  `is_logged_in` returns False for Greenhouse. Scoped to platforms that have a
+  session.
+- **`DerivationRefused` was defined and never raised**, and three facts
+  functions were unreachable. The reachability audit caught all four: the
+  exception was deleted, the rest wired.
+
+## Tests that could not fail
+
+**Two of 24 mutations passed on the first attempt.** Both were on the most
+important behaviour in Phase 2, and both were the same shape as the failures
+from last session — an assertion surviving because a *different* guard caught
+the mutation:
+
+1. **The silent-fact test passed with the `supported` check deleted.** Its stub
+   also returned an empty answer, so the empty-answer guard caught it and the
+   real gate was never exercised. Rewritten with `supported=false`, a valid
+   answer, and no stated doubt — so the flag is the only thing standing between
+   it and "No" on a real form. Then it *still* passed, because the
+   `uncertainty` guard caught it; tightened again to leave uncertainty empty.
+   Three attempts to get one assertion to actually test its subject.
+2. **The re-ask test only counted messages**, so it passed even when the cached
+   branch started returning *unconfirmed* answers onto real applications. Added
+   one that checks the return value on the path that reads the cache.
+
+Also worth recording: a test that encoded the *old* design rather than being
+wrong. `test_cost_scales_with_the_stage2_cap_not_the_discovery_volume`
+asserted "doubling discovery must not double the bill", which was true and is
+deliberately no longer the default. Replaced with three tests pinning what is
+true now, rather than adjusted to pass.
+
+## Unverified
+
+Unchanged from the overnight session — none of this moved:
+
+- **Nothing has ever been submitted.** `ALLOW_LIVE_SUBMIT` has never been true.
+- **No browser has ever been driven.** Chrome and the Playwright browsers are
+  still not installed. Every apply-path test uses a fake page, a snapshot page,
+  or a fake adapter — including all of Phase 3, whose `FakePage` is a set of
+  selectors rather than a browser.
+- **Every site-knowledge strategy value is still a guess.** The HAR capture is
+  what makes them real.
+- **No real LLM call has been made in any of this.** Every derivation, variant
+  judgement and self-check is tested against a stub. The *plumbing* is proven;
+  the model's judgement is not, and the derivation prompt in particular is the
+  one place where a plausible-but-wrong reading becomes a legal declaration.
+- **Telegram has never sent a message.** `/yes d<id>`, `/no d<id>`, the
+  derivation confirmation and the session-dead alert are all tested and none
+  has ever left the machine.
+- **Session checking has never seen a real cookie jar.** It reads
+  `context.cookies()`, which has only ever been a fake.
+
+## Needs you
+
+1. **Write your facts.** `/facts` — eleven empty textareas. Nothing in Phase 2
+   can do anything until they have your words in them, and the licence and
+   work-rights ones are the two that unlock the most screening questions.
+2. **Run the HAR capture.** Still the highest-value item outstanding, and still
+   what turns every strategy value from a guess into something verified.
+3. **Sign in to the ATS accounts**, then let one session check run. Phase 3 has
+   never seen a real cookie jar, and the first run is what tells us whether the
+   password-field heuristic holds on real sites.
+4. **Review the first few derivations before trusting the cache.** Each is
+   confirmed once and then never asked again, which is the point — but it also
+   means a wrong confirmation is durable. Check the reasoning line on the first
+   handful.
+5. **Merge #14, #15, #16 in order.** Retarget the next one to `main` *before*
+   deleting the merged branch, or the same auto-close that hit #7 will happen
+   again.
+6. **`send_draft` is still off**, as instructed. Unchanged and unwired.

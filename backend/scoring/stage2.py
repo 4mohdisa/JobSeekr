@@ -42,6 +42,13 @@ class StageTwoResult:
     matched_skills: list[str] = field(default_factory=list)
     gaps: list[str] = field(default_factory=list)
     red_flags: list[str] = field(default_factory=list)
+
+    #: What the EMPLOYER asked for, independent of this candidate. Read by the
+    #: document build to tailor against the ad rather than only score against it.
+    must_haves: list[str] = field(default_factory=list)
+    nice_to_haves: list[str] = field(default_factory=list)
+    tone: str | None = None
+
     error: str | None = None
 
 
@@ -63,6 +70,9 @@ def build_prompt(job: Job, *, summary: str, rubric: dict[str, Any]) -> str:
         f"Salary: {salary}\n"
         f"Description:\n{description}\n\n"
         f"{rubric_prompt(rubric)}\n\n"
+        "Also extract, from the ad alone and WITHOUT reference to the "
+        "candidate: what the employer treats as non-negotiable, what it frames "
+        "as desirable, and the register the ad is written in.\n\n"
         "Return the JSON object only."
     )
 
@@ -90,6 +100,9 @@ def _coerce(payload: dict[str, Any], job_id: int) -> StageTwoResult:
         matched_skills=_strings(payload.get("matched_skills")),
         gaps=_strings(payload.get("gaps")),
         red_flags=_strings(payload.get("red_flags")),
+        must_haves=_strings(payload.get("must_haves")),
+        nice_to_haves=_strings(payload.get("nice_to_haves")),
+        tone=str(payload.get("tone") or "").strip() or None,
     )
 
 

@@ -62,6 +62,7 @@ from backend.models import (
     Job,
     JobStatus,
     Profile,
+    Score,
     Template,
     TemplateKind,
 )
@@ -259,7 +260,12 @@ _SLOT_SYSTEM = (
 
 
 def _slot_prompt(
-    slot: AISlot, *, profile_text: str, job: Job, violations: list[Violation] | None = None
+    slot: AISlot,
+    *,
+    profile_text: str,
+    job: Job,
+    requirements: dict[str, Any] | None = None,
+    violations: list[Violation] | None = None,
 ) -> str:
     prompt = (
         f"CANDIDATE FACTS (the only facts you may assert)\n{profile_text}\n\n"
@@ -267,7 +273,8 @@ def _slot_prompt(
         f"Title: {job.title}\nCompany: {job.company}\n"
         f"Location: {job.location or 'not stated'}\n"
         f"Advertisement:\n{(job.description or '')[: settings.scoring_prompt_char_budget]}\n\n"
-        f"WRITE: {slot.instruction}\n"
+        + _requirements_block(requirements)
+        + f"WRITE: {slot.instruction}\n"
         f"TONE: {slot.tone}\n"
         f"HARD LIMIT: {slot.max_words} words.\n"
     )
@@ -280,6 +287,52 @@ def _slot_prompt(
             "facts — write around the gap.\n"
         )
     return prompt
+
+
+
+
+def _requirements_for(session: Session, job_id: int) -> dict[str, Any] | None:
+    """The must-haves, nice-to-haves and tone extracted when this job was scored.
+
+    Reads the newest Score for the job. Returns None rather than an empty dict
+    when nothing was extracted, so the prompt builder can tell "scoring has not
+    run" from "scoring ran and found no stated requirements".
+    """
+    row = session.exec(
+        select(Score).where(Score.job_id == job_id).order_by(Score.id.desc())  # type: ignore[union-attr]
+    ).first()
+    requirements = getattr(row, "requirements", None) if row else None
+    return requirements or None
+
+
+def _requirements_block(requirements: dict[str, Any] | None) -> str:
+    """What the employer asked for, extracted during scoring.
+
+    Empty when scoring has not run or extracted nothing, in which case the
+    prompt is exactly what it was before — the ad's own text is still there and
+    the model can read it. This adds emphasis, not information the prompt
+    lacked.
+    """
+    if not requirements:
+        return ""
+
+    must = requirements.get("must_haves") or []
+    nice = requirements.get("nice_to_haves") or []
+    tone = requirements.get("tone")
+
+    lines = ["WHAT THIS EMPLOYER ACTUALLY ASKED FOR"]
+    if must:
+        lines.append("Non-negotiable: " + "; ".join(str(item) for item in must))
+    if nice:
+        lines.append("Desirable: " + "; ".join(str(item) for item in nice))
+    if tone:
+        lines.append(f"The ad's register: {tone}")
+    lines.append(
+        "Address the non-negotiable items FIRST, and only where the candidate "
+        "facts above support it. Where they do not, say nothing about it — do "
+        "not gesture at it."
+    )
+    return "\n".join(lines) + "\n\n"
 
 
 def _truncate_words(text: str, limit: int) -> str:
@@ -296,6 +349,7 @@ def generate_ai_slots(
     profile: Profile,
     job: Job,
     profile_text: str,
+    requirements: dict[str, Any] | None = None,
 ) -> tuple[dict[str, str], list[Violation]]:
     """Generate each slot, validating that it invented nothing.
 
@@ -310,28 +364,56 @@ def generate_ai_slots(
         violations: list[Violation] = []
         text = ""
         for attempt in (1, 2):
-            text = llm.complete(
-                _slot_prompt(
-                    slot,
-                    profile_text=profile_text,
-                    job=job,
-                    violations=violations if attempt == 2 else None,
-                ),
-                model=settings.llm_model_writing,
-                purpose=f"document_{slot.name}",
-                system=_SLOT_SYSTEM,
-                job_id=job.id,
-                temperature=0.4,
-            ).strip()
-            text = _truncate_words(text, slot.max_words)
+            # Several candidates, then pick. A single generation has nothing to
+            # lose to — the model's first attempt is accepted however flat it
+            # is. Generating a few and judging them against what the ad actually
+            # asked for is where the cheap-model budget is worth spending.
+            candidates = [
+                _truncate_words(
+                    llm.complete(
+                        _slot_prompt(
+                            slot,
+                            profile_text=profile_text,
+                            job=job,
+                            requirements=requirements,
+                            violations=violations if attempt == 2 else None,
+                        ),
+                        model=settings.llm_model_writing,
+                        purpose=f"document_{slot.name}",
+                        system=_SLOT_SYSTEM,
+                        job_id=job.id,
+                        # Rising temperature across variants: three samples at
+                        # one temperature tend to be three phrasings of the same
+                        # sentence, which is nothing to choose between.
+                        temperature=0.4 + 0.2 * index,
+                    ).strip(),
+                    slot.max_words,
+                )
+                for index in range(max(1, settings.document_variants))
+            ]
 
-            violations = validate_no_fabrication(text, profile, job)
-            if not violations:
+            # Fabrication first, quality second. A better-written variant that
+            # invented something is not a candidate at all, so filtering before
+            # judging means the judge never gets the chance to prefer it.
+            clean = [
+                (candidate, validate_no_fabrication(candidate, profile, job))
+                for candidate in candidates
+            ]
+            honest = [candidate for candidate, found in clean if not found]
+
+            if honest:
+                text = _pick_best(honest, slot=slot, job=job, requirements=requirements)
+                violations = []
                 break
+
+            # Every variant fabricated. Feed back the violations from the first
+            # one and try again — the same single retry as before.
+            text, violations = clean[0]
             log.warning(
                 "ai_slot_regenerating",
                 slot=slot.name,
                 attempt=attempt,
+                variants=len(candidates),
                 violations=[str(v) for v in violations],
             )
 
@@ -340,6 +422,76 @@ def generate_ai_slots(
         generated[slot.name] = text
 
     return generated, unresolved
+
+
+def _pick_best(
+    candidates: list[str],
+    *,
+    slot: AISlot,
+    job: Job,
+    requirements: dict[str, Any] | None,
+) -> str:
+    """Choose the variant that best answers what the ad asked for.
+
+    Judged on the extracted requirements rather than on generic "quality",
+    because generic quality is what produces a beautifully written letter that
+    addresses none of the must-haves.
+
+    Returns the first candidate on any failure. A judge that cannot run must not
+    be able to block a build — the candidates have all already passed the
+    fabrication check, so the fallback is a correct document rather than a
+    missing one.
+    """
+    if len(candidates) == 1:
+        return candidates[0]
+
+    must = (requirements or {}).get("must_haves") or []
+    nice = (requirements or {}).get("nice_to_haves") or []
+    tone = (requirements or {}).get("tone") or "not stated"
+
+    numbered = "\n\n".join(
+        f"VARIANT {index + 1}:\n{candidate}" for index, candidate in enumerate(candidates)
+    )
+    prompt = (
+        f"The employer's advertisement asks for:\n"
+        f"MUST HAVE: {must or 'not extracted'}\n"
+        f"NICE TO HAVE: {nice or 'not extracted'}\n"
+        f"THE AD'S REGISTER: {tone}\n\n"
+        f"ROLE: {job.title} at {job.company}\n\n"
+        f"Here are {len(candidates)} versions of one section of an application:\n\n"
+        f"{numbered}\n\n"
+        "Which single variant speaks most directly to the MUST HAVE items, in a "
+        "register matching the ad? Judge substance, not polish. Reply with the "
+        "number only."
+    )
+
+    try:
+        answer = llm.complete(
+            prompt,
+            # The cheap model: this is a comparison, not composition.
+            model=settings.llm_model_classify,
+            purpose=f"document_pick_{slot.name}",
+            system=(
+                "You choose between drafts. You never rewrite them and you never "
+                "explain. Reply with a single digit."
+            ),
+            job_id=job.id,
+            temperature=0.0,
+            max_tokens=8,
+        )
+        index = int("".join(character for character in answer if character.isdigit())[:2]) - 1
+    except Exception as exc:  # noqa: BLE001 - a judge must never block a build
+        log.warning("variant_pick_failed", slot=slot.name, error=str(exc)[:150])
+        return candidates[0]
+
+    if not 0 <= index < len(candidates):
+        log.warning("variant_pick_out_of_range", slot=slot.name, answer=answer[:40])
+        return candidates[0]
+
+    log.info(
+        "variant_picked", slot=slot.name, chosen=index + 1, of=len(candidates)
+    )
+    return candidates[index]
 
 
 # --------------------------------------------------------------------------
@@ -597,8 +749,17 @@ def build_documents(
     profile_text = profile_fact_index(profile)[:6000]
 
     slots = find_ai_slots(letter_body) or list(SLOT_SPECS.values())
+    # What the employer asked for, extracted during scoring. None when scoring
+    # has not run, in which case generation is exactly what it was before — the
+    # ad's own text is still in the prompt.
+    requirements = _requirements_for(session, job_id)
+
     ai_values, unresolved = generate_ai_slots(
-        slots, profile=profile, job=job, profile_text=profile_text
+        slots,
+        profile=profile,
+        job=job,
+        profile_text=profile_text,
+        requirements=requirements
     )
     if unresolved:
         job.status = JobStatus.FAILED
@@ -680,7 +841,9 @@ def build_documents(
     result = BuildResult(job_id=job_id, ok=True)
 
     for kind, (path, version) in paths.items():
-        report = verify_pdf(path, kind=kind.value, expect=expectations[kind])
+        report = verify_pdf(
+            path, kind=kind.value, expect=expectations[kind], profile=profile
+        )
         result.reports[kind.value] = report
 
         stored_report = report.model_dump()

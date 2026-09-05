@@ -177,7 +177,42 @@ def score_schema() -> dict[str, Any]:
                 "items": {"type": "string"},
                 "description": "Only flags that genuinely apply. Empty is normal.",
             },
+            # What the EMPLOYER wants, independent of this candidate. Added to
+            # the scoring schema rather than asked for separately because the
+            # model is already reading the whole ad here — a second call would
+            # pay to read it twice to learn something the first call could have
+            # returned. Consumed by the document build, not by scoring.
+            "must_haves": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Requirements the ad treats as non-negotiable, in the ad's "
+                    "own terms. Not judged against the candidate."
+                ),
+            },
+            "nice_to_haves": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Requirements the ad frames as desirable, not essential.",
+            },
+            "tone": {
+                "type": "string",
+                "description": (
+                    "How the ad is written, in a few words — e.g. 'formal, "
+                    "government', 'informal startup', 'clinical and precise'. "
+                    "Used to match the register of the cover letter."
+                ),
+            },
         },
-        "required": ["score", "reasoning", "matched_skills", "gaps", "red_flags"],
+        "required": [
+            "score",
+            "reasoning",
+            "matched_skills",
+            "gaps",
+            "red_flags",
+            "must_haves",
+            "nice_to_haves",
+            "tone",
+        ],
         "additionalProperties": False,
     }

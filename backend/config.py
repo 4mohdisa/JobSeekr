@@ -115,7 +115,20 @@ class Settings(BaseSettings):
     discovery_backfill_threshold: int = 25
 
     # --------------------------------------------------------------- scoring
-    # Stage 2 (the expensive one) only ever sees this many jobs per campaign.
+    # How many jobs stage 2 sees per campaign. 0 means EVERY job that passed
+    # the hard filters.
+    #
+    # 0 is the default now because the prefilter, not the cost, had become the
+    # constraint: an embedding similarity does not understand context, so a good
+    # match with unusual wording was discarded before the model ever saw it.
+    # At Flash-Lite rates the arithmetic is in NOTES.md — and scoring is
+    # incremental (needs_scoring skips anything already scored), so the steady
+    # -state bill is new jobs per run, not the whole table.
+    scoring_stage2_max: int = 0
+
+    # Retained: stage 1 still ranks, and the ranking still drives the order
+    # stage 2 runs in, so the best jobs are scored first if a budget cap stops
+    # the run partway. Only the truncation is now optional.
     scoring_stage1_top_n: int = 40
     # Characters of an ad fed to the embedding model. The tail of a job ad is
     # boilerplate (EEO statements, "about us"); paying to embed it is the
@@ -131,6 +144,23 @@ class Settings(BaseSettings):
     # it and warns loudly when they do not fit — see NOTES.md, which shows the
     # arithmetic and the levers.
     scoring_cost_target_usd: float = 0.15
+
+    # --------------------------------------------------- document generation
+    # How many candidate versions of each AI-written slot to generate before
+    # picking one. 1 disables the comparison entirely.
+    #
+    # Three, not more: the judge reads every variant, so the cost is roughly
+    # linear in this number and the gain is not — the difference between the
+    # best of three and the best of six is far smaller than between one and
+    # three, because a single generation has nothing to lose to.
+    document_variants: int = 3
+
+    # A second, cheap pass that reads the generated document back against the
+    # profile and flags any claim the profile does not support. Independent of
+    # the deterministic check in documents/fabrication.py, which catches
+    # specific shapes (employers, dates, numbers) — this catches the paraphrase
+    # that invents a capability without naming anything checkable.
+    document_fabrication_check: bool = True
 
     # Published USD per 1M tokens, used only to PROJECT spend before a run.
     # Real cost always comes from the llm_spend table, which records what the
