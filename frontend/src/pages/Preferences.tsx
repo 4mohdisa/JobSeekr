@@ -123,7 +123,7 @@ export function Preferences() {
                 Confirm
               </Button>
               <Button
-                variant="secondary"
+                variant="ghost"
                 onClick={() => act(row.id, "reject")}
                 disabled={busy === row.id}
               >
@@ -132,7 +132,7 @@ export function Preferences() {
             </>
           ) : (
             <Button
-              variant="secondary"
+              variant="ghost"
               onClick={() => act(row.id, "delete")}
               disabled={busy === row.id}
             >
@@ -180,7 +180,12 @@ export function Preferences() {
         </div>
       </Card>
 
-      <DataTable rows={rows} columns={columns} empty="Nothing learned yet." />
+      <DataTable
+        rows={rows}
+        columns={columns}
+        rowKey={(row) => row.id}
+        empty="Nothing learned yet."
+      />
     </div>
   );
 }

@@ -222,6 +222,58 @@ export interface AnalyticsBucket {
   any_reply_rate: number | null;
 }
 
+export interface CampaignFunnel {
+  campaign_id: number | null;
+  name: string;
+  discovered: number;
+  scored: number;
+  applied: number;
+  acknowledged: number;
+  replied: number;
+  interviews: number;
+  /** Gates the rate only. The counts are facts and are always shown. */
+  sufficient_data: boolean;
+  interview_rate: number | null;
+}
+
+export interface QuestionCluster {
+  question: string;
+  /** How many distinct phrasings were folded into this one question. */
+  variants: number;
+  asked: number;
+  employers: number;
+  platforms: number;
+  resolved: number;
+  abstained: number;
+  jobs_parked: number;
+  last_seen: string | null;
+}
+
+export interface CoveragePoint {
+  /** ISO date of that week's Monday. */
+  week: string;
+  asked: number;
+  resolved: number;
+  sufficient_data: boolean;
+  rate: number | null;
+}
+
+export interface FactLeverage {
+  fact_id: number;
+  key: string;
+  category: string;
+  derived: number;
+  confirmed: number;
+  stale: number;
+}
+
+export interface QuestionIntelligence {
+  frequency: QuestionCluster[];
+  friction: QuestionCluster[];
+  coverage: CoveragePoint[];
+  fact_leverage: FactLeverage[];
+}
+
 export interface Analytics {
   minimum_sample: number;
   total_applied: number;
@@ -230,6 +282,8 @@ export interface Analytics {
   by_platform: AnalyticsBucket[];
   by_score_decile: AnalyticsBucket[];
   by_rubric_version: AnalyticsBucket[];
+  campaign_funnels: CampaignFunnel[];
+  questions: QuestionIntelligence;
 }
 
 export interface AppSettings {

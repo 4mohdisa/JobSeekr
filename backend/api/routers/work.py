@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+from collections import defaultdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -16,17 +17,23 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlmodel import Session, col, select
 
+from backend import facts, questions
 from backend.api.schemas import (
     AnalyticsBucket,
     AnalyticsResponse,
     ApplicationOut,
     ApplicationPatch,
+    CampaignFunnel,
     CopyableAnswer,
+    CoveragePointOut,
     DocumentOut,
+    FactLeverageOut,
     FunnelStage,
     JobDetail,
     JobOut,
     Page,
+    QuestionClusterOut,
+    QuestionIntelligence,
     QueueCard,
     ScoreOut,
 )
@@ -37,6 +44,7 @@ from backend.models import (
     AnswerBank,
     Application,
     ApplicationOutcome,
+    Campaign,
     Document,
     DocumentKind,
     Job,
@@ -417,6 +425,48 @@ REPLIED_STATUSES = {
     ResponseStatus.INTERVIEW_REQUEST,
     ResponseStatus.RECRUITER_OUTREACH,
 }
+"""Any contact at all. NONE and GHOSTED are silence, not a reply."""
+
+SUBSTANTIVE_REPLY_STATUSES = REPLIED_STATUSES - {ResponseStatus.ACKNOWLEDGED}
+"""A reply from a person, as opposed to an automated acknowledgement.
+
+The funnel needs "heard back" and "someone actually replied" to be different
+numbers. They were not: the funnel's `replied` stage inlined a literal copy of
+REPLIED_STATUSES, so its acknowledged and replied bars were identical by
+construction for every possible dataset — two bars that could never disagree,
+which reads as a finding about the pipeline rather than as a bug in the chart.
+
+Derived from REPLIED_STATUSES rather than written out, so a fifth status can
+only ever be added to one place.
+
+``response_status`` holds the LATEST state only, so these nest rather than
+partition: an application that was acknowledged and later got an interview
+reports INTERVIEW_REQUEST and counts in all three stages. That is what makes
+the funnel monotonic and readable.
+"""
+
+
+def _stage_counts(applications: list[Application]) -> dict[str, int]:
+    """The four funnel numbers for one set of applications.
+
+    One definition, used by the global funnel and by every campaign funnel. The
+    endpoint previously carried three disagreeing notions of "drew a reply";
+    this is the only one now.
+    """
+    return {
+        "applied": len(applications),
+        "acknowledged": sum(
+            1 for a in applications if a.response_status in REPLIED_STATUSES
+        ),
+        "replied": sum(
+            1 for a in applications if a.response_status in SUBSTANTIVE_REPLY_STATUSES
+        ),
+        "interview": sum(
+            1
+            for a in applications
+            if a.response_status == ResponseStatus.INTERVIEW_REQUEST
+        ),
+    }
 
 
 def _bucket(key: str, applications: list[Application], minimum: int) -> AnalyticsBucket:
@@ -475,35 +525,8 @@ def get_analytics(session: Session = Depends(get_session)) -> AnalyticsResponse:
             by_decile.setdefault(decile, []).append(application)
             by_rubric.setdefault(f"v{score.rubric_version}", []).append(application)
 
-    funnel = [
-        FunnelStage(stage="applied", count=len(applications)),
-        FunnelStage(
-            stage="acknowledged",
-            count=sum(
-                1
-                for a in applications
-                if a.response_status
-                in {
-                    ResponseStatus.ACKNOWLEDGED,
-                    ResponseStatus.REJECTED,
-                    ResponseStatus.INTERVIEW_REQUEST,
-                    ResponseStatus.RECRUITER_OUTREACH,
-                }
-            ),
-        ),
-        FunnelStage(
-            stage="replied",
-            count=sum(1 for a in applications if a.response_status in REPLIED_STATUSES),
-        ),
-        FunnelStage(
-            stage="interview",
-            count=sum(
-                1
-                for a in applications
-                if a.response_status == ResponseStatus.INTERVIEW_REQUEST
-            ),
-        ),
-    ]
+    counts = _stage_counts(applications)
+    funnel = [FunnelStage(stage=stage, count=count) for stage, count in counts.items()]
 
     def buckets(grouped: dict[str, list[Application]]) -> list[AnalyticsBucket]:
         return sorted(
@@ -519,6 +542,132 @@ def get_analytics(session: Session = Depends(get_session)) -> AnalyticsResponse:
         by_platform=buckets(by_platform),
         by_score_decile=buckets(by_decile),
         by_rubric_version=buckets(by_rubric),
+        campaign_funnels=_campaign_funnels(session, applications, jobs, minimum),
+        questions=_question_intelligence(session),
+    )
+
+
+def _campaign_funnels(
+    session: Session,
+    applications: list[Application],
+    jobs: dict[int, Job],
+    minimum: int,
+) -> list[CampaignFunnel]:
+    """Discovered through interview, per campaign.
+
+    WHAT EACH NUMBER HONESTLY MEANS
+        ``discovered`` is every Job row carrying this campaign's id, status
+        ignored. Status is a single mutable field overwritten as a job advances,
+        so filtering it would make the top of the funnel shrink as the pipeline
+        succeeded. It counts ads *stored*, not ads seen: dedupe drops
+        cross-posted repeats before insert, and an ad matching two campaigns is
+        attributed to whichever searched first.
+
+        ``scored`` is jobs with at least one usable score — DISTINCT job ids
+        where ``final`` is not null. Distinct because one job legitimately has
+        several Score rows (a profile or rubric bump writes a new one), so
+        counting rows would double every job on the next rubric edit. Usable
+        because a stage-2 failure still writes a row with no number in it.
+
+        Every later stage counts applications, and only SUBMITTED ones — an
+        aborted or failed attempt never reached an employer, and including it
+        depresses every rate below it.
+
+    The unassigned bucket is included when it is non-empty. A job with no
+    campaign is a real thing to see, not a row to hide.
+    """
+    campaigns = {c.id: c for c in session.exec(select(Campaign)).all()}
+
+    discovered: dict[int | None, int] = defaultdict(int)
+    for job in jobs.values():
+        discovered[job.campaign_id] += 1
+
+    scored: dict[int | None, int] = defaultdict(int)
+    for job_id in {
+        row.job_id for row in session.exec(select(Score)).all() if row.final is not None
+    }:
+        job = jobs.get(job_id)
+        if job is not None:
+            scored[job.campaign_id] += 1
+
+    submitted: dict[int | None, list[Application]] = defaultdict(list)
+    for application in applications:
+        if application.outcome is not ApplicationOutcome.SUBMITTED:
+            continue
+        job = jobs.get(application.job_id)
+        submitted[job.campaign_id if job else None].append(application)
+
+    funnels = []
+    for campaign_id in set(discovered) | set(scored) | set(submitted):
+        rows = submitted.get(campaign_id, [])
+        counts = _stage_counts(rows)
+        applied = counts["applied"]
+        sufficient = applied >= minimum
+        campaign = campaigns.get(campaign_id) if campaign_id is not None else None
+        funnels.append(
+            CampaignFunnel(
+                campaign_id=campaign_id,
+                name=campaign.name if campaign else "unassigned",
+                discovered=discovered.get(campaign_id, 0),
+                scored=scored.get(campaign_id, 0),
+                applied=applied,
+                acknowledged=counts["acknowledged"],
+                replied=counts["replied"],
+                interviews=counts["interview"],
+                sufficient_data=sufficient,
+                interview_rate=round(counts["interview"] / applied, 4)
+                if sufficient and applied
+                else None,
+            )
+        )
+    funnels.sort(key=lambda f: (f.discovered, f.applied), reverse=True)
+    return funnels
+
+
+def _question_intelligence(session: Session) -> QuestionIntelligence:
+    """The question ledger, shaped for the wire. Aggregation lives in the module."""
+    return QuestionIntelligence(
+        frequency=[
+            _cluster_out(cluster) for cluster in questions.frequency(session, limit=15)
+        ],
+        friction=[
+            _cluster_out(cluster) for cluster in questions.friction(session, limit=15)
+        ],
+        coverage=[
+            CoveragePointOut(
+                week=point.week,
+                asked=point.asked,
+                resolved=point.resolved,
+                sufficient_data=point.sufficient_data,
+                rate=point.rate,
+            )
+            for point in questions.coverage(session)
+        ],
+        fact_leverage=[
+            FactLeverageOut(
+                fact_id=row.fact_id,
+                key=row.key,
+                category=row.category,
+                derived=row.derived,
+                confirmed=row.confirmed,
+                stale=row.stale,
+            )
+            for row in facts.leverage(session)
+        ],
+    )
+
+
+def _cluster_out(cluster: questions.QuestionCluster) -> QuestionClusterOut:
+    return QuestionClusterOut(
+        question=cluster.question,
+        variants=len(cluster.variants),
+        asked=cluster.asked,
+        employers=cluster.employers,
+        platforms=cluster.platforms,
+        resolved=cluster.resolved,
+        abstained=cluster.abstained,
+        jobs_parked=cluster.jobs_parked,
+        last_seen=cluster.last_seen,
     )
 
 

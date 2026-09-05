@@ -146,14 +146,14 @@ export function Outbound() {
                   Send
                 </Button>
                 <Button
-                  variant="secondary"
+                  variant="ghost"
                   onClick={() => act(row, "save")}
                   disabled={busy === row.id || !dirty}
                 >
                   Save edit
                 </Button>
                 <Button
-                  variant="secondary"
+                  variant="ghost"
                   onClick={() => act(row, "skip")}
                   disabled={busy === row.id}
                 >

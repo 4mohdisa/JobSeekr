@@ -79,7 +79,7 @@ function DerivedList({
           {!row.confirmed_at || row.stale ? (
             <span className="flex shrink-0 gap-1">
               <Button onClick={() => onDecide(row.id, true)}>Yes</Button>
-              <Button variant="secondary" onClick={() => onDecide(row.id, false)}>
+              <Button variant="ghost" onClick={() => onDecide(row.id, false)}>
                 No
               </Button>
             </span>

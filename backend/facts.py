@@ -63,11 +63,13 @@ log = get_logger(__name__)
 
 __all__ = [
     "Derivation",
+    "FactLeverage",
     "Preview",
     "derive",
     "fact_hash",
     "facts_for",
     "invalidated_by",
+    "leverage",
     "on_confirmation_needed",
     "pending_confirmations",
     "preview_all",
@@ -173,6 +175,62 @@ def invalidated_by(session: Session, fact: Fact) -> list[DerivedAnswer]:
         ).all()
         if row.fact_text_hash != current
     ]
+
+
+@dataclass
+class FactLeverage:
+    """One stated fact and how much work it is doing."""
+
+    fact_id: int
+    key: str
+    category: str
+    derived: int
+    confirmed: int
+    """Derivations the user has agreed with. Only these ever answer anything."""
+
+    stale: int
+    """Derivations whose fact has been edited since. They answer nothing until
+    they are re-derived and re-confirmed."""
+
+
+def leverage(session: Session) -> list[FactLeverage]:
+    """Every fact and how many derived answers it supports, most first.
+
+    Which fact was worth writing, and — read against the friction ranking in
+    ``backend/questions.py`` — which one to write next. Lives here rather than
+    with the other question aggregates because ``DerivedAnswer`` deliberately
+    has one reader: the hash check that decides whether a cached answer is still
+    true must be impossible to bypass, and that is only true while every reader
+    is in this file.
+
+    Facts supporting nothing are included. A fact answering no question is as
+    much a finding as one answering six — it is either a question nobody asks or
+    a fact the derivation step cannot read, and both are worth seeing.
+    """
+    rows = list(session.exec(select(DerivedAnswer)).all())
+    by_fact: dict[int, list[DerivedAnswer]] = {}
+    for row in rows:
+        if row.fact_id is not None:
+            by_fact.setdefault(row.fact_id, []).append(row)
+
+    report = []
+    for fact in session.exec(select(Fact)).all():
+        if fact.id is None:
+            continue
+        derived = by_fact.get(fact.id, [])
+        current = fact_hash(fact.text)
+        report.append(
+            FactLeverage(
+                fact_id=fact.id,
+                key=fact.key,
+                category=fact.category.value,
+                derived=len(derived),
+                confirmed=sum(1 for row in derived if row.confirmed_at is not None),
+                stale=sum(1 for row in derived if row.fact_text_hash != current),
+            )
+        )
+    report.sort(key=lambda item: (item.confirmed, item.derived), reverse=True)
+    return report
 
 
 def stale_derivations(session: Session) -> list[DerivedAnswer]:

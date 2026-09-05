@@ -113,6 +113,7 @@ export function Sessions() {
       <DataTable
         rows={rows}
         columns={columns}
+        rowKey={(row) => row.site}
         empty="No sessions checked yet — the check runs at 09:00 and before each apply pass."
       />
     </div>
