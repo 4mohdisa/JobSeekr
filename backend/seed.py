@@ -66,6 +66,17 @@ class AnswerBankSeed:
     answer_type: AnswerType
     notes: str
 
+    example_question: str | None = None
+    """A plain-English rendering of what this pattern matches.
+
+    Only meaningful for REGEX seeds, whose ``question_pattern`` is a regex
+    rather than a question. The real flow never has this problem — the question
+    comes from the form field's own label and the bank row is used only for
+    routing — but anything that wants to ASK the question rather than match it
+    needs a human sentence, and a regex handed to a model produces nonsense
+    with the confidence of an answer.
+    """
+
     fact_category: FactCategory | None = None
     """Which category of fact can answer this, once the user has written one.
 
@@ -105,6 +116,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'e.g. "Australian citizen", "Permanent resident", '
             '"Subclass 500 student visa".'
         ),
+        example_question="What is your visa status or residency in Australia?",
         fact_category=FactCategory.WORK_RIGHTS,
     ),
     AnswerBankSeed(
@@ -118,6 +130,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". "true" only if the licence is current and '
             "Australian — an overseas or expired licence is a false here."
         ),
+        example_question="Do you hold a current driver's licence?",
         fact_category=FactCategory.LICENCE,
     ),
     AnswerBankSeed(
@@ -138,6 +151,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". "true" only if you hold a National Police '
             "Certificate issued inside the window the ad asks for, usually 12 months."
         ),
+        example_question="Do you have a current national police check?",
         fact_category=FactCategory.CHECKS,
     ),
     AnswerBankSeed(
@@ -151,6 +165,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". The check is state-issued — WWCC in SA, NSW '
             'and VIC, Blue Card in QLD, WWVP in the ACT. "true" only if current.'
         ),
+        example_question="Do you hold a current Working With Children Check?",
         fact_category=FactCategory.CHECKS,
     ),
     AnswerBankSeed(
@@ -186,6 +201,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             "Annual gross in AUD, digits only — no dollar sign, no commas, no "
             '"k". e.g. 95000.'
         ),
+        example_question="What are your salary expectations?",
         fact_category=FactCategory.COMPENSATION,
     ),
     AnswerBankSeed(
@@ -193,6 +209,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
         match_type=MatchType.REGEX,
         answer_type=AnswerType.NUMBER,
         notes=("Hourly rate in AUD, digits only, decimals allowed — e.g. 55 or 62.50."),
+        example_question="What is your expected hourly rate?",
         fact_category=FactCategory.COMPENSATION,
     ),
     AnswerBankSeed(
@@ -223,6 +240,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             "field-agnostic: if an ad asks about one specific technology and your "
             "real figure differs, leave it blank so the applier asks instead."
         ),
+        example_question="How many years of relevant experience do you have?",
         fact_category=FactCategory.EXPERIENCE,
     ),
     AnswerBankSeed(
@@ -252,6 +270,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". Watch the polarity: "true" means you DO '
             "require sponsorship, which is the opposite of the working-rights answer."
         ),
+        example_question="Will you now or in the future require visa sponsorship?",
         fact_category=FactCategory.WORK_RIGHTS,
     ),
     AnswerBankSeed(
@@ -278,6 +297,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             'Answer "true" or "false". "true" only if you hold a current ABN and '
             "are willing to contract under it."
         ),
+        example_question="Do you have an ABN?",
         fact_category=FactCategory.BUSINESS,
     ),
     AnswerBankSeed(
@@ -302,6 +322,7 @@ ANSWER_BANK_SEEDS: tuple[AnswerBankSeed, ...] = (
             "Leaving it blank makes the applier ask you rather than disclose a "
             "health fact you have not approved."
         ),
+        example_question="What is your vaccination status?",
         fact_category=FactCategory.HEALTH,
     ),
 )
