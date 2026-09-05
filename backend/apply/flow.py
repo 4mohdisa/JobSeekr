@@ -614,6 +614,34 @@ def run_apply(
         # because a failed application is exactly when the first strategy stops
         # working — dropping those would make the hit rate a survivor's average.
         _record_element_lookups(session, job.id, adapter.platform)
+        _persist_knowledge(adapter)
+
+
+def _persist_knowledge(adapter: Adapter) -> None:
+    """Write back whatever this application taught the site-knowledge layer.
+
+    Once per application, here, rather than in each adapter. The nine external
+    ATS adapters share one class that never called save at all, so every
+    promotion and every counter those platforms learned was discarded when the
+    process exited — the layer learned, and then forgot, on two thirds of the
+    platforms it supports. LinkedIn and Seek each called it from their own
+    ``confirmed()``, which is the wrong moment twice over: not reached on the
+    failure path, and reached on every poll of the confirmation state.
+
+    ``save`` is a no-op when nothing changed, so this costs nothing on a pass
+    that learned nothing.
+    """
+    knowledge = getattr(adapter, "knowledge", None)
+    if knowledge is None:
+        return
+    try:
+        knowledge.save(reason="resolution")
+    except Exception as exc:  # noqa: BLE001 - bookkeeping must not fail the application
+        log.warning(
+            "site_knowledge_save_failed",
+            platform=getattr(adapter, "platform", "unknown"),
+            error=str(exc)[:200],
+        )
 
 
 def _record_element_lookups(

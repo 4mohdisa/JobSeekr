@@ -39,6 +39,7 @@ from backend.models import (
     JobStatus,
     MatchType,
 )
+from backend.siteknowledge import health as site_health
 
 log = get_logger(__name__)
 
@@ -494,6 +495,7 @@ def build_weekly_digest(*, hours: int = 168) -> str:
     with session_scope() as session:
         lines.extend(questions.digest_lines(session, hours=hours))
         lines.extend(telemetry.digest_lines(session, hours=hours))
+        lines.extend(site_health.digest_lines(session, hours=hours))
 
         # One call, two readings. It was two calls with no write between them.
         all_leverage = facts.leverage(session)
@@ -684,6 +686,49 @@ def _cmd_weekly(_: str) -> str:
     return build_weekly_digest()
 
 
+def _decide_strategy(argument: str, *, accept: bool) -> str:
+    """Accept or reject a derived strategy: `/usefix <platform> <element>`.
+
+    The confirmation step is the whole safety property. A selector the system
+    worked out from a page it could not otherwise read is a GUESS about where
+    the Submit button is, and this is the one place in the project where a guess
+    would be acted on rather than abstained from. So it is stored, shown, and
+    used only after the person whose account it is says yes.
+    """
+    from backend.siteknowledge import load
+
+    parts = argument.split()
+    if len(parts) < 2:
+        return "Usage: `/usefix <platform> <element>` (see the weekly digest)."
+
+    platform, key = parts[0], parts[1]
+    try:
+        knowledge = load(platform)
+    except Exception as exc:  # noqa: BLE001 - a typo'd platform is a user error
+        return f"Could not load {platform}: {type(exc).__name__}: {exc}"
+
+    element = knowledge.elements.get(key)
+    if element is None or not element.proposals:
+        return f"No suggestion outstanding for `{platform}/{key}`."
+
+    selector = element.proposals[0].selector
+    if accept:
+        knowledge.accept_proposal(key, selector)
+        knowledge.save(reason=f"accepted derived strategy for {key}")
+        return (
+            f"Accepted `{selector}` for `{platform}/{key}`. It is now a strategy "
+            f"like any other, and it starts with no record — resolution will "
+            f"order it on what it actually does."
+        )
+
+    knowledge.reject_proposal(key, selector)
+    knowledge.save(reason=f"rejected derived strategy for {key}")
+    return (
+        f"Rejected `{selector}`. It is deleted rather than remembered as wrong, "
+        f"so the next failure derives again from a fresh look at the page."
+    )
+
+
 def _decide_derivation(derivation_id: int, *, confirm: bool) -> str:
     """Confirm or reject an answer derived from a fact."""
     from backend import facts
@@ -744,6 +789,8 @@ COMMANDS = {
     "/answer": _cmd_answer,
     "/digest": _cmd_digest,
     "/weekly": _cmd_weekly,
+    "/usefix": lambda argument: _decide_strategy(argument, accept=True),
+    "/nofix": lambda argument: _decide_strategy(argument, accept=False),
     "/yes": _cmd_yes,
     "/no": _cmd_no,
 }
@@ -757,7 +804,8 @@ def handle_command(text: str) -> str:
     if handler is None:
         return (
             "Commands: /stop [campaign] · /resume [campaign] · /status · "
-            "/answer · /digest · /weekly · /yes <id> · /no <id>"
+            "/answer · /digest · /weekly · /yes <id> · /no <id> · "
+            "/usefix <platform> <element> · /nofix <platform> <element>"
         )
     try:
         return handler(argument)
