@@ -494,3 +494,54 @@ def test_there_is_no_bypass_parameter():
     params = set(inspect.signature(guardrails.check_can_submit).parameters)
     for forbidden in ("force", "skip", "skip_checks", "bypass", "override"):
         assert forbidden not in params
+
+
+# =========================================================================
+# Two branches that had no test at all
+# =========================================================================
+
+
+def test_a_campaign_that_has_reached_its_target_goal_stops(session, job, campaign):
+    """The goal is a stopping condition, not a progress bar.
+
+    This branch had no coverage: a campaign configured to stop at N kept
+    submitting past N, and the only sign would have been the count on the
+    dashboard going up.
+    """
+    campaign.target_goal_count = 2
+    for job_id in (10, 11):
+        add_submitted(session, job_id=job_id, when=GOOD_TIME)
+
+    result = run(session, job, FakeDraft(campaign=campaign))
+
+    goal = named(result, "campaign_target_goal")
+    assert not goal.passed
+    assert "2/2" in goal.detail
+
+
+def test_a_campaign_below_its_goal_still_passes(session, job, campaign):
+    campaign.target_goal_count = 5
+    add_submitted(session, job_id=10, when=GOOD_TIME)
+
+    assert named(
+        run(session, job, FakeDraft(campaign=campaign)), "campaign_target_goal"
+    ).passed
+
+
+def test_an_authentication_check_that_raises_counts_as_not_authenticated(
+    session, job, campaign
+):
+    """The failure direction is the whole point.
+
+    A predicate that throws — an expired context, a closed browser — must read
+    as "not signed in". Treating an exception as anything else would submit into
+    a dead session, which on LinkedIn means a silently discarded application.
+    """
+
+    def explode(platform: str) -> bool:
+        raise RuntimeError("the browser context is gone")
+
+    result = run(session, job, FakeDraft(campaign=campaign), is_authenticated=explode)
+
+    assert not named(result, "session_authenticated").passed
+    assert not result.allowed

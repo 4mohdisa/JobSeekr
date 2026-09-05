@@ -44,3 +44,4 @@ Thumbs.db
 
 # Vite build output and caches (frontend/dist already covered above)
 frontend/node_modules/
+.coverage

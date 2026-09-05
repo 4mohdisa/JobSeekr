@@ -157,35 +157,44 @@ def check_playwright_channel() -> Finding:
 # --------------------------------------------------------------------------
 
 
-def check_llm_keys() -> Finding:
-    """Scoring and embeddings both need a key, whoever provides them.
+#: Every model an application cannot complete without, and what it does.
+#: Checked per MODEL rather than per provider: each is a setting, and any one of
+#: them can be pointed at a different provider without touching this.
+_REQUIRED_MODELS: tuple[tuple[str, str], ...] = (
+    ("llm_model_scoring", "scoring"),
+    ("llm_model_embedding", "stage-1 ranking"),
+    ("llm_model_writing", "resume and cover letter prose"),
+    ("llm_model_formmap", "reading unknown application forms"),
+)
 
-    They are on one provider by default now, which means one key covers both —
-    but the check stays per-model rather than per-provider, because the models
-    are settings and either can be pointed somewhere else without touching this.
+
+def check_llm_keys() -> Finding:
+    """Every configured model needs a key, whoever provides it.
+
+    All four, not the two it used to check. Scoring and embeddings are on one
+    Gemini key by default now, so those two passed while ``llm_model_writing``
+    pointed at Anthropic with no ANTHROPIC_API_KEY set — and the report said
+    "API keys OK" for a machine that cannot build a single document. A setup
+    check that misses the thing blocking you is worse than no setup check.
     """
     make = _finding("API keys", "credentials")
     from backend.llm.client import _api_key_for
 
     missing = [
-        model
-        for model in (settings.llm_model_scoring, settings.llm_model_embedding)
-        if not _api_key_for(model)
+        (getattr(settings, field), purpose)
+        for field, purpose in _REQUIRED_MODELS
+        if not _api_key_for(getattr(settings, field))
     ]
-    settings_to_fill = " and ".join(sorted({_key_setting(m) for m in missing}))
-    if len(missing) == 2:
-        return make(
-            BLOCK,
-            "no key for scoring or embeddings — nothing can be scored or written",
-            f"set {settings_to_fill} in .env",
-        )
-    if missing:
-        return make(
-            BLOCK,
-            f"no key for {missing[0]}",
-            f"set {settings_to_fill} in .env",
-        )
-    return make(OK, "scoring and embedding providers both have keys")
+    if not missing:
+        return make(OK, f"all {len(_REQUIRED_MODELS)} configured models have keys")
+
+    settings_to_fill = " and ".join(sorted({_key_setting(m) for m, _ in missing}))
+    named = ", ".join(f"{purpose} ({model})" for model, purpose in missing)
+    return make(
+        BLOCK,
+        f"no key for {named}",
+        f"set {settings_to_fill} in .env",
+    )
 
 
 def _key_setting(model: str) -> str:
