@@ -44,6 +44,7 @@ __all__ = [
     "question_key",
     "resolve_all",
     "resolve_answer",
+    "same_question",
 ]
 
 
@@ -883,6 +884,40 @@ def resolve_answer(
         match_type=best_match_type,
         confidence=best_score,
         choices=choices,
+    )
+
+
+def same_question(left: str, right: str) -> bool:
+    """Whether two phrasings are asking the same thing.
+
+    Exists so the question ledger can report "notice period" asked eleven ways
+    as one question rather than eleven. It is the resolution matcher with the
+    answer bank taken out: the same ``_loose`` forms, the same rapidfuzz pair,
+    the same :data:`FUZZY_THRESHOLD`, and — the part that matters — the same
+    four disqualifiers.
+
+    Without ``_conflicts`` this would report "Are you available for part-time
+    work?" and "Are you available for full-time work?" as one question: they
+    score 88.9, over the threshold. Clustering them would tell the user they
+    had already answered a question they had not, which is the same class of
+    mistake the resolver refuses to make — here it corrupts a number instead of
+    an application, but it is the same wrong belief.
+    """
+    first = normalise_question(left)
+    second = normalise_question(right)
+    if not first or not second:
+        return False
+    if first == second:
+        return True
+    if _conflicts(first, second):
+        return False
+    loose_first, loose_second = _loose(first), _loose(second)
+    return (
+        max(
+            fuzz.token_sort_ratio(loose_first, loose_second),
+            fuzz.partial_ratio(loose_first, loose_second),
+        )
+        >= FUZZY_THRESHOLD
     )
 
 

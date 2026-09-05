@@ -32,12 +32,15 @@ __all__ = [
     "AnswerIn",
     "AnswerOut",
     "ApplicationOut",
+    "CampaignFunnel",
     "CampaignIn",
     "CampaignOut",
     "ControlState",
+    "CoveragePointOut",
     "DerivedAnswerOut",
     "DocumentOut",
     "FactIn",
+    "FactLeverageOut",
     "FactOut",
     "FunnelStage",
     "JobDetail",
@@ -50,6 +53,8 @@ __all__ = [
     "PreferenceOut",
     "ProfileIn",
     "ProfileOut",
+    "QuestionClusterOut",
+    "QuestionIntelligence",
     "QueueCard",
     "ScoreOut",
     "SessionHealthOut",
@@ -345,6 +350,77 @@ class FunnelStage(BaseModel):
     count: int
 
 
+class CampaignFunnel(BaseModel):
+    """One campaign's whole pipeline, not just what came out of the end.
+
+    ``discovered`` and ``scored`` are counts of jobs; every later stage counts
+    applications. That is the join the funnel is for — a campaign that discovers
+    four hundred ads and applies to three is failing somewhere the reply rate
+    cannot see.
+    """
+
+    campaign_id: int | None
+    name: str
+    discovered: int
+    scored: int
+    applied: int
+    acknowledged: int
+    replied: int
+    interviews: int
+
+    sufficient_data: bool
+    interview_rate: float | None = None
+    """Interviews per application, or None below the reporting minimum.
+
+    Only the rates are suppressed. The counts above are facts about what
+    happened and are always shown — it is the comparison that needs a sample.
+    """
+
+
+class QuestionClusterOut(BaseModel):
+    """One screening question, however many ways employers worded it."""
+
+    question: str
+    variants: int
+    asked: int
+    employers: int
+    platforms: int
+    resolved: int
+    abstained: int
+    jobs_parked: int
+    last_seen: datetime | None = None
+
+
+class CoveragePointOut(BaseModel):
+    """One week of the question ledger."""
+
+    week: str
+    asked: int
+    resolved: int
+    sufficient_data: bool
+    rate: float | None = None
+
+
+class FactLeverageOut(BaseModel):
+    """One stated fact and how many derived answers it supports."""
+
+    fact_id: int
+    key: str
+    category: str
+    derived: int
+    confirmed: int
+    stale: int
+
+
+class QuestionIntelligence(BaseModel):
+    """What is being asked, what it costs, and whether the loop is learning."""
+
+    frequency: list[QuestionClusterOut]
+    friction: list[QuestionClusterOut]
+    coverage: list[CoveragePointOut]
+    fact_leverage: list[FactLeverageOut]
+
+
 class AnalyticsResponse(BaseModel):
     minimum_sample: int
     total_applied: int
@@ -353,6 +429,8 @@ class AnalyticsResponse(BaseModel):
     by_platform: list[AnalyticsBucket]
     by_score_decile: list[AnalyticsBucket]
     by_rubric_version: list[AnalyticsBucket]
+    campaign_funnels: list[CampaignFunnel]
+    questions: QuestionIntelligence
 
 
 # ------------------------------------------------------------------- settings

@@ -38,7 +38,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from sqlmodel import Session, select
 
-from backend import failures
+from backend import failures, questions
 from backend.apply import guardrails
 from backend.apply.answers import (
     Abstain,
@@ -66,6 +66,7 @@ from backend.models import (
     Job,
     JobStatus,
     Profile,
+    QuestionResolution,
     Region,
     Score,
 )
@@ -212,6 +213,14 @@ def build_draft(
     bank = load_answers(session, campaign_id)
     resolved, abstentions = resolve_all(screening, campaign_id, answers=bank)
     draft.answers.update(resolved)
+    # Which mechanism answered each question, accumulated as the passes run.
+    # Reconstructing it afterwards from draft.answers is not possible:
+    # _synthetic_answer stamps EXACT/100.0 on profile, fact and form-map
+    # answers alike, so by the time the draft is finished a fact-derived answer
+    # is indistinguishable from a bank hit.
+    by_mechanism: dict[str, QuestionResolution] = dict.fromkeys(
+        resolved, QuestionResolution.BANK
+    )
 
     # Facts before the form map. The form map answers "where does this field's
     # value come from"; facts answer "what is the value". A question the bank
@@ -228,6 +237,7 @@ def build_draft(
             job_id=job.id,
         )
         draft.answers.update(rescued)
+        by_mechanism.update(dict.fromkeys(rescued, QuestionResolution.FACT))
 
     if abstentions and settings.apply_form_mapping_enabled:
         draft.form_fingerprint = fingerprint_fields(screening)
@@ -241,6 +251,7 @@ def build_draft(
             campaign_id=campaign_id,
         )
         draft.answers.update(rescued)
+        by_mechanism.update(dict.fromkeys(rescued, QuestionResolution.FORM_MAP))
         # An LLM-mapped form is a draft until it has graduated. The guardrail
         # below turns this into a blocked submit and a Telegram approval
         # request; recording it on the draft keeps that decision inspectable in
@@ -250,7 +261,75 @@ def build_draft(
         )
 
     draft.abstentions = abstentions
+    _record_questions(
+        session,
+        job=job,
+        platform=platform,
+        screening=screening,
+        answers=draft.answers,
+        by_mechanism=by_mechanism,
+        abstentions=abstentions,
+    )
     return draft
+
+
+def _record_questions(
+    session: Session,
+    *,
+    job: Job,
+    platform: str,
+    screening: Sequence[FormField],
+    answers: dict[str, Any],
+    by_mechanism: dict[str, QuestionResolution],
+    abstentions: Sequence[Abstain],
+) -> None:
+    """File every screening question this step encountered, resolved or not.
+
+    Here rather than at the park, because a question that was answered is
+    exactly the half nothing recorded before: no ``Application`` row is written
+    when a job parks, and an application that submits had no abstentions by
+    construction. Recording only at the point of failure gives a numerator with
+    no denominator.
+
+    Only ``screening`` — the fields the profile could not fill. A form asking
+    for an email address is not asking the user anything, and counting it would
+    push coverage toward 100% by padding the denominator with questions that
+    cannot fail.
+
+    Dry runs record too. The questions were genuinely encountered, and a dry run
+    that learns nothing about what employers ask is a dry run worth less than it
+    costs.
+    """
+    abstained = {normalise_question(a.question) for a in abstentions}
+
+    for field_ in screening:
+        label = question_key(field_)
+        key = normalise_question(label)
+        if not key:
+            continue
+        if key in abstained:
+            resolution = QuestionResolution.ABSTAINED
+            source_row_id = None
+        else:
+            answer = answers.get(label)
+            if answer is None:
+                # Neither answered nor abstained: the form-map pass clears
+                # abstentions by exclusion, so a field it accounted for without
+                # producing an answer would land here. Nothing to file.
+                continue
+            resolution = by_mechanism.get(label, QuestionResolution.BANK)
+            source_row_id = getattr(answer, "source_row_id", None)
+
+        questions.record(
+            session,
+            question=key,
+            question_text=label,
+            resolution=resolution,
+            platform=platform,
+            company=job.company,
+            job_id=job.id,
+            source_row_id=source_row_id,
+        )
 
 
 def _resolve_via_facts(

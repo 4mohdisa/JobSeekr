@@ -64,6 +64,12 @@ def _digest_job() -> None:
     send_digest()
 
 
+def _weekly_digest_job() -> None:
+    from backend.integrations.telegram import send_weekly_digest
+
+    send_weekly_digest()
+
+
 def _canary_job() -> None:
     from backend.apply.canary import run_canary
 
@@ -203,6 +209,16 @@ SCHEDULE: tuple[dict[str, Any], ...] = (
     {"id": "backup", "func": _backup_job, "trigger": "cron", "hour": 2, "minute": 0},
     {"id": "digest", "func": _digest_job, "trigger": "cron", "hour": 19, "minute": 0},
     {"id": "canary", "func": _canary_job, "trigger": "cron", "hour": 8, "minute": 0},
+    # Sunday, after the rubric review below and half an hour clear of it, so the
+    # two weekly messages arrive as two readable things rather than one wall.
+    {
+        "id": "weekly_digest",
+        "func": _weekly_digest_job,
+        "trigger": "cron",
+        "day_of_week": "sun",
+        "hour": 18,
+        "minute": 30,
+    },
     # 09:00, an hour before the morning apply pass, so a dead session is named
     # while there is still time to sign in before anything is attempted.
     {

@@ -24,7 +24,7 @@ from typing import Any
 
 from sqlmodel import select
 
-from backend import facts, failures, preferences, sessions
+from backend import facts, failures, preferences, questions, sessions
 from backend.config import settings
 from backend.db import session_scope
 from backend.integrations.notify import Priority, set_sender
@@ -51,6 +51,7 @@ __all__ = [
     "send_digest",
     "send_message",
     "send_photo",
+    "send_weekly_digest",
 ]
 
 
@@ -476,6 +477,49 @@ def send_digest(*, hours: int = 24) -> bool:
     return send_message(build_digest(hours=hours), Priority.DIGEST)
 
 
+def build_weekly_digest(*, hours: int = 168) -> str:
+    """The Sunday review: what the week taught the system, not what it did today.
+
+    Separate from the nightly digest rather than folded into it. The numbers
+    here — which questions cost the most applications, whether coverage is
+    climbing — move on a scale of weeks, and ``failures.digest_lines`` already
+    names the cost of a section that appears every evening saying nothing: it
+    stops being read, on exactly the evening it has something to say.
+
+    Empty sections are omitted for the same reason, so a quiet week produces a
+    short message rather than a page of zeroes.
+    """
+    lines = [f"*Weekly review* — last {max(1, hours // 24)}d"]
+
+    with session_scope() as session:
+        lines.extend(questions.digest_lines(session, hours=hours))
+
+        leverage = [row for row in facts.leverage(session) if row.confirmed]
+        if leverage:
+            lines.append("\n*Facts doing the work*")
+            for row in leverage[:5]:
+                stale = f" ({row.stale} stale)" if row.stale else ""
+                lines.append(
+                    f"· `{row.key}` answers {row.confirmed} "
+                    f"question{'s' if row.confirmed != 1 else ''}{stale}"
+                )
+
+        idle = [row for row in facts.leverage(session) if not row.derived]
+        if idle:
+            lines.append(
+                f"\n_{len(idle)} fact{'s' if len(idle) != 1 else ''} answering "
+                f"nothing: {', '.join(row.key for row in idle[:5])}_"
+            )
+
+    if len(lines) == 1:
+        lines.append("\n_Nothing asked and nothing derived this week._")
+    return "\n".join(lines)
+
+
+def send_weekly_digest(*, hours: int = 168) -> bool:
+    return send_message(build_weekly_digest(hours=hours), Priority.DIGEST)
+
+
 # ==========================================================================
 # Commands
 # ==========================================================================
@@ -633,6 +677,10 @@ def _cmd_digest(_: str) -> str:
     return build_digest()
 
 
+def _cmd_weekly(_: str) -> str:
+    return build_weekly_digest()
+
+
 def _decide_derivation(derivation_id: int, *, confirm: bool) -> str:
     """Confirm or reject an answer derived from a fact."""
     from backend import facts
@@ -692,6 +740,7 @@ COMMANDS = {
     "/status": _cmd_status,
     "/answer": _cmd_answer,
     "/digest": _cmd_digest,
+    "/weekly": _cmd_weekly,
     "/yes": _cmd_yes,
     "/no": _cmd_no,
 }
@@ -705,7 +754,7 @@ def handle_command(text: str) -> str:
     if handler is None:
         return (
             "Commands: /stop [campaign] · /resume [campaign] · /status · "
-            "/answer · /digest · /yes <id> · /no <id>"
+            "/answer · /digest · /weekly · /yes <id> · /no <id>"
         )
     try:
         return handler(argument)

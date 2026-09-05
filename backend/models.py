@@ -327,6 +327,34 @@ class FailureType(str, Enum):
     """A discovery source returned nothing because every request failed."""
 
 
+class QuestionResolution(str, Enum):
+    """How a screening question was answered on one encounter, or that it was not.
+
+    The vocabulary is the four mechanisms that can answer a question, plus the
+    one honest non-answer. It is deliberately about the MECHANISM and not about
+    the answer: the question this enum exists to make answerable is "is the
+    system learning to answer these without me", and that is a question about
+    where the answer came from.
+
+    Profile-matched identity fields are not in here because they are not
+    screening questions — a form asking for an email address is not asking the
+    user anything. Counting them would drive coverage toward 100% by adding a
+    denominator that never fails.
+    """
+
+    BANK = "bank"
+    """A verified answer-bank row matched."""
+
+    FACT = "fact"
+    """A confirmed derivation from a stated fact answered it."""
+
+    FORM_MAP = "form_map"
+    """A cached form map routed the field to a bank row or the profile."""
+
+    ABSTAINED = "abstained"
+    """Nothing could answer it. The job was parked and the user asked."""
+
+
 class FormMapTier(str, Enum):
     """Form-map scope. Company maps override platform maps."""
 
@@ -812,6 +840,83 @@ class FailureEvent(SQLModel, table=True):
     occurred_at: datetime = Field(default_factory=utcnow, index=True)
     resolved_at: datetime | None = None
     resolution: str | None = None
+
+
+class QuestionEvent(SQLModel, table=True):
+    """One screening question, one encounter, and what answered it.
+
+    WHY THIS EXISTS SEPARATELY FROM EVERYTHING ELSE
+        Before this table nothing recorded a question that was answered
+        successfully. ``FailureEvent`` records abstentions, and no
+        ``Application`` row is written when a job parks — so a submitted
+        application had zero abstentions by construction and a parked one had no
+        application row. The two tables never describe the same pass, and any
+        coverage ratio built from them is a lower bound on one side or the
+        other, never a real fraction.
+
+        This is the denominator. Every screening question the flow encounters
+        gets a row, resolved or not, so "what share of questions resolve without
+        asking me" is a division of two numbers from the same population.
+
+    THE OVERLAP WITH FailureEvent IS DELIBERATE
+        An abstention is written to both. The failure ledger answers "what is
+        going wrong" and drives the circuit-breaker trends; this ledger answers
+        "what am I being asked". Folding one into the other would mean either
+        filing successes in a failure table or making the trend report depend on
+        a table that mostly holds successes.
+
+    ONE ROW PER ENCOUNTER, NOT PER QUESTION
+        A job that parks and is retried after the answer arrives writes the
+        question twice — once ABSTAINED, once BANK. That is the learning loop
+        being visible, and it is why frequency is reported over DISTINCT
+        employers rather than raw row counts.
+    """
+
+    __tablename__ = "question_event"
+
+    id: int | None = Field(default=None, primary_key=True)
+
+    question: str = Field(index=True)
+    """The normalised question, from ``answers.normalise_question``.
+
+    Normalised so that two forms differing only in casing, numbering or trailing
+    punctuation are one question. Near-identical *phrasings* are a separate
+    problem and are clustered at read time — see ``backend/questions.py``.
+    """
+
+    question_text: str
+    """The raw label as the form worded it, for display. Never grouped on."""
+
+    resolution: QuestionResolution = Field(sa_column=_enum_column(QuestionResolution))
+
+    source_row_id: int | None = None
+    """The AnswerBank row that answered it, when one did.
+
+    Not a foreign key: the row may later be deleted or merged, and losing the
+    history of what answered a question is worse than holding a stale id. It is
+    provenance, not a join.
+    """
+
+    platform: str = Field(index=True)
+    company: str | None = Field(default=None, index=True)
+    """Which employer asked. "Across how many employers" is the frequency
+    number that matters — one employer asking eleven times is not eleven
+    employers asking."""
+
+    job_id: int | None = Field(
+        default=None,
+        # SET NULL for the same reason FailureEvent uses it: the ledger outlives
+        # the job it describes, and the aggregate dimensions (question,
+        # platform, company, resolution) all survive without the pointer.
+        sa_column=Column(
+            Integer,
+            ForeignKey("job.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+    )
+
+    occurred_at: datetime = Field(default_factory=utcnow, index=True)
 
 
 class Preference(SQLModel, table=True):

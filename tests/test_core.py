@@ -37,6 +37,7 @@ from backend.models import (
     OutboundMessage,
     Preference,
     Profile,
+    QuestionEvent,
     Run,
     Score,
     SessionHealth,
@@ -60,6 +61,7 @@ EXPECTED_TABLES = {
     "outbound_message",
     "preference",
     "profile",
+    "question_event",
     "run",
     "score",
     "session_health",
@@ -80,6 +82,7 @@ MODEL_CLASSES = (
     OutboundMessage,
     Preference,
     Profile,
+    QuestionEvent,
     Run,
     Score,
     SessionHealth,
@@ -210,8 +213,8 @@ def test_a_narrower_static_mount_is_allowed() -> None:
 
 
 def test_every_model_imports_and_registers_its_table() -> None:
-    """All 17 tables are on SQLModel.metadata, and nothing extra is."""
-    assert len(EXPECTED_TABLES) == 17
+    """All 18 tables are on SQLModel.metadata, and nothing extra is."""
+    assert len(EXPECTED_TABLES) == 18
     assert {model.__tablename__ for model in MODEL_CLASSES} == EXPECTED_TABLES
     assert set(SQLModel.metadata.tables) == EXPECTED_TABLES
 
