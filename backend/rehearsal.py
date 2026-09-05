@@ -347,7 +347,10 @@ def rehearse(root: Path, *, keep: bool = False) -> RehearsalReport:
         Document,
         Job,
         JobStatus,
+        QuestionEvent,
         Score,
+        Stage,
+        StageTiming,
     )
     from backend.scoring import run as scoring_run
     from backend.scoring import stage1, stage2
@@ -544,6 +547,44 @@ def rehearse(root: Path, *, keep: bool = False) -> RehearsalReport:
             all(o is not ApplicationOutcome.SUBMITTED for o in outcomes),
             "a dry run must never record a submission",
         )
+
+    # -- 8. the telemetry is actually wired ----------------------------------
+    #
+    # Not "does the module work" — the unit tests answer that. This asks whether
+    # a full pipeline run leaves any measurement behind at all. Four features in
+    # this project shipped complete, tested, and never called; a stage timer
+    # that nothing invokes is exactly that shape, and it would look identical to
+    # a working one in every unit test.
+    #
+    # PACING and SUBMIT are legitimately absent from a dry run: nothing is
+    # submitted, and nothing waits between submissions. The stages asserted here
+    # are the ones a dry run genuinely reaches.
+    timings = session.exec(select(StageTiming)).all()
+    stages_seen = {row.stage for row in timings}
+    expected_stages = {
+        Stage.DOCUMENT_BUILD,
+        Stage.PAGE_LOAD,
+        Stage.FIELD_ENUMERATION,
+        Stage.ANSWER_RESOLUTION,
+    }
+    report.add(
+        "telemetry wired",
+        expected_stages <= stages_seen,
+        f"{len(timings)} stage timings, "
+        f"{sorted(s.value for s in stages_seen)}"
+        + (
+            ""
+            if expected_stages <= stages_seen
+            else f" — missing {sorted(s.value for s in expected_stages - stages_seen)}"
+        ),
+    )
+
+    questions_filed = session.exec(select(QuestionEvent)).all()
+    report.add(
+        "question ledger wired",
+        bool(questions_filed),
+        f"{len(questions_filed)} screening questions filed",
+    )
 
     report.add("llm calls", True, f"{stub.calls}")
 

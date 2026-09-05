@@ -25,6 +25,7 @@ from typing import Any
 
 from sqlmodel import Session
 
+from backend import telemetry
 from backend.apply.draft import FormField
 from backend.ats.formmaps import (
     FieldMapping,
@@ -37,7 +38,7 @@ from backend.ats.formmaps import (
 from backend.config import settings
 from backend.llm.client import LLMBudgetExceeded, llm
 from backend.logging_setup import get_logger
-from backend.models import FormMapTier
+from backend.models import CacheName, FormMapTier
 
 log = get_logger(__name__)
 
@@ -354,6 +355,18 @@ def map_fields(
     # both. record_outcome already counted the successes; nothing read them.
     last_map_trusted.clear()
     last_map_trusted[fingerprint] = bool(trusted)
+
+    # One lookup per FORM, not per field: the claim worth measuring is "the
+    # second application to a known form shape costs no model call", and that is
+    # a property of the form. Recorded only when there is a session — the maps
+    # live on disk and this function is deliberately usable without one.
+    if session is not None:
+        telemetry.record_cache(
+            session,
+            CacheName.FORM_MAP,
+            hit=cached is not None and not todo,
+            platform=platform,
+        )
 
     if cached is not None and not todo:
         known = cached.by_identifier()

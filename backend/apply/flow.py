@@ -38,7 +38,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from sqlmodel import Session, select
 
-from backend import failures, questions
+from backend import failures, questions, telemetry
 from backend.apply import guardrails
 from backend.apply.answers import (
     Abstain,
@@ -60,6 +60,7 @@ from backend.models import (
     Application,
     ApplicationOutcome,
     ApplyType,
+    CacheName,
     Campaign,
     Document,
     FailureType,
@@ -69,8 +70,9 @@ from backend.models import (
     QuestionResolution,
     Region,
     Score,
+    Stage,
 )
-from backend.siteknowledge import ElementNotFound
+from backend.siteknowledge import ElementNotFound, drain_resolutions
 
 log = get_logger(__name__)
 
@@ -605,6 +607,42 @@ def run_apply(
         )
     except ElementNotFound as exc:
         return _park_unresolvable(session, job, adapter.platform, exc)
+    finally:
+        # Drain the site-knowledge tally once per application, however it ended.
+        # The adapters resolve elements; the knowledge layer has no session and
+        # must not open one, so it counts and this records. In the finally
+        # because a failed application is exactly when the first strategy stops
+        # working — dropping those would make the hit rate a survivor's average.
+        _record_element_lookups(session, job.id, adapter.platform)
+
+
+def _record_element_lookups(
+    session: Session, job_id: int | None, platform: str
+) -> None:
+    """File how the site-knowledge lookups went for one application.
+
+    A hit is the FIRST strategy working. A lower strategy healing the element
+    counts as a miss even though the element was found: the element is fine, the
+    file's idea of how to find it is not, and the whole point of the number is
+    to see that before it becomes a failure.
+    """
+    first, later = drain_resolutions()
+    telemetry.record_cache(
+        session,
+        CacheName.SITE_KNOWLEDGE,
+        hit=True,
+        platform=platform,
+        job_id=job_id,
+        count=first,
+    )
+    telemetry.record_cache(
+        session,
+        CacheName.SITE_KNOWLEDGE,
+        hit=False,
+        platform=platform,
+        job_id=job_id,
+        count=later,
+    )
 
 
 def _blocked_only_on_form_trust(verdict: Any) -> bool:
@@ -697,7 +735,10 @@ def _run_apply(
         )
 
     try:
-        adapter.open(page, job)
+        with telemetry.time_stage(
+            session, Stage.PAGE_LOAD, job_id=job.id, platform=adapter.platform
+        ):
+            adapter.open(page, job)
     except ElementNotFound:
         # Not an ordinary failure: the page no longer matches anything we know,
         # and run_apply's wrapper turns that into a manual-queue park with an
@@ -758,7 +799,13 @@ def _run_apply(
     seen_steps: set[frozenset[str]] = set()
 
     for step in range(MAX_STEPS):
-        fields = adapter.enumerate_fields(page, step)
+        with telemetry.time_stage(
+            session,
+            Stage.FIELD_ENUMERATION,
+            job_id=job.id,
+            platform=adapter.platform,
+        ):
+            fields = adapter.enumerate_fields(page, step)
 
         # A repeated step means a validation error is silently blocking
         # progress. Never hardcode a step count; detect the loop instead.
@@ -773,7 +820,15 @@ def _run_apply(
             )
         seen_steps.add(fingerprint)
 
-        step_draft = build_draft(session, job, platform=adapter.platform, fields=fields)
+        with telemetry.time_stage(
+            session,
+            Stage.ANSWER_RESOLUTION,
+            job_id=job.id,
+            platform=adapter.platform,
+        ):
+            step_draft = build_draft(
+                session, job, platform=adapter.platform, fields=fields
+            )
         if draft is None:
             draft = step_draft
         else:
@@ -828,10 +883,14 @@ def _run_apply(
                     "refusing to attach a document that failed the parse gate",
                 )
 
-            adapter.attach(page, planned)
-            draft.attachment_intent = {d.kind.value: Path(d.path).name for d in planned}
-
-            readback = adapter.read_back_attachments(page)
+            with telemetry.time_stage(
+                session, Stage.UPLOAD, job_id=job.id, platform=adapter.platform
+            ):
+                adapter.attach(page, planned)
+                draft.attachment_intent = {
+                    d.kind.value: Path(d.path).name for d in planned
+                }
+                readback = adapter.read_back_attachments(page)
             mismatch = _readback_mismatch(draft.attachment_intent, readback)
             if mismatch:
                 # LinkedIn silently reuses a stale upload. This is the only
@@ -921,33 +980,42 @@ def _run_apply(
             status=JobStatus.QUEUED,
         )
 
-    # 10 — submit.
-    try:
-        adapter.submit(page)
-    except ElementNotFound:
-        # Not an ordinary failure: the page no longer matches anything we know,
-        # and run_apply's wrapper turns that into a manual-queue park with an
-        # alert. Swallowing it here would report "could not open form" and
-        # retry forever against a site that has moved.
-        raise
-    except Exception as exc:  # noqa: BLE001
-        guardrails.record_failure(adapter.platform, f"submit raised: {exc}")
-        return _abort(session, job, draft, ApplyOutcome.FAILED, f"submit failed: {exc}")
+    # 10-11 — submit, then confirm by DETECTING the confirmation state. A click
+    # that returned is not evidence that anything was received.
+    #
+    # Both inside one timer, and the timer records in a finally, so every way
+    # out of this block — the raise, the two aborts, the success — is measured.
+    # The confirmation wait is where most of a submit's time actually goes, so
+    # timing only the click would report the fast half.
+    with telemetry.time_stage(
+        session, Stage.SUBMIT, job_id=job.id, platform=adapter.platform
+    ):
+        try:
+            adapter.submit(page)
+        except ElementNotFound:
+            # Not an ordinary failure: the page no longer matches anything we
+            # know, and run_apply's wrapper turns that into a manual-queue park
+            # with an alert. Swallowing it here would report "could not open
+            # form" and retry forever against a site that has moved.
+            raise
+        except Exception as exc:  # noqa: BLE001
+            guardrails.record_failure(adapter.platform, f"submit raised: {exc}")
+            return _abort(
+                session, job, draft, ApplyOutcome.FAILED, f"submit failed: {exc}"
+            )
 
-    # 11 — confirm by DETECTING the confirmation state. A click that returned
-    # is not evidence that anything was received.
-    draft.screenshot_post = _screenshot(page, job.id, "post")
-    if not adapter.confirmed(page):
-        guardrails.record_failure(
-            adapter.platform, "no confirmation state after submit"
-        )
-        return _abort(
-            session,
-            job,
-            draft,
-            ApplyOutcome.FAILED,
-            "submitted but no confirmation state appeared",
-        )
+        draft.screenshot_post = _screenshot(page, job.id, "post")
+        if not adapter.confirmed(page):
+            guardrails.record_failure(
+                adapter.platform, "no confirmation state after submit"
+            )
+            return _abort(
+                session,
+                job,
+                draft,
+                ApplyOutcome.FAILED,
+                "submitted but no confirmation state appeared",
+            )
 
     # 12 — audit.
     guardrails.record_success(adapter.platform)

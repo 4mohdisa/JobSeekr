@@ -70,6 +70,7 @@ __all__ = [
     "FlowVariant",
     "SiteKnowledge",
     "Strategy",
+    "drain_resolutions",
     "fingerprint_steps",
     "load",
     "on_all_strategies_failed",
@@ -95,6 +96,31 @@ STRATEGY_PRIORITY: tuple[str, ...] = ("testid", "role", "label", "text", "css")
 # None in tests and in a checkout with no bot configured.
 on_strategy_drift: Any = None
 on_all_strategies_failed: Any = None
+
+
+# How element resolution went since the last drain. A "first" is the top
+# strategy working, which is what this file's ordering claims should happen.
+# Anything else — a lower strategy healing it, or nothing working at all — is a
+# miss: the element may still have been found, but the recorded idea of how to
+# find it was wrong, and that is the number worth trending.
+#
+# Counted here and drained by the caller rather than written to the database,
+# because this layer has no session and must not acquire one: it is loaded by
+# the canary, by the session check and by every adapter, none of which should
+# open a transaction to look up a button.
+_resolutions: dict[str, int] = {"first": 0, "later": 0}
+
+
+def drain_resolutions() -> tuple[int, int]:
+    """(first-strategy hits, resolutions that needed a lower strategy or failed).
+
+    Resets the counters. The caller records them against whatever unit of work
+    it was doing; the apply flow drains once per application.
+    """
+    first, later = _resolutions["first"], _resolutions["later"]
+    _resolutions["first"] = 0
+    _resolutions["later"] = 0
+    return first, later
 
 
 class ElementNotFound(RuntimeError):
@@ -329,7 +355,7 @@ class SiteKnowledge:
             raise ElementNotFound(self.platform, key, [])
 
         tried: list[str] = []
-        for strategy in element.ordered():
+        for position, strategy in enumerate(element.ordered()):
             selector = strategy.selector
             tried.append(selector)
             try:
@@ -350,9 +376,11 @@ class SiteKnowledge:
                 continue
 
             if found:
+                _resolutions["first" if position == 0 else "later"] += 1
                 self._record_success(element, strategy)
                 return locator
 
+        _resolutions["later"] += 1
         self._record_failure(element, tried)
         if element.required:
             if on_all_strategies_failed is not None:

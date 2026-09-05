@@ -355,6 +355,60 @@ class QuestionResolution(str, Enum):
     """Nothing could answer it. The job was parked and the user asked."""
 
 
+class Stage(str, Enum):
+    """A timed step of one application.
+
+    PACING IS NOT WORK
+        The randomised wait between submissions is a safety property protecting
+        the user's account, not latency to optimise. It is measured because an
+        unmeasured wait is indistinguishable from a hang — but it is a separate
+        member so that no total can quietly include it, and
+        :data:`WORK_STAGES` is what any duration sums over.
+    """
+
+    PAGE_LOAD = "page_load"
+    FIELD_ENUMERATION = "field_enumeration"
+    ANSWER_RESOLUTION = "answer_resolution"
+    DOCUMENT_BUILD = "document_build"
+    UPLOAD = "upload"
+    SUBMIT = "submit"
+
+    PACING = "pacing"
+    """Deliberate delay. Never counted as work. See the class docstring."""
+
+
+WORK_STAGES = frozenset(Stage) - {Stage.PACING}
+"""Every stage that is actually doing something.
+
+Defined by subtraction so a new stage is work unless someone deliberately
+excludes it — the safe default, since the failure mode being prevented is a
+wait being counted as work rather than the reverse.
+"""
+
+
+class CacheName(str, Enum):
+    """A cache whose hit rate is recorded at the lookup itself.
+
+    The answer bank and the facts layer are absent on purpose: their lookups
+    ARE screening questions, and ``question_event`` already records the
+    outcome of every one. Recording them again here would be the same fact in
+    two tables, free to drift. ``backend/telemetry.py`` reads their rates from
+    the question ledger and reports all five together.
+    """
+
+    FORM_MAP = "form_map"
+    """One lookup per form shape. The second application to a known shape
+    should cost no model call at all."""
+
+    SITE_KNOWLEDGE = "site_knowledge"
+    """One lookup per element. A hit is the FIRST strategy working; a lower
+    one working is a heal, which is a miss for this purpose — the element was
+    found, but the file's idea of how to find it was wrong."""
+
+    EMBEDDING = "embedding"
+    """One lookup per text embedded."""
+
+
 class FormMapTier(str, Enum):
     """Form-map scope. Company maps override platform maps."""
 
@@ -908,6 +962,82 @@ class QuestionEvent(SQLModel, table=True):
         # SET NULL for the same reason FailureEvent uses it: the ledger outlives
         # the job it describes, and the aggregate dimensions (question,
         # platform, company, resolution) all survive without the pointer.
+        sa_column=Column(
+            Integer,
+            ForeignKey("job.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+    )
+
+    occurred_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class StageTiming(SQLModel, table=True):
+    """How long one stage of one application took.
+
+    Nothing in this system measured its own speed, so "is it getting faster"
+    was unanswerable. ``Run`` records a start and an end for a whole pass, which
+    is browser startup plus every application plus every pacing wait as one
+    undifferentiated number — a regression in field enumeration and a slow
+    network are the same figure.
+
+    WHY A ROW PER STAGE PER APPLICATION
+        The question worth answering is which stage regressed, not whether the
+        pass got slower. Per-application rather than per-run because the mean is
+        the number that moves when something is wrong and the mean needs the
+        individual observations.
+
+    PACING IS RECORDED HERE AND EXCLUDED EVERYWHERE
+        The wait between submissions is stored as ``Stage.PACING`` so that an
+        unexpectedly long wait is visible, and it is not in ``WORK_STAGES``, so
+        no work total can include it. It protects the user's LinkedIn account;
+        a chart that let it read as latency would invite someone to shorten it.
+    """
+
+    __tablename__ = "stage_timing"
+
+    id: int | None = Field(default=None, primary_key=True)
+    stage: Stage = Field(sa_column=_enum_column(Stage))
+    duration_ms: int
+    platform: str | None = Field(default=None, index=True)
+
+    job_id: int | None = Field(
+        default=None,
+        # SET NULL, as the other ledgers use: the measurement outlives the job.
+        sa_column=Column(
+            Integer,
+            ForeignKey("job.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
+    )
+
+    occurred_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class CacheEvent(SQLModel, table=True):
+    """One cache lookup, and whether it hit.
+
+    The caches are the whole cost story: a form shape seen twice should cost one
+    model call, an ad seen twice should be embedded once, and an element found
+    by its first strategy costs one DOM query instead of five. Each rate should
+    climb as the system learns, and nothing recorded them — the hits were log
+    lines, which cannot be trended.
+
+    See :class:`CacheName` for why the answer bank and the facts layer are not
+    in here.
+    """
+
+    __tablename__ = "cache_event"
+
+    id: int | None = Field(default=None, primary_key=True)
+    cache: CacheName = Field(sa_column=_enum_column(CacheName))
+    hit: bool
+    platform: str | None = Field(default=None, index=True)
+
+    job_id: int | None = Field(
+        default=None,
         sa_column=Column(
             Integer,
             ForeignKey("job.id", ondelete="SET NULL"),

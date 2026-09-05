@@ -32,10 +32,12 @@ __all__ = [
     "AnswerIn",
     "AnswerOut",
     "ApplicationOut",
+    "CacheRateOut",
     "CampaignFunnel",
     "CampaignIn",
     "CampaignOut",
     "ControlState",
+    "CostPointOut",
     "CoveragePointOut",
     "DerivedAnswerOut",
     "DocumentOut",
@@ -49,6 +51,7 @@ __all__ = [
     "OutboundMessageOut",
     "OutboundSendIn",
     "Page",
+    "PerformanceTelemetry",
     "PreferenceIn",
     "PreferenceOut",
     "ProfileIn",
@@ -56,10 +59,13 @@ __all__ = [
     "QuestionClusterOut",
     "QuestionIntelligence",
     "QueueCard",
+    "RunProfileOut",
     "ScoreOut",
     "SessionHealthOut",
     "SettingsIn",
     "SettingsOut",
+    "StageProfileOut",
+    "StageStatOut",
     "TemplateIn",
     "TemplateOut",
     "TemplatePreview",
@@ -421,6 +427,73 @@ class QuestionIntelligence(BaseModel):
     fact_leverage: list[FactLeverageOut]
 
 
+class StageStatOut(BaseModel):
+    """One timed stage, summarised."""
+
+    stage: str
+    observations: int
+    total_ms: int
+    mean_ms: int
+    median_ms: int
+    slowest_ms: int
+
+
+class StageProfileOut(BaseModel):
+    """Where the time went.
+
+    ``pacing`` is a separate field, never an entry in ``work``. The wait between
+    submissions is a safety property protecting the user's account, and a chart
+    that let it read as latency would invite someone to shorten it.
+    """
+
+    work: list[StageStatOut]
+    pacing: StageStatOut | None = None
+    slowest_stage: str | None = None
+    work_total_ms: int = 0
+
+
+class RunProfileOut(BaseModel):
+    """One apply pass and the stage that cost it the most."""
+
+    run_id: int
+    started_at: datetime
+    ended_at: datetime | None
+    applications: int
+    work_ms: int
+    pacing_ms: int
+    slowest_stage: str | None
+    slowest_stage_ms: int
+
+
+class CacheRateOut(BaseModel):
+    cache: str
+    unit: str
+    """What one lookup counts. The caches are consulted at different
+    granularities, and some in sequence, so the denominators are not the same
+    population — saying so is the difference between a chart and a trap."""
+
+    week: str
+    lookups: int
+    hits: int
+    rate: float
+
+
+class CostPointOut(BaseModel):
+    week: str
+    applications: int
+    total_usd: float
+    per_application_usd: float
+
+
+class PerformanceTelemetry(BaseModel):
+    """Speed, cache hit rates and cost — the three things that should improve."""
+
+    stages: StageProfileOut
+    runs: list[RunProfileOut]
+    caches: list[CacheRateOut]
+    cost: list[CostPointOut]
+
+
 class AnalyticsResponse(BaseModel):
     minimum_sample: int
     total_applied: int
@@ -431,6 +504,7 @@ class AnalyticsResponse(BaseModel):
     by_rubric_version: list[AnalyticsBucket]
     campaign_funnels: list[CampaignFunnel]
     questions: QuestionIntelligence
+    performance: PerformanceTelemetry
 
 
 # ------------------------------------------------------------------- settings

@@ -203,7 +203,7 @@ def test_friction_ranks_by_jobs_parked_not_by_how_often_asked(
             job_id=100 + index,
         )
 
-    ranked = questions.friction(session)
+    ranked = questions.report(session).friction
 
     assert [cluster.question for cluster in ranked] == [
         "what is your expected hourly rate"
@@ -240,7 +240,7 @@ def test_the_costlier_question_outranks_the_more_frequent_one(
             job_id=50 + index,
         )
 
-    ranked = questions.friction(session)
+    ranked = questions.report(session).friction
 
     assert [cluster.jobs_parked for cluster in ranked] == [3, 1]
     assert ranked[0].question == "what is your expected hourly rate"
@@ -264,7 +264,7 @@ def test_one_job_parking_twice_on_a_question_costs_one_job(
         job_id=7,
     )
 
-    [cluster] = questions.friction(session)
+    [cluster] = questions.report(session).friction
 
     assert cluster.abstained == 2
     assert cluster.jobs_parked == 1

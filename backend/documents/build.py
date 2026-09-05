@@ -40,6 +40,7 @@ from typing import Any
 from pypdf import PdfWriter
 from sqlmodel import Session, select
 
+from backend import telemetry
 from backend.config import settings
 from backend.db import session_scope
 from backend.documents.engine import (
@@ -64,6 +65,7 @@ from backend.models import (
     JobStatus,
     Profile,
     Score,
+    Stage,
     Template,
     TemplateKind,
 )
@@ -873,6 +875,16 @@ def build_documents(
     force: bool = False,
 ) -> BuildResult:
     """Build and gate every document for one job."""
+    with telemetry.time_stage(session, Stage.DOCUMENT_BUILD, job_id=job_id):
+        return _build_documents(session, job_id, force=force)
+
+
+def _build_documents(
+    session: Session,
+    job_id: int,
+    *,
+    force: bool = False,
+) -> BuildResult:
     job = session.get(Job, job_id)
     if job is None:
         return BuildResult(job_id=job_id, ok=False, failure_reason="no such job")

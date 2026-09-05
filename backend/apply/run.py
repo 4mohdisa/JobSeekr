@@ -23,7 +23,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from backend import preferences
+from backend import preferences, telemetry
 from backend.apply import guardrails
 from backend.apply.flow import RestrictionDetected, run_apply
 from backend.apply.pacing import sleep_between_submits
@@ -54,6 +54,7 @@ from backend.models import (
     Run,
     RunPhase,
     Score,
+    Stage,
 )
 
 log = get_logger(__name__)
@@ -337,7 +338,18 @@ def run_apply_pass(
                 # page open across it is exactly the accumulation this whole
                 # lifecycle exists to prevent.
                 if index > 0 and not dry_run:
-                    sleep_between_submits(rng)
+                    # Timed as PACING, which is deliberately not a work stage.
+                    # An unmeasured wait is indistinguishable from a hang, so it
+                    # is recorded — and it can never be added to a work total,
+                    # because Stage.PACING is not in WORK_STAGES and the profile
+                    # hands the two back as separate fields.
+                    with telemetry.time_stage(
+                        session,
+                        Stage.PACING,
+                        job_id=job.id,
+                        platform=applier.platform if applier else None,
+                    ):
+                        sleep_between_submits(rng)
 
                 # Between applications: the anchor page and nothing else. Placed
                 # here rather than after the previous iteration's body because
