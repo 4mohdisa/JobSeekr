@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import random
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
@@ -26,6 +27,11 @@ from backend import preferences
 from backend.apply import guardrails
 from backend.apply.flow import RestrictionDetected, run_apply
 from backend.apply.pacing import sleep_between_submits
+from backend.apply.pages import (
+    application_page,
+    close_orphan_pages,
+    warn_unless_single_page,
+)
 from backend.apply.session import (
     SessionExpired,
     ensure_logged_in,
@@ -217,6 +223,7 @@ def run_apply_pass(
     dry_run: bool = True,
     session_factory: Callable[[], Any] = session_scope,
     page_factory: Callable[[], Any] | None = None,
+    context_factory: Callable[[], Any] | None = None,
     rng: random.Random | None = None,
 ) -> Run:
     """Run one apply pass and record the ``Run`` row.
@@ -233,7 +240,12 @@ def run_apply_pass(
 
     playwright = None
     context = None
-    page = None
+    # The ANCHOR page. One per pass, used for the session checks and for the
+    # HTML probe that identifies a white-labelled ATS, and deliberately kept
+    # open for the whole pass: it is the page the context is guaranteed to
+    # still have when an application's own page has been closed. Applications
+    # never run on it — they each get their own, from application_page.
+    anchor = None
 
     with session_factory() as session:
         jobs = eligible_jobs(
@@ -242,30 +254,49 @@ def run_apply_pass(
         log.info("apply_pass_starting", eligible=len(jobs), dry_run=dry_run)
 
         def start_page() -> Any:
-            """The browser is only started once there is real work for it."""
-            nonlocal page, playwright, context
-            if page is None:
-                if page_factory is not None:
-                    page = page_factory()
+            """The anchor page. The browser starts on first use, not before."""
+            nonlocal anchor, playwright, context
+            if anchor is None:
+                if context_factory is not None:
+                    context = context_factory()
+                    anchor = context.pages[0] if context.pages else context.new_page()
+                elif page_factory is not None:
+                    anchor = page_factory()
                 else:
                     from playwright.sync_api import sync_playwright
 
                     playwright = sync_playwright().start()
                     context = launch_context(playwright)
-                    page = context.pages[0] if context.pages else context.new_page()
-            return page
+                    anchor = context.pages[0] if context.pages else context.new_page()
+            return anchor
 
         # Check every stored session before any work. This is broader than the
         # per-platform check below: it covers the ATS accounts the user signed
         # into themselves, whose expiry is the silent failure that shows up days
         # later as a pile of parked jobs.
-        if context is not None or page_factory is not None:
+        if page_factory is not None or context_factory is not None:
             try:
                 from backend.sessions import check_all
 
                 check_all(session, context or _FakeCookieJar(), start_page())
             except Exception as exc:  # noqa: BLE001 - never block a pass on this
                 log.warning("session_health_check_failed", error=str(exc)[:200])
+
+        @contextmanager
+        def application_scope(job_id: int | None) -> Any:
+            """A page for one application, closed however the application ends.
+
+            Falls through to the anchor page only when a test injected a bare
+            page and there is no context to open one from — everywhere else,
+            including every real run, this is a fresh tab with a guaranteed
+            close.
+            """
+            start_page()
+            if context is None:
+                yield anchor
+                return
+            with application_page(context, job_id=job_id) as page:
+                yield page
 
         # Verify the session ONCE, before any work, rather than discovering it
         # is dead after building documents for a job that cannot be submitted.
@@ -301,87 +332,114 @@ def run_apply_pass(
                     # fail the same way.
                     verify_session(applier.platform)
 
-                if applier is None and job.apply_type in {
-                    ApplyType.EXTERNAL,
-                    ApplyType.UNKNOWN,
-                }:
-                    # The URL gave nothing away. In Australia that is the common
-                    # case rather than an edge one: PageUp and JobAdder are
-                    # routinely white-labelled onto careers.employer.com.au,
-                    # where neither the host nor the path names the platform.
-                    # Load the page and fingerprint the HTML before giving up —
-                    # this is the only path that reaches detect_from_html, and
-                    # without it every such job goes to the manual queue.
-                    applier = _applier_from_page(start_page(), job, appliers)
-
-                if applier is None:
-                    log.warning(
-                        "no_applier_for_job",
-                        job_id=job.id,
-                        source=job.source,
-                        apply_type=job.apply_type.value,
-                    )
-                    job.status = JobStatus.MANUAL_QUEUE
-                    session.add(job)
-                    continue
-
-                page = start_page()
-
+                # Pacing happens BEFORE the tab is opened, not after. The wait
+                # between submits is minutes long, and holding an application's
+                # page open across it is exactly the accumulation this whole
+                # lifecycle exists to prevent.
                 if index > 0 and not dry_run:
                     sleep_between_submits(rng)
 
-                try:
-                    result = run_apply(
-                        page,
-                        session,
-                        job,
-                        adapter=applier,
-                        # Bind the page by value: a bare closure over the loop
-                        # variable would re-read it when the guardrails call
-                        # the predicate, which is the sort of thing that
-                        # silently checks the wrong page's login state.
-                        is_authenticated=lambda platform_name, _page=page: is_logged_in(
-                            _page, platform_name
-                        ),
-                        dry_run=dry_run,
-                    )
-                except RestrictionDetected as exc:
-                    # Everything stops. Not this job, everything.
-                    errors.append({"job_id": job.id, "error": f"restriction: {exc}"})
-                    log.error("apply_pass_halted_restriction", job_id=job.id)
-                    break
-                except SessionExpired as exc:
-                    errors.append({"job_id": job.id, "error": str(exc)})
-                    log.error("apply_pass_halted_session", platform=exc.platform)
-                    break
-                except Exception as exc:
-                    counts["failed"] += 1
-                    errors.append(
-                        {"job_id": job.id, "error": f"{type(exc).__name__}: {exc}"}
-                    )
-                    log.exception("apply_failed", job_id=job.id)
-                    guardrails.record_failure(applier.platform, str(exc))
-                    continue
+                # Between applications: the anchor page and nothing else. Placed
+                # here rather than after the previous iteration's body because
+                # that body can leave by continue, by break, or by raising, and
+                # only the top of the next iteration sees all three.
+                warn_unless_single_page(context, when=f"before job {job.id}")
+                close_orphan_pages(context, keep=anchor)
 
-                if result.outcome is ApplyOutcome.SUBMITTED:
-                    counts["submitted"] += 1
-                elif result.outcome is ApplyOutcome.ABSTAINED:
-                    counts["parked"] += 1
-                    if result.needs_answer:
-                        # Queued, not sent here. Asking inside this transaction
-                        # races the reply: the pass holds the session open for
-                        # the rest of the queue (minutes, with pacing), so a
-                        # prompt /answer would look up a job whose NEEDS_ANSWER
-                        # status has not been committed yet, and re-queueing
-                        # would silently refuse.
-                        pending_escalations.append(
-                            (job.id, result.needs_answer, result.needs_answer_choices)
+                with application_scope(job.id) as page:
+                    if applier is None and job.apply_type in {
+                        ApplyType.EXTERNAL,
+                        ApplyType.UNKNOWN,
+                    }:
+                        # The URL gave nothing away. In Australia that is the
+                        # common case rather than an edge one: PageUp and
+                        # JobAdder are routinely white-labelled onto
+                        # careers.employer.com.au, where neither the host nor
+                        # the path names the platform. Load the page and
+                        # fingerprint the HTML before giving up — this is the
+                        # only path that reaches detect_from_html, and without
+                        # it every such job goes to the manual queue.
+                        #
+                        # On the application's own page, not the anchor: the
+                        # probe navigates, and the anchor is what the session
+                        # checks run on.
+                        applier = _applier_from_page(page, job, appliers)
+
+                    if applier is None:
+                        log.warning(
+                            "no_applier_for_job",
+                            job_id=job.id,
+                            source=job.source,
+                            apply_type=job.apply_type.value,
                         )
-                elif result.outcome in {ApplyOutcome.BLOCKED, ApplyOutcome.DRY_RUN}:
-                    counts["blocked"] += 1
-                else:
-                    counts["failed"] += 1
+                        job.status = JobStatus.MANUAL_QUEUE
+                        session.add(job)
+                        continue
+
+                    try:
+                        result = run_apply(
+                            page,
+                            session,
+                            job,
+                            adapter=applier,
+                            # Bind the page by value: a bare closure over the
+                            # loop variable would re-read it when the guardrails
+                            # call the predicate, which is the sort of thing
+                            # that silently checks the wrong page's login state.
+                            is_authenticated=lambda platform_name, _page=page: (
+                                is_logged_in(_page, platform_name)
+                            ),
+                            dry_run=dry_run,
+                        )
+                    except RestrictionDetected as exc:
+                        # Everything stops. Not this job, everything.
+                        errors.append(
+                            {"job_id": job.id, "error": f"restriction: {exc}"}
+                        )
+                        log.error("apply_pass_halted_restriction", job_id=job.id)
+                        break
+                    except SessionExpired as exc:
+                        errors.append({"job_id": job.id, "error": str(exc)})
+                        log.error("apply_pass_halted_session", platform=exc.platform)
+                        break
+                    except Exception as exc:
+                        counts["failed"] += 1
+                        errors.append(
+                            {"job_id": job.id, "error": f"{type(exc).__name__}: {exc}"}
+                        )
+                        log.exception("apply_failed", job_id=job.id)
+                        guardrails.record_failure(applier.platform, str(exc))
+                        continue
+
+                    if result.outcome is ApplyOutcome.SUBMITTED:
+                        counts["submitted"] += 1
+                    elif result.outcome is ApplyOutcome.ABSTAINED:
+                        counts["parked"] += 1
+                        if result.needs_answer:
+                            # Queued, not sent here. Asking inside this
+                            # transaction races the reply: the pass holds the
+                            # session open for the rest of the queue (minutes,
+                            # with pacing), so a prompt /answer would look up a
+                            # job whose NEEDS_ANSWER status has not been
+                            # committed yet, and re-queueing would silently
+                            # refuse.
+                            pending_escalations.append(
+                                (
+                                    job.id,
+                                    result.needs_answer,
+                                    result.needs_answer_choices,
+                                )
+                            )
+                    elif result.outcome in {ApplyOutcome.BLOCKED, ApplyOutcome.DRY_RUN}:
+                        counts["blocked"] += 1
+                    else:
+                        counts["failed"] += 1
         finally:
+            # One last look before the context goes. A leak on the final
+            # application would otherwise be invisible — the close hides it.
+            warn_unless_single_page(context, when="end of pass")
+            # The context, and ONLY here. It is the signed-in session; every
+            # page inside it has already been closed by application_scope.
             if context is not None:
                 context.close()
             if playwright is not None:

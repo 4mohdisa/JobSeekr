@@ -4249,3 +4249,153 @@ Yours sincerely,
 Mohammed Isa
 mohdisa233@gmail.com | +61 450 106 807
 ```
+
+## Phase 2 — browser tab lifecycle  (`feat/tab-management`)
+
+### What it did before
+
+`run_apply_pass` opened **one** page on first use and handed the same object to
+every application in the pass. Nothing closed it, and nothing closed anything an
+application opened for itself. The only close in the pass was
+`context.close()` in the `finally` — which closes the *session*, at the end.
+
+So a pass was not leaking a tab per application in the sense of a bug; it simply
+had no page lifecycle at all. Nothing accumulated across a *short* run because
+there was only ever one page. But nothing could clean up after an ATS that
+opened its form in a popup either, and a long unattended run had no upper bound
+on what a single reused page carried.
+
+### What it does now
+
+**`backend/apply/pages.py`** — one small module, four functions, and a single
+idea: the **context** is the session and must outlive the pass; **pages** are
+disposable.
+
+| | |
+|---|---|
+| `application_page(context, job_id=...)` | Context manager. Opens a page, closes it in a `finally` — submitted, abstained, blocked, failed or exploded. Also closes anything the application opened *after* it (a popup form, a preview tab), before closing itself. Never touches the context. |
+| `warn_unless_single_page(context, when=...)` | Returns True when the anchor page is the only one open. Otherwise `log.error("page_leak_detected", ...)` with the URLs. Loud, and does not stop the pass. |
+| `close_orphan_pages(context, keep=anchor, cap=MAX_OPEN_PAGES)` | Over the cap, closes the oldest orphans and warns. The anchor is never closed however many pages are open — the pass still needs somewhere to check the session. |
+| `open_pages(context)` | Safe accessor. A closed context raises on `.pages`, and a test's bare page has no context; both answer "no pages" so every caller degrades to doing nothing. |
+
+`MAX_OPEN_PAGES = 4`, not 1: one application legitimately holds two for a
+moment (anchor + its own), and an ATS popup makes three. Four leaves room for
+that without letting a leak run all night.
+
+**In `run_apply_pass`:**
+
+- The single shared page became an **anchor page** — one per pass, used only for
+  the session health check, `ensure_logged_in`, and nothing else. It stays open
+  deliberately: it is the page the context is guaranteed to still have when an
+  application's own page has been closed.
+- Each job runs inside `with application_scope(job.id) as page:`.
+- The white-labelled-ATS HTML probe (`_applier_from_page`) now runs on the
+  **application's own page**, not the anchor. It navigates, and the anchor is
+  what the session checks run on — leaving it parked on the last job's ad was
+  quietly wrong.
+- **Pacing moved to before the page is opened.** The wait between submits is
+  minutes long, and holding a tab open across it is precisely the accumulation
+  this is meant to prevent.
+- `warn_unless_single_page` + `close_orphan_pages` run at the **top** of each
+  iteration rather than the bottom. The body can leave by `continue`, by `break`
+  or by raising, and only the top of the next iteration sees all three.
+- One final `warn_unless_single_page` in the `finally`, before the context
+  closes — a leak on the last application would otherwise be hidden by the
+  close.
+- `context.close()` is still the only close of a context, still at the very end.
+
+There is also a new `context_factory` parameter, purely so the lifecycle is
+testable without Playwright. A Playwright context is a page factory with a list
+on it, so the fake is thin and `run_apply_pass` runs its real code path in the
+tests rather than a test-only branch.
+
+### Verified against real headful Chrome
+
+`channel="chrome"`, headful, a throwaway `user-data-dir` — deliberately **not**
+`data/browser_profile`, because the point is to prove Chrome behaves, not to
+poke your live LinkedIn session. Ten applications in sequence, each opening a
+page, navigating to a document with a real DOM, and closing it.
+
+```
+chrome pid 33173, baseline RSS 877 MB, pages open 1
+round  during  after   RSS MB  single?
+    1       2      1      912  True
+    2       2      1      917  True
+    3       2      1      923  True
+    ...
+   10       2      1      945  True
+
+cap check
+  opened 7 pages, closed 3, left 4 (cap 4)
+  anchor still usable: True
+
+RSS first 5 rounds 921 MB, last 5 936 MB, drift +15 MB
+all checks passed
+```
+
+Two pages open during each application, one after, every time. The cap sweep
+took the three orphans and kept the anchor, and the anchor still navigated and
+returned content afterwards — the context survived.
+
+**The control, same script with nothing closing the pages** — which is what the
+pass did before:
+
+```
+CONTROL — nothing closes the pages. baseline RSS 864 MB
+round  open   RSS MB
+    1     2     1019
+    5     6     1601
+   10    11     2288
+
+pages left open: 11
+RSS first 5 1315 MB, last 5 2021 MB, drift +706 MB
+```
+
+**864 MB to 2288 MB across ten pages — about 142 MB per application.** At sixty
+jobs in an overnight run that is roughly 8.5 GB of resident memory in a browser
+that is expected to stay up for days. With the fix the same ten rounds drift
+15 MB, which is noise.
+
+### Tests that could not fail
+
+`tests/test_tab_lifecycle.py`, 20 tests. **11 mutations, 11 killed** — but only
+after three of them survived the first attempt, and all three were the test's
+fault, not the mutation's:
+
+1. **"the close is not in a `finally`" survived.** No test made an exception
+   propagate *through* the context manager. `run_apply_pass` catches
+   `RestrictionDetected`, `SessionExpired` and `Exception` itself, so by the
+   time the manager resumes there is nothing in flight and a close written after
+   the `yield` with no `finally` runs perfectly well. Every pass-level test
+   stayed green while the guard they were named for was gone. Fixed with a
+   direct unit test that raises inside the `with` — which is the only place the
+   `finally` is actually load-bearing.
+
+2. **"the cap fires under the threshold too" survived.** The "under the cap"
+   test opened exactly `MAX_OPEN_PAGES` pages — *on* the cap, not under it —
+   where the slice that picks victims comes out empty however the threshold is
+   written. Fixed to sit strictly under the cap with more than one closable
+   page, and the implementation now names the quantity (`excess = len(pages) -
+   cap`) instead of relying on a negative slice being empty by accident.
+
+3. **"the HTML probe goes back to navigating the anchor page" survived.** The
+   test only asserted that every application page was closed, which stays true
+   when the probe navigates the anchor instead. Fixed to assert the anchor is
+   still on `about:blank` and the application's own page is the one carrying the
+   job URL.
+
+The rest were killed first time: the page never closed, the context closed along
+with the page, a failing close propagating, popups left behind, the leak
+assertion always returning True, the cap closing nothing, the cap closing the
+anchor, and the pass going back to one shared page.
+
+### Not done, deliberately
+
+- **`backend/apply/canary.py`, `har.py`, `smoke.py` and
+  `integrations/scheduler.py` all open a page and close only the context.** They
+  are one-shot tools that exit immediately afterwards, so there is nothing to
+  accumulate; converting them would be churn. The pass is where a run lasts all
+  night.
+- **No cap on total pages opened per pass** — only on pages open at once. A pass
+  that opens and closes 500 pages is a pass with 500 jobs, which is a scheduling
+  question, not a leak.
