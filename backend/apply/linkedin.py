@@ -283,5 +283,4 @@ class LinkedInApplier:
                 steps=variant.step_count,
                 seen_before=variant.observed_count - 1,
             )
-        self.knowledge.save()
         return confirmed

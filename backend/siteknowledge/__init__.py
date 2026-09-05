@@ -64,6 +64,7 @@ from backend.logging_setup import get_logger
 log = get_logger(__name__)
 
 __all__ = [
+    "HISTORY_LIMIT",
     "STRATEGY_PRIORITY",
     "Element",
     "ElementNotFound",
@@ -75,6 +76,7 @@ __all__ = [
     "load",
     "on_all_strategies_failed",
     "on_strategy_drift",
+    "rollback",
 ]
 
 
@@ -182,6 +184,40 @@ class Strategy:
     #: Human note about where this came from, e.g. "HAR capture 2026-09-03".
     note: str = ""
 
+    #: True for a candidate inherited from the shared vocabulary rather than
+    #: written for this platform. Only breaks ties — evidence still decides the
+    #: order, because a generic strategy that keeps working IS better than a
+    #: platform one that keeps failing.
+    shared: bool = False
+
+    #: True for a strategy the system derived from the live page after every
+    #: recorded one failed. NEVER tried by resolution — see Element.ordered.
+    #: It is a suggestion to the user, and a suggestion that could quietly
+    #: resolve an element is a suggestion that has already been accepted.
+    proposed: bool = False
+
+    #: Times this exact strategy found the element, and times it was tried and
+    #: did not. Written by resolution, and what `confidence` is computed from.
+    #: Per strategy rather than per element: "this element is unreliable" is not
+    #: actionable, "this SELECTOR stopped working" is.
+    success_count: int = 0
+    fail_count: int = 0
+
+    @property
+    def confidence(self) -> float:
+        """Observed reliability, Laplace-smoothed, in 0..1.
+
+        ``(hits + 1) / (tries + 2)``. The smoothing is what makes the number
+        usable for ordering rather than just for reporting: a strategy nobody
+        has tried scores exactly 0.5, so it sorts BELOW anything with a record
+        of working and ABOVE anything with a record of failing. Without it an
+        untried strategy is 0/0 and every tie-break becomes a special case.
+
+        One success out of one gives 0.67, not 1.0 — a single observation should
+        not outrank a strategy that has worked forty times.
+        """
+        return (self.success_count + 1) / (self.success_count + self.fail_count + 2)
+
     def __post_init__(self) -> None:
         if self.type not in STRATEGY_PRIORITY:
             raise ValueError(
@@ -258,19 +294,58 @@ class Element:
     fail_count: int = 0
     notes: str = ""
 
-    def ordered(self) -> list[Strategy]:
-        """Strategies in the order to try them.
+    #: Strategies derived from a live page after every recorded one failed,
+    #: waiting for the user to accept or reject them. Never tried.
+    proposals: list[Strategy] = field(default_factory=list)
 
-        ``last_working_strategy`` first — it is the freshest evidence about
-        what the site looks like right now — then everything else by durability.
-        A strategy that worked yesterday beats one that was durable in theory.
+    @property
+    def confidence(self) -> float:
+        """How reliably this element gets found at all, Laplace-smoothed.
+
+        Element-level rather than strategy-level: it answers "is this element
+        still findable", which is the question the digest asks before it fails
+        outright. ``success_count`` and ``fail_count`` have existed since the
+        layer was written and nothing ever read them.
         """
-        by_priority = sorted(self.strategies, key=lambda s: s.priority)
-        if not self.last_working_strategy:
-            return by_priority
+        return (self.success_count + 1) / (self.success_count + self.fail_count + 2)
 
-        promoted = [s for s in by_priority if s.id == self.last_working_strategy]
-        return promoted + [s for s in by_priority if s.id != self.last_working_strategy]
+    @property
+    def observations(self) -> int:
+        return self.success_count + self.fail_count
+
+    def ordered(self) -> list[Strategy]:
+        """Strategies in the order to try them, best evidence first.
+
+        Three keys, in this order:
+
+        1. ``last_working_strategy`` — the freshest evidence about what the site
+           looks like right now, and it beats a better lifetime record because
+           a site that changed yesterday changed for everyone.
+        2. Observed reliability. This is the change: the order used to be the
+           original guess at which selector TYPE is most durable, and a testid
+           that had failed eleven times still went first because test ids are
+           durable in theory. Evidence outranks the guess.
+        3. Platform knowledge before the shared vocabulary, then durability.
+           Among strategies nobody has tried yet, a platform's own selector is
+           better evidence than a generic candidate — the vocabulary is a
+           fallback, not a replacement. Note the level this sits at: a SHARED
+           candidate that keeps working still outranks a platform one that keeps
+           failing, because confidence is checked first. Only the unproven are
+           ordered by where they came from.
+
+        Proposals are excluded. A suggestion that could quietly resolve an
+        element is a suggestion that has already been accepted.
+        """
+        candidates = [s for s in self.strategies if not s.proposed]
+        return sorted(
+            candidates,
+            key=lambda s: (
+                s.id != self.last_working_strategy,
+                -s.confidence,
+                s.shared,
+                s.priority,
+            ),
+        )
 
 
 # --------------------------------------------------------------------------
@@ -355,9 +430,11 @@ class SiteKnowledge:
             raise ElementNotFound(self.platform, key, [])
 
         tried: list[str] = []
+        attempted: list[Strategy] = []
         for position, strategy in enumerate(element.ordered()):
             selector = strategy.selector
             tried.append(selector)
+            attempted.append(strategy)
             try:
                 locator = page.locator(selector).first
                 found = (
@@ -377,21 +454,168 @@ class SiteKnowledge:
 
             if found:
                 _resolutions["first" if position == 0 else "later"] += 1
+                # Every strategy tried BEFORE the winner was tried and did not
+                # work. Recording only the winner is how the ordering never
+                # learns: a broken selector that is asked first every time
+                # accumulates no evidence that it is broken.
+                self._record_attempts(attempted[:-1], strategy)
                 self._record_success(element, strategy)
                 return locator
 
         _resolutions["later"] += 1
+        self._record_attempts(attempted, None)
         self._record_failure(element, tried)
         if element.required:
+            # Re-derive BEFORE giving up. Every recorded way of finding this
+            # element has failed, which is exactly the moment the shared
+            # vocabulary's generic candidates are worth testing against the live
+            # page — and if one of them finds it, the user gets a suggested fix
+            # instead of a parked job and a mystery.
+            proposal = self._propose_strategy(page, element, visible=visible)
             if on_all_strategies_failed is not None:
                 try:
-                    on_all_strategies_failed(self.platform, key, tried)
+                    on_all_strategies_failed(
+                        self.platform, key, tried, proposal.selector if proposal else ""
+                    )
+                except TypeError:
+                    # An older hook that takes three arguments. Alerting on the
+                    # failure matters more than including the suggestion.
+                    try:
+                        on_all_strategies_failed(self.platform, key, tried)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("strategy_alert_hook_failed", error=str(exc)[:150])
                 except Exception as exc:  # noqa: BLE001 - alerting must not mask the fault
                     log.warning("strategy_alert_hook_failed", error=str(exc)[:150])
             raise ElementNotFound(self.platform, key, tried)
 
         log.debug("optional_element_absent", platform=self.platform, key=key)
         return None
+
+    def _propose_strategy(
+        self, page: Any, element: Element, *, visible: bool = True
+    ) -> Strategy | None:
+        """Derive a new way of finding this element from the live page.
+
+        Generation rather than selection, which is the gap this closes: the
+        layer could only ever pick from strategies someone had already written,
+        so when all of them broke it parked the job and waited for a human to
+        open the site.
+
+        The candidates come from the shared vocabulary — accessible role and
+        name, the two things a redesign cannot change without changing what the
+        form IS — and each is tried against the page in front of us. The first
+        that resolves is recorded as a PROPOSAL: stored on the element, sent to
+        the user, and never used to resolve anything until they accept it. A
+        derived selector that silently started answering would be the system
+        guessing at where the Submit button is, which is the one place guessing
+        is unacceptable.
+
+        Returns the proposal, or None when nothing generic matched either.
+        """
+        from backend.siteknowledge.vocabulary import shared_candidates
+
+        known = {strategy.id for strategy in element.strategies}
+        known.update(strategy.id for strategy in element.proposals)
+
+        for candidate in shared_candidates(element.key):
+            if candidate.id in known:
+                continue
+            try:
+                locator = page.locator(candidate.selector).first
+                found = (
+                    locator.is_visible(timeout=1000) if visible else locator.count() > 0
+                )
+            except Exception as exc:  # noqa: BLE001 - absence is normal here
+                log.debug(
+                    "derived_candidate_absent",
+                    platform=self.platform,
+                    key=element.key,
+                    selector=candidate.selector,
+                    error=str(exc)[:120],
+                )
+                continue
+            if not found:
+                continue
+
+            candidate.proposed = True
+            candidate.note = (
+                f"derived {datetime.now(UTC).date().isoformat()} after every "
+                f"recorded strategy failed; not in use until accepted"
+            )
+            element.proposals.append(candidate)
+            self.dirty = True
+            log.warning(
+                "strategy_proposed",
+                platform=self.platform,
+                key=element.key,
+                selector=candidate.selector,
+                note="found on the live page; awaiting confirmation",
+            )
+            return candidate
+
+        log.error(
+            "no_strategy_could_be_derived",
+            platform=self.platform,
+            key=element.key,
+            note="the element is not findable by role or name either",
+        )
+        return None
+
+    def accept_proposal(self, key: str, selector: str) -> Strategy | None:
+        """Promote a proposal to a real strategy. The user said yes.
+
+        Appended rather than replacing anything: the old strategies stay, with
+        their record of having failed, which is what keeps them ordered last
+        instead of being silently forgotten and re-added by a later capture.
+        """
+        element = self.elements.get(key)
+        if element is None:
+            return None
+        match = next((s for s in element.proposals if s.selector == selector), None)
+        if match is None:
+            return None
+
+        element.proposals.remove(match)
+        match.proposed = False
+        # A platform strategy now, not a shared candidate: the user confirmed it
+        # for THIS site, and it must survive the save that drops shared ones.
+        match.shared = False
+        element.strategies.append(match)
+        self.dirty = True
+        log.info(
+            "strategy_accepted", platform=self.platform, key=key, selector=selector
+        )
+        return match
+
+    def reject_proposal(self, key: str, selector: str) -> bool:
+        """The user said no. Deleted, so the next failure derives again."""
+        element = self.elements.get(key)
+        if element is None:
+            return False
+        match = next((s for s in element.proposals if s.selector == selector), None)
+        if match is None:
+            return False
+        element.proposals.remove(match)
+        self.dirty = True
+        log.info(
+            "strategy_rejected", platform=self.platform, key=key, selector=selector
+        )
+        return True
+
+    def _record_attempts(self, failed: list[Strategy], winner: Strategy | None) -> None:
+        """Credit the strategy that worked, debit the ones that did not.
+
+        Called on every resolution, not only on failure. Before this the layer
+        promoted a strategy only when the one above it failed — it learned from
+        failure and nothing else, so a strategy that had worked forty times
+        carried exactly as much weight as one written from a guess.
+        """
+        for strategy in failed:
+            strategy.fail_count += 1
+            self.dirty = True
+        if winner is not None:
+            winner.success_count += 1
+            self.dirty = True
 
     def _record_success(self, element: Element, strategy: Strategy) -> None:
         drifted = (
@@ -552,20 +776,29 @@ class SiteKnowledge:
 
     # -- persistence ------------------------------------------------------
 
-    def save(self, *, force: bool = False) -> None:
-        """Write promotions and counters back. A no-op when nothing changed."""
+    def save(self, *, force: bool = False, reason: str = "resolution") -> None:
+        """Write promotions and counters back, keeping the version replaced.
+
+        A no-op when nothing changed. ``reason`` says WHY this version exists —
+        resolution promoting a strategy, a capture ingest, an accepted proposal,
+        a hand edit — and it is the difference between a history that can be
+        rolled back and a pile of timestamps. Three different things write these
+        files and none of them left a record of having done so; a bad ingest was
+        permanent.
+        """
         if not (self.dirty or force):
             return
         if self.directory is None:  # pragma: no cover - only in synthetic tests
             return
 
         self.directory.mkdir(parents=True, exist_ok=True)
+        self._archive(reason)
         _write_json(
             self.directory / "elements.json",
             {
                 "platform": self.platform,
                 "elements": {
-                    key: asdict(element)
+                    key: _element_payload(element)
                     for key, element in sorted(self.elements.items())
                 },
             },
@@ -581,7 +814,123 @@ class SiteKnowledge:
             },
         )
         self.dirty = False
-        log.debug("site_knowledge_saved", platform=self.platform)
+        log.debug("site_knowledge_saved", platform=self.platform, reason=reason)
+
+    # -- versions ---------------------------------------------------------
+
+    def _archive(self, reason: str) -> None:
+        """Copy the file about to be overwritten into history, and index it.
+
+        Before the write, not after: the point is to keep what is being
+        replaced. A failure here must not stop the save — losing a history entry
+        is recoverable, refusing to record what resolution learned is not — so
+        everything is caught and logged.
+        """
+        if self.directory is None:  # pragma: no cover - synthetic knowledge
+            return
+        current = self.directory / "elements.json"
+        if not current.exists():
+            return
+
+        try:
+            history_dir = self.directory / "history"
+            history_dir.mkdir(parents=True, exist_ok=True)
+            entries = self.history()
+            version = (entries[-1]["version"] + 1) if entries else 1
+
+            shutil.copy2(current, history_dir / f"{version:04d}-elements.json")
+            entries.append(
+                {
+                    "version": version,
+                    "at": datetime.now(UTC).isoformat(),
+                    "reason": reason,
+                    "elements": len(self.elements),
+                }
+            )
+            _write_json(
+                history_dir / "index.json",
+                {"platform": self.platform, "versions": entries[-HISTORY_LIMIT:]},
+            )
+            for stale in entries[:-HISTORY_LIMIT]:
+                (history_dir / f"{stale['version']:04d}-elements.json").unlink(
+                    missing_ok=True
+                )
+        except OSError as exc:
+            log.warning(
+                "site_knowledge_history_failed",
+                platform=self.platform,
+                error=str(exc)[:200],
+            )
+
+    def history(self) -> list[dict[str, Any]]:
+        """Every kept version, oldest first: what changed, when, and why."""
+        if self.directory is None:  # pragma: no cover - synthetic knowledge
+            return []
+        index = _read_json(self.directory / "history" / "index.json")
+        return list(index.get("versions") or [])
+
+
+HISTORY_LIMIT = 20
+"""How many previous versions of a platform's elements file to keep.
+
+Twenty because the thing being recovered from is a bad edit or a bad ingest,
+which is noticed within days — and these files are tens of kilobytes, so the
+cost of keeping them is a rounding error against the cost of not being able to
+undo a capture that overwrote a working selector.
+"""
+
+
+def rollback(platform: str, version: int, *, directory: Path | None = None) -> bool:
+    """Restore a platform's elements file to a kept version.
+
+    Returns False when that version is not in the history rather than raising:
+    the caller is a person typing a number, and the honest answer to a number
+    that is not there is "no", not a traceback.
+
+    The rollback is itself archived, so rolling back to the wrong version is
+    also undoable. That matters more than it sounds: the reason to roll back at
+    all is that something overwrote a working file, and a one-way undo just
+    moves which write is unrecoverable.
+    """
+    target = directory if directory is not None else _platform_dir(platform)
+    source = target / "history" / f"{version:04d}-elements.json"
+    if not source.exists():
+        log.error(
+            "site_knowledge_rollback_missing",
+            platform=platform,
+            version=version,
+            path=str(source),
+        )
+        return False
+
+    knowledge = load(platform, directory=target)
+    knowledge._archive(f"superseded by rollback to v{version}")
+    shutil.copy2(source, target / "elements.json")
+    log.warning(
+        "site_knowledge_rolled_back",
+        platform=platform,
+        version=version,
+        note="elements.json replaced; flows and quirks untouched",
+    )
+    return True
+
+
+def _element_payload(element: Element) -> dict[str, Any]:
+    """One element as it should be written back.
+
+    Shared-vocabulary candidates are dropped: they are merged in at load from
+    ``vocabulary.py``, and writing them into a platform file would fork eleven
+    private copies that a correction to the vocabulary could never reach. The
+    evidence they accumulated is lost with them, which is the deliberate cost —
+    a generic candidate's record belongs to the generic candidate, and pooling
+    nine platforms' evidence into it would be worse than starting fresh.
+    """
+    payload = asdict(element)
+    payload["strategies"] = [
+        asdict(strategy) for strategy in element.strategies if not strategy.shared
+    ]
+    payload["proposals"] = [asdict(strategy) for strategy in element.proposals]
+    return payload
 
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -625,6 +974,27 @@ def _seed_from_defaults(platform: str, target: Path) -> None:
     log.info("site_knowledge_seeded", platform=platform, path=str(target))
 
 
+def _with_shared(key: str, strategies: list[Strategy]) -> list[Strategy]:
+    """Platform strategies, plus the generic candidates it does not already have.
+
+    Merged at LOAD rather than written into the files, so the vocabulary can be
+    corrected in one place instead of eleven, and a platform file stays a record
+    of what is known about that platform. Duplicates are dropped by selector
+    identity: a platform that already names the same role and name keeps its own
+    entry, with whatever evidence that entry has accumulated.
+
+    The shared ones go on the end. That is only the starting order — once
+    anything has been tried, ``Element.ordered`` sorts by evidence and the
+    ``shared`` flag is just the tie-break.
+    """
+    from backend.siteknowledge.vocabulary import shared_candidates
+
+    known = {strategy.id for strategy in strategies}
+    return strategies + [
+        candidate for candidate in shared_candidates(key) if candidate.id not in known
+    ]
+
+
 def load(platform: str, *, directory: Path | None = None) -> SiteKnowledge:
     """Load a platform's knowledge, seeding from the packaged defaults if new."""
     target = directory if directory is not None else _platform_dir(platform)
@@ -640,13 +1010,14 @@ def load(platform: str, *, directory: Path | None = None) -> SiteKnowledge:
         strategies = [Strategy(**s) for s in raw.get("strategies", [])]
         elements[key] = Element(
             key=raw.get("key", key),
-            strategies=strategies,
+            strategies=_with_shared(raw.get("key", key), strategies),
             required=bool(raw.get("required", True)),
             last_working_strategy=raw.get("last_working_strategy"),
             last_verified_at=raw.get("last_verified_at"),
             success_count=int(raw.get("success_count", 0)),
             fail_count=int(raw.get("fail_count", 0)),
             notes=raw.get("notes", ""),
+            proposals=[Strategy(**s) for s in raw.get("proposals", [])],
         )
 
     variants = {

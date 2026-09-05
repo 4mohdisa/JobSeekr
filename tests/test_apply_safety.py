@@ -18,8 +18,8 @@ import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from backend.apply import flow, guardrails
-from backend.apply.run import eligible_jobs
 from backend.apply.draft import FormField
+from backend.apply.run import eligible_jobs
 from backend.base import ApplyOutcome
 from backend.config import settings
 from backend.models import (

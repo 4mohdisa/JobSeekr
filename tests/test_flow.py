@@ -825,3 +825,50 @@ def test_no_broad_handler_around_an_adapter_call_swallows_element_not_found():
         f"flow.py lines {offenders}: a broad handler around an adapter call that "
         "does not re-raise ElementNotFound first"
     )
+
+
+def test_an_application_writes_back_what_it_taught_the_site_knowledge(
+    session, tmp_path
+):
+    """The gap that made the whole learning layer pointless on nine platforms.
+
+    ``GenericAtsApplier`` is one class shared by all nine external ATS adapters
+    and it never called ``save`` at all, so every promotion and every counter
+    those platforms learned was discarded when the process exited. LinkedIn and
+    Seek each called it from their own ``confirmed()``, which is the wrong
+    moment twice over: not reached on the failure path, and reached on every
+    poll of the confirmation state.
+
+    Saving is now one call in the flow, once per application, however it ended —
+    and this is the test that fails if it goes away again.
+    """
+    import json
+
+    from backend.siteknowledge import load
+
+    directory = tmp_path / "acme"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "elements.json").write_text(
+        json.dumps(
+            {
+                "platform": "acme",
+                "elements": {
+                    "apply_button": {
+                        "key": "apply_button",
+                        "required": True,
+                        "strategies": [{"type": "css", "value": "button.apply"}],
+                    }
+                },
+            }
+        )
+    )
+    knowledge = load("acme", directory=directory)
+    knowledge.elements["apply_button"].success_count = 7
+    knowledge.dirty = True
+
+    adapter = FakeAdapter(steps=simple_steps())
+    adapter.knowledge = knowledge
+    run(session, adapter, dry_run=True)
+
+    written = json.loads((directory / "elements.json").read_text())
+    assert written["elements"]["apply_button"]["success_count"] == 7

@@ -4399,3 +4399,470 @@ anchor, and the pass going back to one shared page.
 - **No cap on total pages opened per pass** — only on pages open at once. A pass
   that opens and closes 500 pages is a pass with 500 jobs, which is a scheduling
   question, not a leak.
+
+---
+
+# Session — 2026-09-05 (macOS, unattended, four phases)
+
+Merge to main, then question intelligence, performance telemetry and site
+knowledge v2. `ALLOW_LIVE_SUBMIT` and `OUTBOUND_ENABLED` were not touched and
+are still false. Nothing was submitted and no email was sent.
+
+**Main is at `c9ba16a`: 1012 tests, rehearsal green.** The three feature
+branches are stacked PRs on top of it — see "The PR stack" below, and read the
+merge order before deleting anything.
+
+## Phase 1 — merged
+
+`feat/real-templates` fast-forwarded; `feat/tab-management` merged with the one
+expected NOTES.md conflict (both appended at the end; both sections kept).
+Full suite and rehearsal green after each: **992 tests** after the first,
+**1012** after the second. Both branches deleted locally and on the remote.
+
+There were no open PRs to retarget — the four stale remote branches the local
+checkout still listed (`chore/smoke-tests`, `feat/derivation-preview`,
+`feat/outbound-wire`, `feat/setup-doctor`) had already been deleted on GitHub;
+`git fetch -p` pruned them. PRs #21 and #22 were opened retroactively so the
+two merges have a record, and closed as merged by the push.
+
+## The PR stack
+
+| PR | Branch | Base |
+|---|---|---|
+| [#23](https://github.com/4mohdisa/JobSeekr/pull/23) | `feat/question-intelligence` | `main` |
+| [#24](https://github.com/4mohdisa/JobSeekr/pull/24) | `feat/performance-telemetry` | `feat/question-intelligence` |
+| [#25](https://github.com/4mohdisa/JobSeekr/pull/25) | `feat/siteknowledge-v2` | `feat/performance-telemetry` |
+
+Stacked because they genuinely depend on each other: telemetry reads the
+question ledger #23 adds, and site knowledge v2 uses the weekly digest and the
+cache recording from both. **Merge #23 → #24 → #25, retargeting each next PR to
+its new base BEFORE deleting the merged branch.** Deleting a base auto-closes
+the PRs targeting it and GitHub will not reopen them.
+
+This whole section lands with #25, so #23 and #24 carry no NOTES entry of their
+own. That is the cost of stacking; the alternative was a NOTES.md conflict on
+every merge.
+
+## Phase 2 — question intelligence (#23)
+
+### The denominator had to be built first
+
+Nothing recorded a question that was *answered*. `FailureEvent` holds
+abstentions; no `Application` row is written when a job parks. So a submitted
+application had zero abstentions **by construction** (`flow.py` returns
+`_park` at the first one) and a parked one had no application row at all. The
+two tables never describe the same pass, and every coverage ratio computable
+from them was a lower bound on one side or the other.
+
+New `question_event` table: one row per screening question per encounter,
+carrying which mechanism answered it — bank, fact, form map, or abstained.
+Written from `build_draft`, because reconstructing provenance afterwards is
+impossible: `_synthetic_answer` stamps `EXACT`/confidence 100.0 on profile,
+fact and form-map answers alike, so by the time a draft is finished a
+fact-derived answer is indistinguishable from a bank hit.
+
+Profile-filled identity fields are deliberately excluded. A form asking for an
+email address is not asking the user anything, and counting it would push
+coverage toward 100% by padding the denominator with questions that cannot
+fail.
+
+### Clustering reuses the resolver's disqualifiers
+
+`answers.same_question` is the resolution matcher with the answer bank taken
+out: the same `_loose` forms, the same rapidfuzz pair, the same
+`FUZZY_THRESHOLD`, and the same four disqualifiers. Without the last part,
+"Are you available for part-time work?" and "…full-time work?" score **88.9** —
+over the threshold — and would be reported as one question. That would tell the
+user they had already answered something they had answered the opposite of.
+
+### Two existing numbers were wrong
+
+1. **The funnel's `acknowledged` and `replied` stages were identical by
+   construction.** `work.py` inlined a literal copy of the four statuses
+   `REPLIED_STATUSES` holds, so the two bars could never disagree for any
+   dataset. `replied` now means a person replied, as against an automated
+   acknowledgement, derived by subtraction from `REPLIED_STATUSES` so a fifth
+   status can only ever be added in one place.
+2. **The per-campaign funnel counts submitted applications only.** An aborted
+   attempt never reached an employer; counting it depresses every rate below it.
+   The existing global funnel counted every `Application` row.
+
+The honest definitions are written into `_campaign_funnels`' docstring:
+`discovered` is every job row carrying the campaign id with status ignored (it
+is a single mutable field, so filtering it makes the top of the funnel shrink as
+the pipeline succeeds); `scored` is DISTINCT job ids with a non-null `final`
+(one job legitimately has a Score row per profile/rubric pair, and a stage-2
+failure still writes a row with no number in it).
+
+### Fact leverage lives in facts.py, not with the other aggregates
+
+`tests/test_derivation_preview.py` enforces that `DerivedAnswer` has exactly one
+reader, so the fact-hash staleness check cannot be bypassed. The lazy move was
+to add `backend/questions.py` to that allowlist. The right one was to put
+`leverage()` in `facts.py`. Widening a safety guard to accommodate new code is
+how the guard stops meaning anything.
+
+### The weekly digest is new
+
+There was no weekly digest — only the nightly one, which already carries a
+168-hour failure-trends section. Rather than add a fourth thing to the evening
+message, `build_weekly_digest()` runs Sunday 18:30 (`/weekly` on demand), half
+an hour after the existing rubric review. Question intelligence, performance and
+site-knowledge health all report into it. `failures.digest_lines` already names
+why: a section that appears every evening saying nothing is a section that stops
+being read, on exactly the evening it has something to say.
+
+### The dashboard did not build
+
+Seven pre-existing TypeScript errors — five `Button variant="secondary"`, which
+is not one of the four variants, and two `DataTable` calls missing the required
+`rowKey`. `npm run build` failed on `main` too; confirmed identical before and
+after. Fixed, because "surface it on the Analytics page" is not true of a page
+that cannot be built.
+
+### Tests that could not fail
+
+**23 mutations, 23 killed** — but one survived the first attempt and one did not
+apply, both worth writing down.
+
+- *"friction ranks by how often asked, not by jobs parked"* **survived.** The
+  test set up one question that parked jobs and one that did not, so the
+  never-parked *filter* satisfied the assertion and the *ranking* was never
+  exercised. Exactly the shape this project keeps hitting: a different guard
+  answering for the one under test. Fixed with a second test where both
+  questions park jobs and the less-frequent one is more expensive.
+- *"the flow records profile-filled identity fields too"* reported **NOT
+  APPLIED** — the target string `screening=screening,` appears twice in
+  `flow.py`. The harness checks the target was found exactly once before
+  editing, because a mutation that does not apply is indistinguishable from a
+  test that caught it.
+
+## Phase 3 — performance telemetry (#24)
+
+### What was measured, and what was already there
+
+Nothing. `Run` records a start and an end for a whole pass — browser startup
+plus every application plus every pacing wait as one undifferentiated number, in
+which a field-enumeration regression and a slow morning are the same figure.
+`Application.applied_at` is the only other time record and it is an instant, not
+a duration, stamped at the end.
+
+`stage_timing` records six stages per application: page load, field enumeration,
+answer resolution, document build, upload, submit. The document build is not on
+the apply path at all — a job is only eligible once its documents exist and have
+passed the gate — so it is timed in `documents/build.py`.
+
+`cache_event` records the three caches whose lookups are not questions: form
+maps per **form shape**, site knowledge per **element**, embeddings per **text**.
+
+### The answer bank and the facts layer are not recorded twice
+
+Their lookups *are* screening questions, and `question_event` already records
+the outcome of every one. Writing them to a second table would be the same fact
+in two places, free to drift.
+
+They are consulted in **sequence** — facts only see what the bank could not
+answer — so their denominators are different populations on purpose. A facts hit
+rate computed over every question would fall every time the answer bank
+improved, which is the opposite of the truth. Every rate on the chart is
+labelled with what one lookup counts, for the same reason.
+
+### Pacing
+
+Recorded as `Stage.PACING`, and structurally excluded from work:
+
+- `WORK_STAGES = frozenset(Stage) - {Stage.PACING}` — defined by subtraction, so
+  a stage added later is work unless someone deliberately excludes it.
+- `StageProfile` returns `work` and `pacing` as **separate fields**, not one
+  list a caller could sum.
+- The wire schema keeps them separate, and the UI labels it "deliberate, not
+  work".
+
+It is measured rather than ignored because an unmeasured wait is
+indistinguishable from a hang. Nothing about pacing itself was changed.
+
+### The rehearsal now asserts the instrumentation is reached
+
+Two new stages: `telemetry wired` and `question ledger wired`. Not "does the
+module work" — the unit tests answer that. Whether a full pipeline run leaves
+any measurement behind at all. Four features in this project shipped complete,
+tested and never called; a stage timer nothing invokes looks identical to a
+working one in every unit test. A dry run reaches four of the six stages
+(`SUBMIT` and `PACING` are legitimately absent), and those four are what the
+stage asserts.
+
+Live proof from one rehearsal: 10 stage timings across `document_build`,
+`page_load`, `field_enumeration`, `answer_resolution` and `upload`; 3 embedding
+cache events; 2 question events.
+
+### Waste: twelve claims, each verified with real numbers
+
+Every claim was checked against the code by an independent pass whose default
+was to refute it. Nine are real and **not worth fixing** — the measurements are
+here so nobody re-derives them:
+
+| Claim | Verdict | Measured cost |
+|---|---|---|
+| ATS probe loads the job URL, then `adapter.open` loads it again | CONFIRMED | 1–4s per probed job, ~1% of pass wall clock against a 90–240s pacing sleep. The obvious `if page.url != job.url` guard is **unreliable** — white-labelled portals redirect, so `page.url` is the final URL and the guard skips the reload on exactly the jobs it was written for |
+| `build_draft` re-reads profile, documents, score and the whole answer bank per form step | CONFIRMED | ~12 extra SQLite statements per application, under 5 ms. Identity-map hits, no API cost |
+| `eligible_jobs` N+1 | CONFIRMED | 9 queries and 3.1 ms on the real 235-job database |
+| `get_analytics` calls `_latest_score` per application | CONFIRMED | Zero today (no application rows). 25–75 ms at 500 applications |
+| Combined PDF runs a third fabrication self-check | CONFIRMED | ~$0.001 per job, ~33% of the document self-check spend. **Not fixed — see below** |
+| `EmbeddingCache.put` opens/closes the file per vector | CONFIRMED | 7 ms per 200-job cold run, 0.3% of a run that spends seconds on network |
+| Month-wide `SUM` over unindexed `called_at` before every LLM call | CONFIRMED | 0.047 ms at 1k rows, 3.24 ms at 100k. 0.02% of the call it guards |
+| `needs_scoring` N+1 | CONFIRMED | 12.6 ms at N=200, 558 ms at N=10,000 |
+| LinkedIn saves its knowledge file on every `confirmed()` | PARTLY | 0.3 ms and 12.6 KB per attempt. Superseded by phase 4, which moved saving out of the adapters entirely |
+
+Three were worth fixing and are in #24:
+
+1. **The rehearsal ran twice per suite**, once per test, and the second run
+   computed nothing the first did not: 8 extra pdflatex subprocesses, 1.45–1.53s
+   of a 31.9s suite that runs on every commit (~4.7%, and worse on
+   Windows/MiKTeX). One module-scoped fixture.
+2. **`eligible_jobs` hydrated every `Application` row** — JSON columns, enums and
+   all — to read one integer off each. Now selects the column: 20.1 ms → 1.7 ms
+   at a year of applications, identical set.
+3. **A blank fact was offered to the derivation step**, costing one model call
+   per blank row to be told it says nothing. The filter already existed in
+   `preview_all`, so the dry-run preview said "the fact is blank" while the live
+   path paid to rediscover it. Moved into `facts_for`, where both callers get it.
+
+Two more were fixed in my own new code before they shipped: the question ledger
+was clustered twice per analytics request, and `build_weekly_digest` called
+`facts.leverage` twice with no write between.
+
+### `eligible_jobs` had no test coverage at all
+
+Found while mutating fix 2. Emptying the applied set entirely — so a job could
+be applied to **twice**, against hard rule 5 — left all 1072 tests green.
+`UNIQUE(job_id)` and `_run_apply`'s own check would still have caught it, but
+only after a browser tab had opened on the employer's site. There is a test now,
+in `tests/test_apply_safety.py` where a reviewer will find it.
+
+### Tests that could not fail
+
+**22 mutations, 22 killed**, plus 2 on the waste fixes. Three survived first
+time and all three were the tests' fault:
+
+- *"cost attributes job-less spend to every application"* survived because the
+  guard it mutated is defensive rather than behaviour-bearing — a `None` key in
+  a defaultdict that nothing reads. Replaced with the plausible wrong version
+  (pooling every job's spend), and a test that a second job's spend does not
+  land on this application.
+- *"site knowledge counts a healed element as a first-strategy hit"* and
+  *"drain_resolutions does not reset"* both survived because nothing exercised
+  the new tally through a real `resolve` call. Four tests added.
+
+## Phase 4 — site knowledge v2 (#25)
+
+### The bug underneath all six items
+
+`GenericAtsApplier` — one class shared by **all nine** external ATS adapters —
+never called `knowledge.save()` at all. Every promotion, every counter, every
+flow variant those platforms learned was discarded when the process exited. The
+layer learned and then forgot, on two thirds of the platforms it supports.
+LinkedIn and Seek each called it from their own `confirmed()`, which is the
+wrong moment twice over: not reached on the failure path, and reached on every
+poll of the confirmation state.
+
+Saving is now one call in the flow, once per application, however it ended.
+`save` is a no-op when nothing changed.
+
+### 1. Learn from success
+
+Every strategy tried *before* the winner is debited and the winner credited, on
+every resolution — `Strategy.success_count` / `fail_count`. Ordering became:
+
+1. `last_working_strategy` (freshest evidence — a site that changed, changed)
+2. observed reliability
+3. platform-before-shared, then durability, as tie-breaks among the unproven
+
+The change is #2. The order used to be the original guess at which selector
+*type* is most durable, so a testid that had failed eleven times still went
+first because test ids are durable in theory.
+
+### 2. Use the counts
+
+`success_count` and `fail_count` existed since this layer was written and
+nothing read them. Confidence is Laplace-smoothed, `(hits + 1) / (tries + 2)`,
+which is what makes it usable for ordering rather than only for reporting: an
+untried strategy scores exactly 0.5, below anything with a record of working and
+above anything with a record of failing. One success out of one gives 0.67, not
+1.0 — a single observation should not outrank a strategy that has worked forty
+times.
+
+`MIN_OBSERVATIONS = 4` before an element is called degrading. Without it, every
+element of a fresh install is reported as degrading on the first digest, and a
+report that is wrong on day one is a report nobody reads on day thirty.
+
+### 3. Generate strategies, don't only select them
+
+When every recorded strategy fails, `_propose_strategy` tries the shared
+vocabulary's candidates against the live page and stores the first that
+resolves as a **proposal**: written to the file, sent to Telegram with the
+suggested fix, and **never used to resolve anything** until `/usefix`.
+
+A derived selector is a guess about where the Submit button is. This is the one
+place in the project where a guess would be acted on rather than abstained from,
+so it goes through the same shape as the answer bank: propose, ask, confirm,
+then use. Rejecting deletes it rather than remembering it as wrong, so the next
+failure derives again from a fresh look at the page.
+
+### 4. Cross-platform vocabulary
+
+Nine platforms, the same four element keys (`apply_button`, `confirmation`,
+`file_input`, `submit_button`), and no shared candidates — so a tenth platform
+starts with nothing and any of the nine that loses a selector falls through to
+no candidate at all.
+
+`vocabulary.py` holds role-and-accessible-name candidates, merged in at **load**
+and never written into a platform file: a correction to the vocabulary must not
+have to reach eleven private forks. They are plain dicts in the same shape the
+JSON files use, so the vocabulary is data loaded the same way platform knowledge
+is, and the module has no import from the package it lives in.
+
+Platform strategies win every tie. Note the level that sits at: a *shared*
+candidate that keeps working still outranks a platform one that keeps failing,
+because confidence is checked first. Only the unproven are ordered by provenance.
+
+### 5. Drift as a trend
+
+Drift already reached the failure ledger (`notify._record_drift`). What was
+missing was the reading of it: `platform_churn` compares this window against the
+one immediately before, because the question is not "how many failures" but
+"more or fewer than last time".
+
+Elements that drifted last week and not this week are reported as **"quiet
+since"**, not "fixed". Nothing here knows the difference between a repair and a
+site that was not visited, and the digest says so in the line itself.
+
+### 6. Version and roll back
+
+Every `save` archives the file it is about to replace into
+`history/NNNN-elements.json` and indexes it with a reason — `resolution`,
+`capture ingest`, `accepted derived strategy`, `superseded by rollback`. Three
+things write these files and none of them left a record; a bad ingest was
+permanent.
+
+    uv run python -m backend.siteknowledge history linkedin
+    uv run python -m backend.siteknowledge rollback linkedin 4
+    uv run python -m backend.siteknowledge health
+
+The rollback is itself archived, so rolling back to the wrong version is
+undoable too — the reason to roll back at all is that something overwrote a
+working file, and a one-way undo just moves which write is unrecoverable.
+`HISTORY_LIMIT = 20`.
+
+### Tests that could not fail
+
+**29 mutations, 29 killed.** One survived first time and one did not apply:
+
+- *"the apply flow no longer saves what an application taught"* **survived** —
+  nothing asserted that the flow saves at all, which is precisely the gap that
+  let nine adapters discard everything they learned in the first place. A test
+  now drives a whole application through `run_apply` against a knowledge object
+  with a real directory and asserts the counter reached the file.
+- *"a duplicate shared candidate is added alongside the platform one"* reported
+  NOT APPLIED because `ruff format` had joined the target onto one line.
+
+## Decisions taken without asking
+
+- **Stacked the three PRs** rather than branching all three from `main`. They
+  genuinely depend on each other and would otherwise conflict in `models.py`,
+  `work.py`, `schemas.py`, `flow.py` and `Analytics.tsx`. The merge order and
+  the retarget-before-delete rule are at the top of this section.
+- **A new weekly digest** rather than a fourth section in the nightly one.
+  Three phases wanted a weekly-cadence report; that is a second caller, not
+  speculation.
+- **Funnel `acknowledged` = any contact, `replied` = a person replied.**
+  `response_status` holds only the latest state, so the stages nest rather than
+  partition — an interview counts at all three. That is what makes the funnel
+  monotonic and readable.
+- **`analytics_min_sample` gates rates, not counts.** Counts are facts about
+  what happened; the greying rule is about comparisons. Coverage, interview rate
+  and the per-campaign rate are gated; frequency, friction and fact leverage are
+  not.
+- **Run attribution for timings is by time window**, not a run id, because the
+  `Run` row is written at the *end* of a pass. Exact on a single-user machine
+  that runs one pass at a time; wrong the moment two passes overlap. The
+  alternative — writing the Run row up front — changes what a crashed pass
+  leaves behind, which is a bigger change than the problem.
+- **Fixed the seven pre-existing TypeScript errors.** Out of scope strictly, but
+  the phase-2 deliverable is a dashboard page and the dashboard did not build.
+
+## What broke, and what found it
+
+- **A wrong number, caught by mutation, not by review.** The friction ranking
+  test passed against a mutation that reversed the ranking, because the
+  never-parked filter satisfied it instead. Fourth session running that this
+  exact shape has appeared.
+- **`eligible_jobs` had no coverage.** Hard rule 5's first line of defence, and
+  emptying it left 1072 tests green.
+- **Nine adapters never persisted anything.** Found by an adversarial read, not
+  by a test — no test asserted that saving happens.
+- **The frontend had not built for some time.** Nothing in the suite runs
+  `tsc`, so the backend tests stayed green through it.
+
+## Still unverified
+
+Everything the previous sessions listed, unchanged, plus:
+
+- **No stage timing has ever been recorded from a real browser.** The rehearsal
+  proves the timers are reached; every duration in the database so far is a fake
+  page returning instantly. The numbers are structurally right and
+  quantitatively meaningless until an application runs against a real site.
+- **No cache event has been recorded for form maps or site knowledge.** The
+  rehearsal disables form mapping and its fake adapter does not use site
+  knowledge, so only the embedding cache has produced rows.
+- **`cost_per_application` has never had a submitted application to divide by.**
+  Zero application rows exist.
+- **No strategy has ever been proposed against a real page.** `_propose_strategy`
+  is tested against the fake page, which matches selectors literally against a
+  set. Whether Playwright's `role=` selector finds a real Greenhouse Apply
+  button is a question only the HAR capture can answer.
+- **No knowledge file has ever been rolled back in anger.** The versioning is
+  tested; it has never recovered a real bad ingest.
+- **The weekly digest has never been sent.** No Telegram credentials.
+- **`same_question` clustering has never seen a real screening question.** Its
+  disqualifiers are the resolver's, which have been exercised against realistic
+  phrasings in `tests/test_answers.py`, but the clustering itself has only ever
+  run on fixtures.
+
+## Needs you
+
+1. **`scoring_stage1_top_n` does nothing.** It is read in exactly one place
+   (`stage1.py:235`), assigned to a local, and never used again — while being
+   exposed as a user-editable setting in the API and the dashboard. Setting it
+   to 10 to cut spend changes nothing. `scoring_stage2_max` is the live knob
+   (PR #16 replaced the prefilter with it and left this behind). **Delete the
+   setting, or wire it?** Deleting a control from your dashboard is your call,
+   so I left it. The code change either way is three lines.
+
+2. **The combined PDF's fabrication self-check is a third model call over text
+   that was just checked twice** — ~$0.001 per job, about a third of the
+   document self-check spend. `verify_pdf(profile=None)` is a documented,
+   supported mode, so the fix looks like one expression. **It is not safe as
+   written**, and this is the trap: if the resume fails the model check but the
+   combined PDF only runs the deterministic ones, the resume is ungated while
+   the combined PDF passes — and a one-slot form attaches the combined PDF. The
+   correct fix propagates the resume and letter verdicts into the combined
+   report. It touches hard rule 3, so I did not do it unattended.
+
+3. **The HAR capture, still.** Every strategy value in every knowledge file is
+   an unverified guess, including the new shared vocabulary. Phase 4 makes the
+   layer learn *better* once real values exist; it cannot supply them.
+
+4. **Everything the previous sessions listed** — API keys, the answer bank,
+   `ALLOW_LIVE_SUBMIT`, `work_rights` — is unchanged.
+
+## Explicitly not done
+
+- Pacing was not touched, in any sense: not shortened, not reconfigured, not
+  optimised. It is measured, and the measurement is structurally prevented from
+  entering a work total.
+- `ALLOW_LIVE_SUBMIT` and `OUTBOUND_ENABLED` were not touched.
+- No recurring check-in, timer or poll was scheduled. The only new scheduled job
+  is the Sunday weekly digest, which is a report, not a poll.
+- The nine "not worth fixing" performance findings were left alone rather than
+  optimised on speculation. The measurements are in the table above so the
+  question does not have to be reopened from scratch.

@@ -62,6 +62,41 @@ def notify(title: str, body: str = "", priority: Priority = Priority.NORMAL) -> 
         log.exception("notify_failed", title=title, error=str(exc)[:200])
 
 
+def _all_strategies_failed(
+    platform: str, key: str, tried: list[str], suggestion: str
+) -> None:
+    """Nothing found the element. Say so, with a fix if one could be derived.
+
+    The message differs on purpose. Without a suggestion this is "open the site
+    yourself"; with one it is a yes/no question, and the difference between
+    those two is whether the user has to go and look at a careers page to
+    unblock the queue.
+    """
+    log.error("all_strategies_failed", platform=platform, key=key, tried=tried)
+    if not suggestion:
+        notify(
+            "No strategy resolved an element",
+            f"{platform}: nothing found `{key}`, and nothing generic matched it "
+            f"either — it is not findable by accessible role or name.\n"
+            f"Tried {len(tried)} strategies.\n\n"
+            f"Fix: edit data/siteknowledge/{platform}/elements.json, or "
+            f"re-record a HAR.",
+            Priority.IMMEDIATE,
+        )
+        return
+
+    notify(
+        "Suggested fix for a broken element",
+        f"{platform}: every recorded strategy for `{key}` failed, but this one "
+        f"finds it on the live page:\n\n`{suggestion}`\n\n"
+        f"It is NOT in use — a derived selector is a guess about where a control "
+        f"is, and this is not a system that guesses.\n\n"
+        f"`/usefix {platform} {key}` to accept · `/nofix {platform} {key}` to "
+        f"discard and re-derive next time.",
+        Priority.IMMEDIATE,
+    )
+
+
 def _record_drift(platform: str, key: str, was: str, now: str) -> None:
     """Add a drifted strategy to the failure ledger.
 
@@ -179,8 +214,10 @@ def register_hooks() -> None:
         )
     )
 
-    siteknowledge.on_all_strategies_failed = lambda platform, key, tried: log.error(
-        "all_strategies_failed", platform=platform, key=key, tried=tried
+    siteknowledge.on_all_strategies_failed = (
+        lambda platform, key, tried, suggestion="": _all_strategies_failed(
+            platform, key, tried, suggestion
+        )
     )
 
     siteknowledge.on_strategy_drift = lambda platform, key, was, now: (

@@ -175,5 +175,4 @@ class SeekApplier:
         confirmed = self.knowledge.present(page, "confirmation", timeout_ms=8000)
         if confirmed:
             self.knowledge.observe_flow(self._steps_seen)
-        self.knowledge.save()
         return confirmed
