@@ -107,7 +107,9 @@ def test_whitespace_counts_as_a_change():
 # =========================================================================
 
 
-def test_a_specific_fact_can_answer_no_for_what_it_excludes(session, licence, monkeypatch):
+def test_a_specific_fact_can_answer_no_for_what_it_excludes(
+    session, licence, monkeypatch
+):
     """Class C is not MR. The fact states the class, so No is supported."""
     monkeypatch.setattr(
         "backend.llm.client.complete_json",
@@ -140,7 +142,9 @@ def test_a_silent_fact_abstains_rather_than_answering_no(session, licence, monke
     )
 
     assert (
-        facts.derive(licence, "Do you hold a current forklift licence?", choices=["Yes", "No"])
+        facts.derive(
+            licence, "Do you hold a current forklift licence?", choices=["Yes", "No"]
+        )
         is None
     )
 
@@ -180,7 +184,7 @@ def test_an_unsupported_result_is_ignored_even_when_it_carries_an_answer(
 
 
 def test_any_stated_uncertainty_abstains(session, licence, monkeypatch):
-    """"supported" plus a doubt is still a doubt.
+    """ "supported" plus a doubt is still a doubt.
 
     If the model was weighing whether something counts, that weighing IS the
     uncertainty — using the answer anyway would be guessing with extra steps.
@@ -195,7 +199,9 @@ def test_any_stated_uncertainty_abstains(session, licence, monkeypatch):
         },
     )
 
-    assert facts.derive(licence, "Is your licence current?", choices=["Yes", "No"]) is None
+    assert (
+        facts.derive(licence, "Is your licence current?", choices=["Yes", "No"]) is None
+    )
 
 
 def test_an_answer_outside_the_offered_choices_abstains(session, licence, monkeypatch):
@@ -210,7 +216,9 @@ def test_an_answer_outside_the_offered_choices_abstains(session, licence, monkey
         },
     )
 
-    assert facts.derive(licence, "Do you hold a licence?", choices=["Yes", "No"]) is None
+    assert (
+        facts.derive(licence, "Do you hold a licence?", choices=["Yes", "No"]) is None
+    )
 
 
 def test_a_model_failure_is_an_abstention_not_a_crash(session, licence, monkeypatch):
@@ -242,7 +250,9 @@ def test_a_first_derivation_asks_and_still_abstains(session, licence, monkeypatc
     """The model's reading of someone's licence is a proposal until they agree."""
     asked: list[tuple] = []
     confirmable(monkeypatch)
-    monkeypatch.setattr(facts, "on_confirmation_needed", lambda *args: asked.append(args))
+    monkeypatch.setattr(
+        facts, "on_confirmation_needed", lambda *args: asked.append(args)
+    )
 
     answer = facts.resolve_from_facts(
         session,
@@ -258,10 +268,14 @@ def test_a_first_derivation_asks_and_still_abstains(session, licence, monkeypatc
     assert session.exec(select(DerivedAnswer)).one().confirmed_at is None
 
 
-def test_a_confirmed_derivation_answers_without_asking_again(session, licence, monkeypatch):
+def test_a_confirmed_derivation_answers_without_asking_again(
+    session, licence, monkeypatch
+):
     asked: list[tuple] = []
     confirmable(monkeypatch)
-    monkeypatch.setattr(facts, "on_confirmation_needed", lambda *args: asked.append(args))
+    monkeypatch.setattr(
+        facts, "on_confirmation_needed", lambda *args: asked.append(args)
+    )
 
     key = "do you hold a current driver's licence"
     facts.resolve_from_facts(
@@ -290,11 +304,15 @@ def test_a_confirmed_derivation_answers_without_asking_again(session, licence, m
     assert asked == [], "confirmed once means never asked again"
 
 
-def test_an_unanswered_proposal_is_not_re_asked_on_every_pass(session, licence, monkeypatch):
+def test_an_unanswered_proposal_is_not_re_asked_on_every_pass(
+    session, licence, monkeypatch
+):
     """Asking again each pass is how the channel becomes one the user mutes."""
     asked: list[tuple] = []
     confirmable(monkeypatch)
-    monkeypatch.setattr(facts, "on_confirmation_needed", lambda *args: asked.append(args))
+    monkeypatch.setattr(
+        facts, "on_confirmation_needed", lambda *args: asked.append(args)
+    )
 
     key = "do you hold a current driver's licence"
     for _ in range(3):
@@ -327,13 +345,13 @@ def test_a_second_pass_on_an_unconfirmed_derivation_still_abstains(
     monkeypatch.setattr(facts, "on_confirmation_needed", lambda *args: None)
 
     key = "do you hold a current driver's licence"
-    kwargs = dict(
-        question="Do you hold a current driver's licence?",
-        question_key=key,
-        category=FactCategory.LICENCE,
-        choices=["Yes", "No"],
-        region=Region.AU,
-    )
+    kwargs = {
+        "question": "Do you hold a current driver's licence?",
+        "question_key": key,
+        "category": FactCategory.LICENCE,
+        "choices": ["Yes", "No"],
+        "region": Region.AU,
+    }
 
     assert facts.resolve_from_facts(session, **kwargs) is None
     session.flush()
@@ -578,9 +596,12 @@ def test_the_matcher_excludes_the_other_regions_rows():
             region=Region.AU,
         )
     ]
-    assert matching_rows(
-        "Do you have full working rights in Australia?", bank, region=Region.NZ
-    ) == []
+    assert (
+        matching_rows(
+            "Do you have full working rights in Australia?", bank, region=Region.NZ
+        )
+        == []
+    )
 
 
 def test_the_seeded_facts_are_empty(session):

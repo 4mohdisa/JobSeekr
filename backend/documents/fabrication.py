@@ -209,15 +209,21 @@ def _forward_looking(text: str, year: str) -> bool:
     now = datetime.now(UTC).year
     if int(year) not in (now, now + 1):
         return False
-    window = re.search(
-        rf"([^.]*\b{year}\b[^.]*)", text, re.IGNORECASE
-    )
+    window = re.search(rf"([^.]*\b{year}\b[^.]*)", text, re.IGNORECASE)
     if not window:
         return False
     sentence = window.group(1).casefold()
     return any(
         word in sentence
-        for word in ("available", "start", "commence", "from", "notice", "graduat", "expect")
+        for word in (
+            "available",
+            "start",
+            "commence",
+            "from",
+            "notice",
+            "graduat",
+            "expect",
+        )
     )
 
 
@@ -247,9 +253,7 @@ def validate_no_fabrication(
             continue
         if _forward_looking(generated, year):
             continue
-        violations.append(
-            Violation("year", year, "not present in the profile")
-        )
+        violations.append(Violation("year", year, "not present in the profile"))
 
     for match in _METRIC_RE.finditer(generated):
         metric = match.group(0).strip()
@@ -257,9 +261,7 @@ def validate_no_fabrication(
         digits = re.sub(r"[^\d.]", "", compact)
         if compact in re.sub(r"[\s,]", "", facts) or (digits and digits in facts):
             continue
-        violations.append(
-            Violation("metric", metric, "no such figure in the profile")
-        )
+        violations.append(Violation("metric", metric, "no such figure in the profile"))
 
     for match in _ORG_RE.finditer(generated):
         phrase = _trim_org(match.group(1))
@@ -279,7 +281,9 @@ def validate_no_fabrication(
             continue
         violations.append(
             Violation(
-                "organisation", phrase, "not an employer, school or issuer in the profile"
+                "organisation",
+                phrase,
+                "not an employer, school or issuer in the profile",
             )
         )
 

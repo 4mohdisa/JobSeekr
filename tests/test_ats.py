@@ -260,12 +260,18 @@ def test_company_overrides_win_field_by_field():
         tier="platform",
         fields=[
             FieldMapping("email", "Email", "text", source="profile"),
-            FieldMapping("q1", "Question one", "text", source="answer_bank", question="one"),
+            FieldMapping(
+                "q1", "Question one", "text", source="answer_bank", question="one"
+            ),
         ],
     )
     company_map = make_map(
         "fp",
-        fields=[FieldMapping("q1", "Question one", "text", source="answer_bank", question="ONE")],
+        fields=[
+            FieldMapping(
+                "q1", "Question one", "text", source="answer_bank", question="ONE"
+            )
+        ],
     )
 
     merged = merge_maps(platform_map, company_map)
@@ -279,7 +285,9 @@ def test_an_unresolved_override_does_not_blank_a_resolved_platform_field():
     platform_map = make_map(
         "fp", tier="platform", fields=[FieldMapping("q", "Q", "text", source="profile")]
     )
-    company_map = make_map("fp", fields=[FieldMapping("q", "Q", "text", source="unknown")])
+    company_map = make_map(
+        "fp", fields=[FieldMapping("q", "Q", "text", source="unknown")]
+    )
 
     merged = merge_maps(platform_map, company_map)
     assert merged.by_identifier()["q"].source == "profile"
@@ -598,7 +606,9 @@ def campaign():
 
 def test_the_manual_floor_sits_above_the_auto_apply_threshold(campaign):
     """Backwards-looking but correct: manual costs attention, auto costs cents."""
-    assert manual_queue_floor(campaign) == campaign.score_auto_apply + MANUAL_QUEUE_PREMIUM
+    assert (
+        manual_queue_floor(campaign) == campaign.score_auto_apply + MANUAL_QUEUE_PREMIUM
+    )
     assert manual_queue_floor(campaign) > campaign.score_auto_apply
 
 
@@ -750,7 +760,9 @@ def test_a_form_that_gains_a_field_is_a_new_form(monkeypatch, session):
     assert mapper.calls == 1
 
     generic.map_fields(three, platform="greenhouse", session=session)
-    assert mapper.calls == 2, "a new shape must be learned, not guessed from the old one"
+    assert mapper.calls == 2, (
+        "a new shape must be learned, not guessed from the old one"
+    )
 
     # ...and each shape is independently cached from then on.
     generic.map_fields(two, platform="greenhouse", session=session)
@@ -790,7 +802,5 @@ def test_a_different_form_shape_is_a_different_cache_entry(monkeypatch, session)
     monkeypatch.setattr(generic.llm, "complete_json", mapper)
 
     generic.map_fields(fields(("email", "Email address", "text")), session=session)
-    generic.map_fields(
-        fields(("first_name", "First name", "text")), session=session
-    )
+    generic.map_fields(fields(("first_name", "First name", "text")), session=session)
     assert mapper.calls == 2

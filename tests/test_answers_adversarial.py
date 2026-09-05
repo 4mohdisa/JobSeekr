@@ -88,7 +88,9 @@ def assert_abstains(question, bank, *, campaign_id=None, choices=None):
 
 def assert_answers(question, bank, expected, *, campaign_id=None, choices=None):
     outcome = resolve(question, bank, campaign_id, choices)
-    assert isinstance(outcome, Answer), f"{question!r} abstained: {outcome.reason.value} {outcome.detail}"
+    assert isinstance(outcome, Answer), (
+        f"{question!r} abstained: {outcome.reason.value} {outcome.detail}"
+    )
     assert outcome.value == expected
     return outcome
 
@@ -121,9 +123,18 @@ def test_each_licence_resolves_to_its_own_answer(question, expected):
 @pytest.mark.parametrize(
     ("question", "bank"),
     [
-        ("Do you have a forklift licence?", [row("Do you have a current driver's licence?", "Yes")]),
-        ("Do you have a current driver's licence?", [row("Do you have a forklift licence?", "No")]),
-        ("Do you hold an HR truck licence?", [row("Do you have a current driver's licence?", "Yes")]),
+        (
+            "Do you have a forklift licence?",
+            [row("Do you have a current driver's licence?", "Yes")],
+        ),
+        (
+            "Do you have a current driver's licence?",
+            [row("Do you have a forklift licence?", "No")],
+        ),
+        (
+            "Do you hold an HR truck licence?",
+            [row("Do you have a current driver's licence?", "Yes")],
+        ),
         ("Do you have a white card?", [row("Do you have a forklift licence?", "No")]),
     ],
 )
@@ -145,14 +156,20 @@ def test_each_availability_resolves_to_its_own_answer(question, expected):
 @pytest.mark.parametrize(
     ("question", "stored"),
     [
-        ("Are you available for part-time work?", "Are you available for full-time work?"),
+        (
+            "Are you available for part-time work?",
+            "Are you available for full-time work?",
+        ),
         ("Are you available for casual work?", "Are you available for full-time work?"),
-        ("Are you available to work weekends?", "Are you available for full-time work?"),
+        (
+            "Are you available to work weekends?",
+            "Are you available for full-time work?",
+        ),
         ("Are you available for night shift?", "Are you available for day shift?"),
     ],
 )
 def test_availability_is_never_answered_from_a_different_basis(question, stored):
-    """"part-time" against "full-time" scores 88.9 — inside the threshold."""
+    """ "part-time" against "full-time" scores 88.9 — inside the threshold."""
     assert_abstains(question, [row(stored, "Yes")])
 
 
@@ -166,10 +183,16 @@ def test_availability_is_never_answered_from_a_different_basis(question, stored)
     [
         ("Do you NOT require visa sponsorship?", "Do you require visa sponsorship?"),
         ("Do you not require no visa sponsorship?", "Do you require visa sponsorship?"),
-        ("Have you never required visa sponsorship?", "Do you require visa sponsorship?"),
+        (
+            "Have you never required visa sponsorship?",
+            "Do you require visa sponsorship?",
+        ),
         ("Can you work without sponsorship?", "Do you require visa sponsorship?"),
         ("Are you unable to work full-time?", "Are you able to work full-time?"),
-        ("Do you have no criminal convictions?", "Do you have any criminal convictions?"),
+        (
+            "Do you have no criminal convictions?",
+            "Do you have any criminal convictions?",
+        ),
         ("Can you not start immediately?", "Can you start immediately?"),
         ("Don't you have full working rights?", "Do you have full working rights?"),
         ("Do you lack full working rights?", "Do you have full working rights?"),
@@ -195,7 +218,7 @@ def test_negations_are_counted_not_cancelled():
 
 
 def test_the_negation_scan_does_not_fire_on_words_that_merely_contain_one():
-    """"notice" starts with "no"; "nonetheless" starts with "none"."""
+    """ "notice" starts with "no"; "nonetheless" starts with "none"."""
     from backend.apply.answers import _negation_count
 
     assert _negation_count("what is your notice period") == 0
@@ -280,11 +303,27 @@ def test_a_row_scoped_to_another_campaign_is_discarded_not_outranked():
             "How many months of Python experience do you have?",
             "60",
         ),
-        ("What is your expected hourly rate?", "What is your expected annual salary?", "140000"),
-        ("What is your expected annual salary?", "What is your expected hourly rate?", "75"),
-        ("How many days notice do you require?", "How many weeks notice do you require?", "4"),
+        (
+            "What is your expected hourly rate?",
+            "What is your expected annual salary?",
+            "140000",
+        ),
+        (
+            "What is your expected annual salary?",
+            "What is your expected hourly rate?",
+            "75",
+        ),
+        (
+            "How many days notice do you require?",
+            "How many weeks notice do you require?",
+            "4",
+        ),
         ("What is your daily rate?", "What is your hourly rate?", "75"),
-        ("How many kilometres can you commute?", "How many miles can you commute?", "20"),
+        (
+            "How many kilometres can you commute?",
+            "How many miles can you commute?",
+            "20",
+        ),
         (
             "What is your maximum salary expectation?",
             "What is your minimum salary expectation?",
@@ -293,12 +332,12 @@ def test_a_row_scoped_to_another_campaign_is_discarded_not_outranked():
     ],
 )
 def test_a_number_is_never_returned_in_the_wrong_unit(question, stored, value):
-    """"months" against "years" scores 89 and returned 5 — off by a factor of 12."""
+    """ "months" against "years" scores 89 and returned 5 — off by a factor of 12."""
     assert_abstains(question, [row(stored, value)])
 
 
 def test_a_unit_word_does_not_fire_on_a_longer_word_containing_it():
-    """"month" must not match inside "monthly", or every rate question conflicts."""
+    """ "month" must not match inside "monthly", or every rate question conflicts."""
     from backend.apply.answers import _qualifier_signature
 
     assert "time_unit" not in _qualifier_signature("what is your monthly rate")
@@ -350,8 +389,10 @@ def test_extra_words_are_not_a_substitution():
     ],
 )
 def test_spelling_variants_are_not_mistaken_for_substitutions(asked):
-    """"licence"/"license" scores 86; "ruby"/"python" scores 18."""
-    assert_answers(asked, [row("Do you have a current driver's licence?", "Yes")], "Yes")
+    """ "licence"/"license" scores 86; "ruby"/"python" scores 18."""
+    assert_answers(
+        asked, [row("Do you have a current driver's licence?", "Yes")], "Yes"
+    )
 
 
 # =========================================================================
@@ -375,7 +416,7 @@ def test_a_question_followed_by_its_opposite_abstains():
 
 
 def test_a_trailing_instruction_is_not_a_second_question():
-    """"Please attach evidence" asks nothing, so the entry still applies."""
+    """ "Please attach evidence" asks nothing, so the entry still applies."""
     assert_answers(
         "Do you have full working rights in Australia? Please attach evidence.",
         [row("Do you have full working rights in Australia?", "Yes")],
@@ -389,7 +430,10 @@ def test_a_wh_question_ending_in_do_you_have_is_still_one_question():
 
     assert _clause_count("how many years of python experience do you have") == 1
     assert _clause_count("how many years of python experience") == 1
-    assert _clause_count("what is your notice period, and what is your salary expectation") == 2
+    assert (
+        _clause_count("what is your notice period, and what is your salary expectation")
+        == 2
+    )
 
 
 # =========================================================================
@@ -418,7 +462,9 @@ def test_a_wh_question_ending_in_do_you_have_is_still_one_question():
 def test_degenerate_input_never_produces_an_answer(question):
     """A one-character label scored 100 against a full question: partial_ratio
     treats any substring as a perfect match."""
-    assert_abstains(question, [row("Do you have full working rights in Australia?", "Yes")])
+    assert_abstains(
+        question, [row("Do you have full working rights in Australia?", "Yes")]
+    )
 
 
 def test_the_length_guard_does_not_break_short_stored_patterns():
@@ -464,7 +510,9 @@ def test_the_page_length_guard_is_generous_enough_for_a_real_question():
 )
 def test_formatting_noise_still_resolves(asked):
     """Abstaining is safe, but abstaining on everything makes the agent useless."""
-    assert_answers(asked, [row("Do you have full working rights in Australia?", "Yes")], "Yes")
+    assert_answers(
+        asked, [row("Do you have full working rights in Australia?", "Yes")], "Yes"
+    )
 
 
 # =========================================================================
@@ -553,6 +601,8 @@ def test_the_seeded_visa_and_sponsorship_rows_do_not_leak_into_each_other():
 
     assert_answers("Do you require visa sponsorship?", bank, "SPONSORSHIP")
     assert_answers("What is your visa status?", bank, "VISA STATUS")
-    assert_answers("Do you have full working rights in Australia?", bank, "WORKING RIGHTS")
+    assert_answers(
+        "Do you have full working rights in Australia?", bank, "WORKING RIGHTS"
+    )
     # And the negated form of each is nobody's question to answer.
     assert_abstains("Do you NOT require visa sponsorship?", bank)

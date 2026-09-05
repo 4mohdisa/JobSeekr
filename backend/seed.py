@@ -35,10 +35,10 @@ from sqlmodel import col, select
 from backend.db import session_scope
 from backend.logging_setup import get_logger
 from backend.models import (
-    FactCategory,
     AnswerBank,
     AnswerType,
     Campaign,
+    FactCategory,
     GrayZoneAction,
     MatchType,
     Profile,
@@ -400,31 +400,68 @@ def seed_default_profile() -> bool:
 
 FACT_SHELLS: tuple[tuple[str, str, str], ...] = (
     # key, category, the prompt shown above the textarea on the Facts page
-    ("work_rights", "WORK_RIGHTS",
-     "Your right to work: citizenship or visa, any conditions, whether you need "
-     "sponsorship."),
-    ("licence", "LICENCE",
-     "Driver's or other licences: which state issued it, what class, how long "
-     "you have held it, any restrictions."),
-    ("checks", "CHECKS",
-     "Police checks, working-with-children checks, security clearances — which "
-     "ones you hold and when they were issued."),
-    ("education", "EDUCATION",
-     "Your highest qualification, where and when, plus anything else relevant."),
-    ("experience", "EXPERIENCE",
-     "Years of experience, and in what. Write it the way you would say it."),
-    ("availability", "AVAILABILITY",
-     "Notice period, earliest start date, and whether you will relocate, "
-     "travel, or work weekends and shifts."),
-    ("compensation", "COMPENSATION",
-     "Salary or rate expectations, and whether they are negotiable."),
+    (
+        "work_rights",
+        "WORK_RIGHTS",
+        (
+            "Your right to work: citizenship or visa, any conditions, whether you need "
+            "sponsorship."
+        ),
+    ),
+    (
+        "licence",
+        "LICENCE",
+        (
+            "Driver's or other licences: which state issued it, what class, how long "
+            "you have held it, any restrictions."
+        ),
+    ),
+    (
+        "checks",
+        "CHECKS",
+        (
+            "Police checks, working-with-children checks, security clearances — which "
+            "ones you hold and when they were issued."
+        ),
+    ),
+    (
+        "education",
+        "EDUCATION",
+        "Your highest qualification, where and when, plus anything else relevant.",
+    ),
+    (
+        "experience",
+        "EXPERIENCE",
+        "Years of experience, and in what. Write it the way you would say it.",
+    ),
+    (
+        "availability",
+        "AVAILABILITY",
+        (
+            "Notice period, earliest start date, and whether you will relocate, "
+            "travel, or work weekends and shifts."
+        ),
+    ),
+    (
+        "compensation",
+        "COMPENSATION",
+        "Salary or rate expectations, and whether they are negotiable.",
+    ),
     ("transport", "TRANSPORT", "Whether you have your own reliable transport."),
     ("referees", "REFEREES", "Whether you can provide contactable referees."),
-    ("health", "HEALTH",
-     "Anything about medicals, drug tests or vaccination status you are willing "
-     "to declare."),
-    ("business", "BUSINESS",
-     "ABN, company, or contracting arrangements, if you have any."),
+    (
+        "health",
+        "HEALTH",
+        (
+            "Anything about medicals, drug tests or vaccination status you are willing "
+            "to declare."
+        ),
+    ),
+    (
+        "business",
+        "BUSINESS",
+        "ABN, company, or contracting arrangements, if you have any.",
+    ),
 )
 """The categories the Facts page offers, in the order it shows them.
 
@@ -452,7 +489,9 @@ def seed_facts() -> int:
             if key in existing:
                 continue
             session.add(
-                Fact(key=key, text="", category=FactCategory[category], jurisdiction=None)
+                Fact(
+                    key=key, text="", category=FactCategory[category], jurisdiction=None
+                )
             )
             added += 1
 

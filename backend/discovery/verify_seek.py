@@ -48,7 +48,9 @@ def _emit(text: str = "") -> None:
     sys.stdout.write(text + "\n")
 
 
-def _probe_json(client: httpx.Client, url: str, params: dict[str, Any]) -> dict[str, Any]:
+def _probe_json(
+    client: httpx.Client, url: str, params: dict[str, Any]
+) -> dict[str, Any]:
     result: dict[str, Any] = {"url": url, "ok": False}
     try:
         response = client.get(url, params=params)
@@ -145,7 +147,9 @@ def main(argv: list[str] | None = None) -> int:
             "discovery adapter use it."
         ),
     )
-    parser.add_argument("--terms", default="python developer", help="keywords to search")
+    parser.add_argument(
+        "--terms", default="python developer", help="keywords to search"
+    )
     parser.add_argument("--where", default="Adelaide SA", help="location to search")
     parser.add_argument("--page-size", type=int, default=settings.seek_page_size)
     args = parser.parse_args(argv)
@@ -170,7 +174,10 @@ def main(argv: list[str] | None = None) -> int:
     results: list[tuple[str, dict[str, Any]]] = []
     with build_client() as client:
         results.append(
-            ("JSON endpoint (configured)", _probe_json(client, settings.seek_search_url, params))
+            (
+                "JSON endpoint (configured)",
+                _probe_json(client, settings.seek_search_url, params),
+            )
         )
         results.append(
             (

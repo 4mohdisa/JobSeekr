@@ -152,7 +152,9 @@ class EmbeddingCache:
                     except (json.JSONDecodeError, KeyError, TypeError):
                         continue  # a torn line costs one re-embed, not a crash
         except OSError as exc:
-            log.warning("embedding_cache_unreadable", path=str(self.path), error=str(exc))
+            log.warning(
+                "embedding_cache_unreadable", path=str(self.path), error=str(exc)
+            )
 
     def get(self, key: str) -> list[float] | None:
         self._load()
@@ -219,7 +221,9 @@ def rank_jobs(
     top_n = top_n or settings.scoring_stage1_top_n
 
     texts = [embedding_text(job) for job in jobs]
-    query_vector = _embed_with_cache([summary], cache=cache, purpose="stage1_summary")[0]
+    query_vector = _embed_with_cache([summary], cache=cache, purpose="stage1_summary")[
+        0
+    ]
     job_vectors = _embed_with_cache(texts, cache=cache, purpose="stage1_jobs")
 
     ranked = [

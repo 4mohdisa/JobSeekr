@@ -76,11 +76,11 @@ def _session_health_job() -> None:
     Separate from the apply pass's own check so a dead session is named in the
     morning rather than discovered at 10:00 when there is work queued behind it.
     """
+    from playwright.sync_api import sync_playwright
+
     from backend.apply.session import launch_context
     from backend.db import session_scope
     from backend.sessions import check_all
-
-    from playwright.sync_api import sync_playwright
 
     with sync_playwright() as playwright:
         context = launch_context(playwright)
@@ -107,7 +107,10 @@ def _backup_job() -> None:
     target = settings.backups_dir / f"app-{datetime.now(UTC):%Y%m%d-%H%M}.db"
 
     try:
-        with sqlite3.connect(source_path) as source, sqlite3.connect(target) as destination:
+        with (
+            sqlite3.connect(source_path) as source,
+            sqlite3.connect(target) as destination,
+        ):
             source.backup(destination)
     except Exception as exc:
         log.exception("backup_failed", error=str(exc)[:200])
@@ -146,7 +149,9 @@ def _rubric_review_job() -> None:
             in {ResponseStatus.ACKNOWLEDGED, ResponseStatus.INTERVIEW_REQUEST}
         ]
         if len(applications) < settings.analytics_min_sample:
-            log.info("rubric_review_skipped", reason="not enough data", n=len(applications))
+            log.info(
+                "rubric_review_skipped", reason="not enough data", n=len(applications)
+            )
             return
 
         notify(
@@ -166,11 +171,35 @@ def _rubric_review_job() -> None:
 # Schedule as data. Adding a job is a row, not a code change.
 SCHEDULE: tuple[dict[str, Any], ...] = (
     {"id": "discovery", "func": _discovery_job, "trigger": "interval", "hours": 4},
-    {"id": "scoring", "func": _scoring_job, "trigger": "interval", "hours": 4, "minutes": 20},
-    {"id": "apply_morning", "func": _apply_job, "trigger": "cron", "hour": 10, "minute": 0},
-    {"id": "apply_afternoon", "func": _apply_job, "trigger": "cron", "hour": 14, "minute": 30},
+    {
+        "id": "scoring",
+        "func": _scoring_job,
+        "trigger": "interval",
+        "hours": 4,
+        "minutes": 20,
+    },
+    {
+        "id": "apply_morning",
+        "func": _apply_job,
+        "trigger": "cron",
+        "hour": 10,
+        "minute": 0,
+    },
+    {
+        "id": "apply_afternoon",
+        "func": _apply_job,
+        "trigger": "cron",
+        "hour": 14,
+        "minute": 30,
+    },
     {"id": "inbound", "func": _inbound_job, "trigger": "interval", "hours": 2},
-    {"id": "ghosting", "func": _ghosting_job, "trigger": "cron", "hour": 3, "minute": 0},
+    {
+        "id": "ghosting",
+        "func": _ghosting_job,
+        "trigger": "cron",
+        "hour": 3,
+        "minute": 0,
+    },
     {"id": "backup", "func": _backup_job, "trigger": "cron", "hour": 2, "minute": 0},
     {"id": "digest", "func": _digest_job, "trigger": "cron", "hour": 19, "minute": 0},
     {"id": "canary", "func": _canary_job, "trigger": "cron", "hour": 8, "minute": 0},
@@ -249,7 +278,9 @@ def describe_schedule() -> list[dict[str, Any]]:
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
     parser = argparse.ArgumentParser(prog="python -m backend.integrations.scheduler")
-    parser.add_argument("--list", action="store_true", help="print the schedule and exit")
+    parser.add_argument(
+        "--list", action="store_true", help="print the schedule and exit"
+    )
     args = parser.parse_args(argv)
 
     configure_logging()

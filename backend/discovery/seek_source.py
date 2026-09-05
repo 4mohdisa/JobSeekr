@@ -37,10 +37,10 @@ from bs4 import BeautifulSoup
 
 from backend.base import RawJob, SourceUnavailable
 from backend.config import settings
-from backend.models import Region
-from backend.regions import config_for, currency_for, region_of_job
 from backend.discovery.http import build_client, get_with_retry
 from backend.logging_setup import get_logger
+from backend.models import Region
+from backend.regions import config_for, currency_for, region_of_job
 
 log = get_logger(__name__)
 
@@ -253,7 +253,9 @@ def parse_json_payload(
 
     if records is None:
         if not matched_empty:
-            log.warning("seek_payload_shape_unknown", top_level_keys=sorted(payload)[:15])
+            log.warning(
+                "seek_payload_shape_unknown", top_level_keys=sorted(payload)[:15]
+            )
         return []
 
     out: list[RawJob] = []
@@ -274,7 +276,8 @@ _STATE_PATTERNS = (
     re.compile(r"window\.SEEK_REDUX_DATA\s*=\s*(\{.*?\});", re.DOTALL),
     re.compile(r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\});", re.DOTALL),
     re.compile(
-        r'<script[^>]+id="__NEXT_DATA__"[^>]*>(\{.*?\})</script>', re.DOTALL | re.IGNORECASE
+        r'<script[^>]+id="__NEXT_DATA__"[^>]*>(\{.*?\})</script>',
+        re.DOTALL | re.IGNORECASE,
     ),
 )
 
@@ -479,9 +482,7 @@ class SeekSource:
         collected: dict[str, RawJob] = {}
         attempts = 0
         unreachable = 0
-        cutoff = (
-            datetime.now(UTC) - timedelta(hours=hours_old) if hours_old else None
-        )
+        cutoff = datetime.now(UTC) - timedelta(hours=hours_old) if hours_old else None
 
         try:
             for term in terms or [""]:
@@ -533,7 +534,9 @@ class SeekSource:
         if limit:
             results = results[:limit]
 
-        log.info("seek_search_complete", terms=terms, locations=locations, found=len(results))
+        log.info(
+            "seek_search_complete", terms=terms, locations=locations, found=len(results)
+        )
         return results
 
 

@@ -178,7 +178,9 @@ def session(tmp_path, monkeypatch):
                     path=str(tmp_path / f"job_1/{name}"),
                     sha256="deadbeef",
                     parse_check_passed=True,
-                    parse_report={"cover_letter_text": "Dear Hiring Team, please consider me."},
+                    parse_report={
+                        "cover_letter_text": "Dear Hiring Team, please consider me."
+                    },
                 )
             )
 
@@ -444,7 +446,9 @@ def test_no_adapter_may_call_the_guardrails_or_submit_on_its_own(session):
         if not path.exists():
             continue
         source = path.read_text(encoding="utf-8")
-        assert "check_can_submit" not in source, f"{module} must not gate submits itself"
+        assert "check_can_submit" not in source, (
+            f"{module} must not gate submits itself"
+        )
 
 
 def test_the_run_apply_signature_has_no_bypass():
@@ -610,11 +614,15 @@ def test_mapping_never_invents_a_screening_answer(session, monkeypatch, mapping_
         session,
         job,
         platform="seek",
-        fields=[FormField(identifier="elig", label="Are you legally able to work here?")],
+        fields=[
+            FormField(identifier="elig", label="Are you legally able to work here?")
+        ],
     )
 
     assert mapper.calls == 1
-    assert [a.question for a in draft.abstentions] == ["are you legally able to work here"]
+    assert [a.question for a in draft.abstentions] == [
+        "are you legally able to work here"
+    ]
     assert draft.answers == {}
 
 
@@ -633,7 +641,10 @@ def test_an_unconfident_mapping_still_parks_the_job(session, monkeypatch, mappin
 
     job = session.get(Job, 1)
     draft = flow.build_draft(
-        session, job, platform="seek", fields=[FormField(identifier="reach", label="Best way to reach you")]
+        session,
+        job,
+        platform="seek",
+        fields=[FormField(identifier="reach", label="Best way to reach you")],
     )
 
     assert draft.abstentions, "an unconfident mapping must not resolve a field"
@@ -803,7 +814,8 @@ def test_no_broad_handler_around_an_adapter_call_swallows_element_not_found():
         if not any(calls_adapter(stmt) for stmt in node.body):
             continue
         broad = any(
-            h.type is None or (isinstance(h.type, ast.Name) and h.type.id == "Exception")
+            h.type is None
+            or (isinstance(h.type, ast.Name) and h.type.id == "Exception")
             for h in node.handlers
         )
         if broad and not reraises_element_not_found(node.handlers):

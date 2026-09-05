@@ -385,9 +385,7 @@ class Campaign(SQLModel, table=True):
     locations: list[Any] = Field(
         default_factory=list, sa_column=Column(JSON, nullable=False)
     )
-    region: Region = Field(
-        sa_column=_enum_column(Region), default=Region.AU
-    )
+    region: Region = Field(sa_column=_enum_column(Region), default=Region.AU)
     """Which Seek market this campaign searches. Drives the site key, the
     locale, the currency a salary floor is read in, and the timezone the apply
     window is measured in."""
@@ -791,7 +789,10 @@ class FailureEvent(SQLModel, table=True):
         # company and question all survive, and those are what anything
         # aggregates on. Only the link back to one deleted job is lost.
         sa_column=Column(
-            Integer, ForeignKey("job.id", ondelete="SET NULL"), nullable=True, index=True
+            Integer,
+            ForeignKey("job.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
         ),
     )
     detail: str | None = None
@@ -936,7 +937,10 @@ class DerivedAnswer(SQLModel, table=True):
     fact_id: int | None = Field(
         default=None,
         sa_column=Column(
-            Integer, ForeignKey("fact.id", ondelete="CASCADE"), nullable=True, index=True
+            Integer,
+            ForeignKey("fact.id", ondelete="CASCADE"),
+            nullable=True,
+            index=True,
         ),
     )
     """Which fact this came from. CASCADE: a deleted fact takes its derivations

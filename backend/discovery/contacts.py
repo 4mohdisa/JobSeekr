@@ -67,14 +67,18 @@ _BLOCKED_LOCALS = (
 )
 
 # Image and asset filenames survive HTML stripping and look email-shaped.
-_ASSET_TAIL = re.compile(r"\.(png|jpe?g|gif|svg|webp|css|js|woff2?|ico)$", re.IGNORECASE)
+_ASSET_TAIL = re.compile(
+    r"\.(png|jpe?g|gif|svg|webp|css|js|woff2?|ico)$", re.IGNORECASE
+)
 
 _VALID_TLD = re.compile(r"\.[A-Za-z]{2,}$")
 
 
 def _clean(local: str, domain: str) -> str | None:
     """Undo the obfuscation and return a plain address, or None if implausible."""
-    domain = re.sub(r"\s*[\(\[\{]\s*dot\s*[\)\]\}]\s*", ".", domain, flags=re.IGNORECASE)
+    domain = re.sub(
+        r"\s*[\(\[\{]\s*dot\s*[\)\]\}]\s*", ".", domain, flags=re.IGNORECASE
+    )
     domain = re.sub(r"\s+dot\s+", ".", domain, flags=re.IGNORECASE)
     domain = re.sub(r"\s+", "", domain).strip(".").lower()
     local = re.sub(r"\s+", "", local).strip(".").lower()
@@ -103,7 +107,9 @@ def _is_usable(address: str, *, source_host: str | None) -> bool:
     )
 
 
-def extract_contact_email(description: str | None, *, source_url: str | None = None) -> str | None:
+def extract_contact_email(
+    description: str | None, *, source_url: str | None = None
+) -> str | None:
     """Return the employer address published in the ad body, or None.
 
     Returns None whenever the answer is not obvious. An unmatched ad costs the

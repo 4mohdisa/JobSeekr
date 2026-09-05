@@ -345,7 +345,8 @@ def extract_from_html(html: str, *, step: int = 0) -> list[CapturedElement]:
         if tag.name == "input" and str(tag.get("type", "")).lower() == "hidden":
             continue
         if tag.name == "a" and not any(
-            tag.get(attribute) for attribute in ("role", "href", "aria-label", *TESTID_ATTRIBUTES)
+            tag.get(attribute)
+            for attribute in ("role", "href", "aria-label", *TESTID_ATTRIBUTES)
         ):
             # A bare <a> with no destination and no hook is a text span. One
             # carrying a test hook is a control: Seek's Quick Apply is exactly
@@ -581,16 +582,18 @@ def push_questions_to_answer_bank(session: Any, capture: Capture) -> int:
                 # over Telegram. That is the answer-bank loop working as
                 # designed, primed ahead of time instead of discovered mid-run.
                 answer_value="",
-                answer_type=(
-                    AnswerType.CHOICE if element.choices else AnswerType.TEXT
-                ),
+                answer_type=(AnswerType.CHOICE if element.choices else AnswerType.TEXT),
                 choices=list(element.choices) or None,
                 # verified_at stays NULL: unconfirmed until the user says so.
                 verified_at=None,
                 notes=(
                     f"seen during the {capture.platform}/{capture.variant} capture "
                     f"on {capture.captured_at[:10]}"
-                    + (f"; options: {', '.join(element.choices)}" if element.choices else "")
+                    + (
+                        f"; options: {', '.join(element.choices)}"
+                        if element.choices
+                        else ""
+                    )
                 ),
             )
         )

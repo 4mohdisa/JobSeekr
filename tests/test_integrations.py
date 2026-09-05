@@ -64,7 +64,9 @@ class FakeApplication:
 
 
 class FakeJob:
-    def __init__(self, id_: int, title: str, company: str, source_job_id: str = "", contact=""):
+    def __init__(
+        self, id_: int, title: str, company: str, source_job_id: str = "", contact=""
+    ):
         self.id = id_
         self.title = title
         self.company = company
@@ -129,7 +131,9 @@ def test_naming_the_employer_separates_them():
     }
 
     result = match_email(
-        email(subject="Your Data Analyst application at Wattle Group"), applications, jobs
+        email(subject="Your Data Analyst application at Wattle Group"),
+        applications,
+        jobs,
     )
     assert result is not None
     assert result.application_id == 1
@@ -167,7 +171,9 @@ def test_a_very_old_email_does_not_match():
 
 def test_the_contact_address_published_in_the_ad_is_a_strong_signal():
     applications = [FakeApplication(1, 1)]
-    jobs = {1: FakeJob(1, "Data Analyst", "Wattle Group", contact="careers@wattle.com.au")}
+    jobs = {
+        1: FakeJob(1, "Data Analyst", "Wattle Group", contact="careers@wattle.com.au")
+    }
 
     result = match_email(
         email(subject="Re: your application", from_address="careers@wattle.com.au"),
@@ -183,7 +189,9 @@ def test_the_source_job_id_matches_strongly():
     jobs = {1: FakeJob(1, "Data Analyst", "Wattle Group", source_job_id="84213977")}
 
     result = match_email(
-        email(subject="Application received", body="Reference: 84213977"), applications, jobs
+        email(subject="Application received", body="Reference: 84213977"),
+        applications,
+        jobs,
     )
     assert result is not None
     assert result.score >= MATCH_THRESHOLD
@@ -312,7 +320,12 @@ def test_there_is_no_followup_or_bulk_path():
     import pathlib
 
     source = pathlib.Path(outbound.__file__).read_text(encoding="utf-8")
-    for forbidden in ("def send_bulk", "def schedule_followup", "def follow_up", "def harvest"):
+    for forbidden in (
+        "def send_bulk",
+        "def schedule_followup",
+        "def follow_up",
+        "def harvest",
+    ):
         assert forbidden not in source
 
 
@@ -351,7 +364,9 @@ def test_a_failing_command_reports_rather_than_crashing(session, monkeypatch):
     assert "boom" in telegram.handle_command("/status")
 
 
-def test_saving_an_answer_fills_a_blank_row_rather_than_duplicating(session, monkeypatch):
+def test_saving_an_answer_fills_a_blank_row_rather_than_duplicating(
+    session, monkeypatch
+):
     monkeypatch.setattr(telegram, "session_scope", lambda: _Scope(session))
     session.add(
         AnswerBank(
@@ -438,7 +453,9 @@ def test_hooks_wire_the_safety_layers_without_importing_telegram():
 def test_every_scheduled_job_the_spec_asks_for_exists():
     ids = {entry["id"] for entry in SCHEDULE}
     assert {"discovery", "scoring", "inbound", "ghosting", "backup", "digest"} <= ids
-    assert len([i for i in ids if i.startswith("apply_")]) == 2, "two apply passes daily"
+    assert len([i for i in ids if i.startswith("apply_")]) == 2, (
+        "two apply passes daily"
+    )
 
 
 def test_apply_passes_are_jittered():
@@ -464,7 +481,9 @@ def test_the_scheduled_apply_pass_follows_the_master_switch(monkeypatch):
 
     monkeypatch.setattr(settings, "allow_live_submit", False)
     monkeypatch.setitem(
-        __import__("sys").modules, "backend.apply.run", type("M", (), {"run_apply_pass": fake_pass})
+        __import__("sys").modules,
+        "backend.apply.run",
+        type("M", (), {"run_apply_pass": fake_pass}),
     )
     scheduler_module._apply_job()
     assert captured["dry_run"] is True

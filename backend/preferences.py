@@ -33,7 +33,6 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
 
 from sqlmodel import Session, select
 
@@ -161,7 +160,9 @@ def set(
             "or asked (Claude.md hard rule 1)"
         )
 
-    scope = PreferenceScope.CAMPAIGN if campaign_id is not None else PreferenceScope.GLOBAL
+    scope = (
+        PreferenceScope.CAMPAIGN if campaign_id is not None else PreferenceScope.GLOBAL
+    )
     status = (
         PreferenceStatus.PROPOSED
         if source is PreferenceSource.INFERRED
@@ -311,7 +312,11 @@ def active(session: Session, *, campaign_id: int | None = None) -> dict[str, str
 
 
 def get(
-    session: Session, key: str, *, campaign_id: int | None = None, default: str | None = None
+    session: Session,
+    key: str,
+    *,
+    campaign_id: int | None = None,
+    default: str | None = None,
 ) -> str | None:
     """One active preference, or ``default``. A proposal reads as absent."""
     return active(session, campaign_id=campaign_id).get(key, default)

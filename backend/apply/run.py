@@ -149,7 +149,9 @@ def eligible_jobs(
     for job in session.exec(query).all():
         if job.id in applied:
             continue
-        documents = list(session.exec(select(Document).where(Document.job_id == job.id)).all())
+        documents = list(
+            session.exec(select(Document).where(Document.job_id == job.id)).all()
+        )
         if not documents or not all(d.parse_check_passed for d in documents):
             continue
         campaign = session.get(Campaign, job.campaign_id) if job.campaign_id else None
@@ -194,7 +196,6 @@ def _handle_gray_zone(session: Session, job: Job, action: str) -> bool:
     session.add(job)
     log.info("gray_zone_handled", job_id=job.id, action=action, status=status.value)
     return False
-
 
 
 class _FakeCookieJar:
@@ -355,7 +356,9 @@ def run_apply_pass(
                     break
                 except Exception as exc:
                     counts["failed"] += 1
-                    errors.append({"job_id": job.id, "error": f"{type(exc).__name__}: {exc}"})
+                    errors.append(
+                        {"job_id": job.id, "error": f"{type(exc).__name__}: {exc}"}
+                    )
                     log.exception("apply_failed", job_id=job.id)
                     guardrails.record_failure(applier.platform, str(exc))
                     continue

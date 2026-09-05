@@ -206,7 +206,9 @@ class LinkedInApplier:
             log.error("attachment_readback_empty", platform=self.platform)
             raise
 
-    def prune_document_library(self, page: Any, *, keep: int = MAX_LIBRARY_DOCUMENTS - 1) -> int:
+    def prune_document_library(
+        self, page: Any, *, keep: int = MAX_LIBRARY_DOCUMENTS - 1
+    ) -> int:
         """Delete the oldest library entries so a fresh upload is not reused.
 
         Guarded so it can never remove more than the overflow: ``keep`` is a

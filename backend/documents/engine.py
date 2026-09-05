@@ -227,7 +227,6 @@ def render_string(body: str, context: dict[str, Any], *, latex: bool = True) -> 
     return env.from_string(body).render(**context)
 
 
-
 def find_ai_slots(body: str) -> list[AISlot]:
     """The AI slots a template actually uses, in declaration order.
 

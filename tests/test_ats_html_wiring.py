@@ -97,7 +97,9 @@ def test_an_embedded_form_builder_is_followed_into_the_iframe():
 
 def test_an_unrecognisable_page_selects_nothing_rather_than_guessing():
     """A job nothing can identify belongs in the manual queue, not in a guess."""
-    assert _applier_from_page(FakePage(ANONYMOUS_HTML), a_job(), build_appliers()) is None
+    assert (
+        _applier_from_page(FakePage(ANONYMOUS_HTML), a_job(), build_appliers()) is None
+    )
 
 
 def test_a_platform_with_no_adapter_is_reported_not_substituted(caplog):
@@ -151,9 +153,7 @@ def test_a_page_that_cannot_be_read_is_not_treated_as_a_mismatch(caplog):
 # =========================================================================
 
 
-@pytest.mark.parametrize(
-    "apply_type", [ApplyType.EXTERNAL, ApplyType.UNKNOWN]
-)
+@pytest.mark.parametrize("apply_type", [ApplyType.EXTERNAL, ApplyType.UNKNOWN])
 def test_both_externally_applied_types_get_the_html_probe(apply_type: Any):
     """UNKNOWN is the type most white-labelled ads actually carry."""
     job = a_job()

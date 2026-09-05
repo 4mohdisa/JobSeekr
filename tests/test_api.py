@@ -210,7 +210,9 @@ def test_saving_the_profile_creates_a_new_version(client):
     assert response.json()["version"] == 2
 
     versions = client.get("/api/profile/versions").json()
-    assert [v["version"] for v in versions] == [2, 1], "history is preserved, not overwritten"
+    assert [v["version"] for v in versions] == [2, 1], (
+        "history is preserved, not overwritten"
+    )
 
 
 # =========================================================================
@@ -228,7 +230,9 @@ def test_editing_the_rubric_bumps_its_version(client):
     campaign = client.get("/api/campaigns/1").json()
     before = campaign["rubric_version"]
 
-    campaign["rubric"] = {"criteria": [{"key": "skills", "weight": 100, "description": "x"}]}
+    campaign["rubric"] = {
+        "criteria": [{"key": "skills", "weight": 100, "description": "x"}]
+    }
     response = client.put("/api/campaigns/1", json=campaign)
 
     assert response.json()["rubric_version"] == before + 1
@@ -238,7 +242,9 @@ def test_editing_something_else_does_not_bump_the_rubric_version(client):
     campaign = client.get("/api/campaigns/1").json()
     before = campaign["rubric_version"]
     campaign["name"] = "renamed"
-    assert client.put("/api/campaigns/1", json=campaign).json()["rubric_version"] == before
+    assert (
+        client.put("/api/campaigns/1", json=campaign).json()["rubric_version"] == before
+    )
 
 
 # =========================================================================
@@ -277,7 +283,8 @@ def test_template_preview_reports_a_typo(client):
 
 def test_template_preview_renders_against_a_real_job(client):
     response = client.post(
-        "/api/templates/preview", params={"body": r"Role: \VAR{job.title} at \VAR{job.company}"}
+        "/api/templates/preview",
+        params={"body": r"Role: \VAR{job.title} at \VAR{job.company}"},
     )
     body = response.json()
     assert body["job_id"] == 1
@@ -330,7 +337,9 @@ def test_the_queue_card_carries_everything_needed_to_apply_by_hand(client):
 
     card = cards[0]
     assert card["apply_url"] == "https://example.com/1"
-    assert card["cover_letter_text"], "the letter must be on the card, not a second fetch"
+    assert card["cover_letter_text"], (
+        "the letter must be on the card, not a second fetch"
+    )
     assert card["resume_document_id"] == 1
     assert any(a["question"].startswith("Do you have full") for a in card["answers"])
     assert "What is your notice period?" in card["unanswered_questions"]
@@ -403,7 +412,9 @@ def test_a_sufficient_sample_reports_both_rates(client):
 
 def test_the_funnel_is_reported(client):
     _add_applications(client, 3, ResponseStatus.ACKNOWLEDGED)
-    stages = {s["stage"]: s["count"] for s in client.get("/api/analytics").json()["funnel"]}
+    stages = {
+        s["stage"]: s["count"] for s in client.get("/api/analytics").json()["funnel"]
+    }
     assert stages["applied"] == 3
     assert stages["acknowledged"] == 3
     assert stages["interview"] == 0
@@ -431,7 +442,10 @@ def test_patching_notes_and_response_status(client):
 
     response = client.patch(
         f"/api/applications/{application['id']}",
-        json={"user_notes": "phone screen booked", "response_status": "interview_request"},
+        json={
+            "user_notes": "phone screen booked",
+            "response_status": "interview_request",
+        },
     )
     body = response.json()
     assert body["user_notes"] == "phone screen booked"

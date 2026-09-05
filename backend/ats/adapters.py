@@ -32,8 +32,8 @@ from backend.ats.generic import (
     fields_from_accessibility,
 )
 from backend.logging_setup import get_logger
-from backend.siteknowledge import DEFAULTS_DIR, SiteKnowledge, load
 from backend.models import ApplyType, Document, Job
+from backend.siteknowledge import DEFAULTS_DIR, SiteKnowledge, load
 
 log = get_logger(__name__)
 
@@ -45,7 +45,9 @@ __all__ = ["ATS_APPLIERS", "AtsApplier", "GenericAtsApplier", "build_ats_applier
 SHAREABLE_PLATFORMS = frozenset({"greenhouse", "lever", "smartrecruiters", "workable"})
 
 
-def _first_visible(page: Any, selectors: tuple[str, ...], timeout_ms: int = 2500) -> Any | None:
+def _first_visible(
+    page: Any, selectors: tuple[str, ...], timeout_ms: int = 2500
+) -> Any | None:
     for selector in selectors:
         try:
             locator = page.locator(selector).first
@@ -89,7 +91,9 @@ def _readback_texts(page: Any) -> list[str]:
                 if cleaned and cleaned not in found:
                     found.append(cleaned)
         except Exception as exc:  # noqa: BLE001
-            log.debug("readback_selector_absent", selector=selector, error=str(exc)[:100])
+            log.debug(
+                "readback_selector_absent", selector=selector, error=str(exc)[:100]
+            )
     return found
 
 
@@ -100,7 +104,9 @@ class GenericAtsApplier:
     differing only in their selector dict — the duplication Claude.md forbids.
     """
 
-    def __init__(self, platform_key: str, knowledge: SiteKnowledge | None = None) -> None:
+    def __init__(
+        self, platform_key: str, knowledge: SiteKnowledge | None = None
+    ) -> None:
         self.platform = platform_key
         #: Same layer the primary boards use. An ATS redesign is a JSON edit in
         #: data/siteknowledge/<platform>/, not a code change, and the
@@ -224,7 +230,8 @@ class GenericAtsApplier:
         attempts = (
             lambda: page.get_by_label(label, exact=False),
             lambda: page.get_by_role(
-                "textbox" if field.kind in {"text", "textarea"} else field.kind, name=label
+                "textbox" if field.kind in {"text", "textarea"} else field.kind,
+                name=label,
             ),
             lambda: page.locator(f"[name='{field.identifier}'], #{field.identifier}"),
         )
@@ -242,7 +249,9 @@ class GenericAtsApplier:
                     locator.fill(value)
                 return
             except Exception as exc:  # noqa: BLE001 - try the next strategy
-                log.debug("fill_attempt_failed", field=field.identifier, error=str(exc)[:100])
+                log.debug(
+                    "fill_attempt_failed", field=field.identifier, error=str(exc)[:100]
+                )
 
         raise RuntimeError(f"could not fill {field.label!r} on {self.platform}")
 

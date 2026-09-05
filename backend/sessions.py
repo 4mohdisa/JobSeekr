@@ -149,7 +149,9 @@ def _site_for_domain(domain: str) -> str:
     from backend.boards import BOARDS
 
     def matches(host: str) -> bool:
-        return domain == host or domain.endswith("." + host) or host.endswith("." + domain)
+        return (
+            domain == host or domain.endswith("." + host) or host.endswith("." + domain)
+        )
 
     for entry in BOARDS:
         if any(matches(host) for host in entry.domains):
@@ -178,7 +180,9 @@ def check_site(page: Any, site: str, url: str) -> SiteCheck:
     try:
         page.goto(url, wait_until="domcontentloaded")
     except Exception as exc:  # noqa: BLE001
-        log.warning("session_check_unreachable", site=site, url=url, error=str(exc)[:200])
+        log.warning(
+            "session_check_unreachable", site=site, url=url, error=str(exc)[:200]
+        )
         return SiteCheck(site, SessionStatus.UNREACHABLE, f"could not load {url}")
 
     for selector in LOGIN_MARKERS:
@@ -195,7 +199,12 @@ def check_site(page: Any, site: str, url: str) -> SiteCheck:
                     site, SessionStatus.DEAD, f"a login page is showing at {url}"
                 )
         except Exception as exc:  # noqa: BLE001 - absence is the normal case
-            log.debug("login_marker_absent", site=site, selector=selector, error=str(exc)[:100])
+            log.debug(
+                "login_marker_absent",
+                site=site,
+                selector=selector,
+                error=str(exc)[:100],
+            )
 
     # Positive confirmation, where the site declares one. Optional by design:
     # the password check above already carries the load.
@@ -350,9 +359,7 @@ def stale_sites(session: Session, *, hours: int = 48) -> list[SessionHealth]:
         if row.status is SessionStatus.NO_SESSION:
             continue
         verified = row.last_verified_at
-        if verified is None:
-            stale.append(row)
-        elif _aware(verified) < cutoff:
+        if verified is None or _aware(verified) < cutoff:
             stale.append(row)
     return stale
 

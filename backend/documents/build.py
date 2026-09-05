@@ -289,8 +289,6 @@ def _slot_prompt(
     return prompt
 
 
-
-
 def _requirements_for(session: Session, job_id: int) -> dict[str, Any] | None:
     """The must-haves, nice-to-haves and tone extracted when this job was scored.
 
@@ -450,7 +448,8 @@ def _pick_best(
     tone = (requirements or {}).get("tone") or "not stated"
 
     numbered = "\n\n".join(
-        f"VARIANT {index + 1}:\n{candidate}" for index, candidate in enumerate(candidates)
+        f"VARIANT {index + 1}:\n{candidate}"
+        for index, candidate in enumerate(candidates)
     )
     prompt = (
         f"The employer's advertisement asks for:\n"
@@ -479,7 +478,10 @@ def _pick_best(
             temperature=0.0,
             max_tokens=8,
         )
-        index = int("".join(character for character in answer if character.isdigit())[:2]) - 1
+        index = (
+            int("".join(character for character in answer if character.isdigit())[:2])
+            - 1
+        )
     except Exception as exc:  # noqa: BLE001 - a judge must never block a build
         log.warning("variant_pick_failed", slot=slot.name, error=str(exc)[:150])
         return candidates[0]
@@ -488,9 +490,7 @@ def _pick_best(
         log.warning("variant_pick_out_of_range", slot=slot.name, answer=answer[:40])
         return candidates[0]
 
-    log.info(
-        "variant_picked", slot=slot.name, chosen=index + 1, of=len(candidates)
-    )
+    log.info("variant_picked", slot=slot.name, chosen=index + 1, of=len(candidates))
     return candidates[index]
 
 
@@ -503,7 +503,9 @@ _AUX_SUFFIXES = (".aux", ".log", ".out", ".fls", ".fdb_latexmk", ".synctex.gz", 
 # pdflatex gets its own process group / session on POSIX so the whole group can
 # be signalled at once. On Windows the equivalent is taskkill /T, which walks
 # the parent-child tree and needs no creation flag.
-_NEW_PROCESS_GROUP: dict[str, Any] = {} if os.name == "nt" else {"start_new_session": True}
+_NEW_PROCESS_GROUP: dict[str, Any] = (
+    {} if os.name == "nt" else {"start_new_session": True}
+)
 
 # What to tell the user to install when pdflatex is missing. Keyed by
 # sys.platform because os.name cannot tell macOS from Linux and they need
@@ -520,7 +522,6 @@ _GENERIC_INSTALL_HINT = "Install a TeX distribution that provides pdflatex"
 def _install_hint() -> str:
     """The platform-appropriate 'how to get pdflatex' line."""
     return _PDFLATEX_INSTALL_HINT.get(sys.platform, _GENERIC_INSTALL_HINT)
-
 
 
 def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
@@ -594,7 +595,7 @@ def _run_pdflatex(argv: list[str], timeout: int) -> tuple[int, str]:
             raise DocumentBuildError(
                 f"pdflatex timed out after {timeout}s and was killed. If this is "
                 "a fresh MiKTeX, it was probably fetching a package: run "
-                "`initexmf --set-config-value \"[MPM]AutoInstall=1\"` so it "
+                '`initexmf --set-config-value "[MPM]AutoInstall=1"` so it '
                 f"installs without prompting. Last output:\n{tail}"
             ) from None
 
@@ -646,7 +647,9 @@ def render_pdf(tex_source: str, out_dir: Path, stem: str) -> Path:
 
     pdf_path = out_dir / f"{stem}.pdf"
     if not pdf_path.exists():
-        raise DocumentBuildError(f"pdflatex reported success but {pdf_path.name} is missing")
+        raise DocumentBuildError(
+            f"pdflatex reported success but {pdf_path.name} is missing"
+        )
 
     for suffix in _AUX_SUFFIXES:
         aux = out_dir / f"{stem}{suffix}"
@@ -739,7 +742,9 @@ def build_documents(
         )
 
     resume_body, resume_version = _template_body(session, campaign, TemplateKind.RESUME)
-    letter_body, letter_version = _template_body(session, campaign, TemplateKind.COVER_LETTER)
+    letter_body, letter_version = _template_body(
+        session, campaign, TemplateKind.COVER_LETTER
+    )
 
     profile_ctx = _profile_context(profile)
     job_ctx = _job_context(job)
@@ -759,7 +764,7 @@ def build_documents(
         profile=profile,
         job=job,
         profile_text=profile_text,
-        requirements=requirements
+        requirements=requirements,
     )
     if unresolved:
         job.status = JobStatus.FAILED
@@ -881,7 +886,9 @@ def build_documents(
         # NEVER fall back to an older PDF here. A stale document that passes
         # the gate is the wrong document sent confidently.
         job.status = JobStatus.FAILED
-        log.error("documents_failed_parse_gate", job_id=job_id, detail=result.failure_reason)
+        log.error(
+            "documents_failed_parse_gate", job_id=job_id, detail=result.failure_reason
+        )
 
     session.add(job)
     return result
@@ -890,7 +897,9 @@ def build_documents(
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
     parser = argparse.ArgumentParser(prog="python -m backend.documents.build")
     parser.add_argument("--job-id", type=int, required=True)
-    parser.add_argument("--force", action="store_true", help="rebuild even if documents exist")
+    parser.add_argument(
+        "--force", action="store_true", help="rebuild even if documents exist"
+    )
     args = parser.parse_args(argv)
 
     configure_logging()

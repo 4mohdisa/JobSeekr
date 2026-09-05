@@ -44,7 +44,9 @@ def _plain_text(raw: str) -> str:
 class MailReader(Protocol):
     """What the rest of the system needs from a mailbox: recent messages."""
 
-    def fetch_recent(self, *, since: datetime, limit: int = 200) -> list[InboundEmail]: ...
+    def fetch_recent(
+        self, *, since: datetime, limit: int = 200
+    ) -> list[InboundEmail]: ...
 
 
 class ImapReader:
@@ -107,7 +109,9 @@ class OAuthReader:
 
         credentials = None
         if token_file and token_file.exists():
-            credentials = Credentials.from_authorized_user_file(str(token_file), list(self.SCOPES))
+            credentials = Credentials.from_authorized_user_file(
+                str(token_file), list(self.SCOPES)
+            )
 
         if credentials and credentials.expired and credentials.refresh_token:
             try:
@@ -125,7 +129,9 @@ class OAuthReader:
                 credentials = None
 
         if not credentials or not credentials.valid:
-            flow = InstalledAppFlow.from_client_secrets_file(str(secret_file), list(self.SCOPES))
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(secret_file), list(self.SCOPES)
+            )
             credentials = flow.run_local_server(port=0)
             if token_file:
                 token_file.parent.mkdir(parents=True, exist_ok=True)
@@ -136,7 +142,9 @@ class OAuthReader:
     def fetch_recent(self, *, since: datetime, limit: int = 200) -> list[InboundEmail]:
         from googleapiclient.discovery import build
 
-        service = build("gmail", "v1", credentials=self._credentials(), cache_discovery=False)
+        service = build(
+            "gmail", "v1", credentials=self._credentials(), cache_discovery=False
+        )
         query = f"after:{int(since.timestamp())}"
 
         listing = (
@@ -164,7 +172,9 @@ class OAuthReader:
             header["name"].lower(): header["value"]
             for header in payload.get("payload", {}).get("headers", [])
         }
-        received = datetime.fromtimestamp(int(payload.get("internalDate", 0)) / 1000, tz=UTC)
+        received = datetime.fromtimestamp(
+            int(payload.get("internalDate", 0)) / 1000, tz=UTC
+        )
 
         body = ""
         for part in OAuthReader._walk(payload.get("payload", {})):

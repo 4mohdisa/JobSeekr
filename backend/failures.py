@@ -220,7 +220,12 @@ def _rank(
             latest[bucket] = occurred
 
     return [
-        Trend(label=label, count=count, platform=platform, last_seen=latest[(label, platform)])
+        Trend(
+            label=label,
+            count=count,
+            platform=platform,
+            last_seen=latest[(label, platform)],
+        )
         for (label, platform), count in counter.most_common(limit)
         if count >= minimum
     ]
@@ -235,7 +240,9 @@ def trends(session: Session, *, hours: int = 168) -> TrendReport:
     """
     since = datetime.now(UTC) - timedelta(hours=hours)
     events = list(
-        session.exec(select(FailureEvent).where(FailureEvent.occurred_at >= since)).all()
+        session.exec(
+            select(FailureEvent).where(FailureEvent.occurred_at >= since)
+        ).all()
     )
     open_events = [event for event in events if event.resolved_at is None]
 
@@ -363,7 +370,9 @@ def digest_lines(session: Session, *, hours: int = 168) -> list[str]:
         }:
             # Already itemised above; repeating the total adds noise.
             continue
-        lines.append(f"· {trend.label.replace('_', ' ')} on {trend.platform}: {trend.count}×")
+        lines.append(
+            f"· {trend.label.replace('_', ' ')} on {trend.platform}: {trend.count}×"
+        )
 
     if report.resolved:
         lines.append(f"_{report.resolved} of {report.total} resolved._")

@@ -96,7 +96,9 @@ def _store(session: Session, raw: RawJob, *, campaign_id: int | None) -> str:
     except IntegrityError:
         # Two sources racing on the same ad, or a UNIQUE we did not anticipate.
         session.rollback()
-        log.debug("job_insert_conflict", source=raw.source, source_job_id=raw.source_job_id)
+        log.debug(
+            "job_insert_conflict", source=raw.source, source_job_id=raw.source_job_id
+        )
         return "duplicate"
     return "new"
 
@@ -182,7 +184,11 @@ def discover(
                         error=str(exc)[:300],
                     )
                     errors.append(
-                        {"source": name, "job": raw.source_job_id, "error": str(exc)[:200]}
+                        {
+                            "source": name,
+                            "job": raw.source_job_id,
+                            "error": str(exc)[:200],
+                        }
                     )
                     continue
                 bucket[outcome] += 1
@@ -296,7 +302,9 @@ def run_discovery(
         persist_detached(session, run)
         summary = run.model_dump()
 
-    log.info("discovery_complete", **{k: v for k, v in summary.items() if k != "errors"})
+    log.info(
+        "discovery_complete", **{k: v for k, v in summary.items() if k != "errors"}
+    )
     if errors:
         log.error("discovery_had_errors", count=len(errors), errors=errors[:5])
     return run
@@ -304,7 +312,9 @@ def run_discovery(
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
     parser = argparse.ArgumentParser(prog="python -m backend.discovery.run")
-    parser.add_argument("--campaign", type=int, default=None, help="restrict to one campaign id")
+    parser.add_argument(
+        "--campaign", type=int, default=None, help="restrict to one campaign id"
+    )
     parser.add_argument(
         "--hours-old",
         type=int,

@@ -18,7 +18,6 @@ from backend.config import settings
 from backend.scoring.rubric import score_schema
 from backend.scoring.run import estimate_cost
 
-
 # =========================================================================
 # Fan-out
 # =========================================================================
@@ -54,9 +53,7 @@ def test_the_levers_name_the_setting_that_actually_exists():
     advice was wrong.
     """
     # Force a miss by pricing an expensive model.
-    estimate = estimate_cost(
-        5000, top_n=0, scoring_model="anthropic/claude-opus-5"
-    )
+    estimate = estimate_cost(5000, top_n=0, scoring_model="anthropic/claude-opus-5")
     assert not estimate["meets_target"]
     assert any("SCORING_STAGE2_MAX" in lever for lever in estimate["levers"])
 
@@ -206,7 +203,10 @@ def test_a_single_variant_is_not_judged_at_all(monkeypatch):
         build_module.llm, "complete", lambda *a, **k: called.append(1) or "1"
     )
 
-    assert build_module._pick_best(["only"], slot=slot(), job=FakeJob(), requirements={}) == "only"
+    assert (
+        build_module._pick_best(["only"], slot=slot(), job=FakeJob(), requirements={})
+        == "only"
+    )
     assert called == []
 
 
@@ -235,7 +235,9 @@ def test_a_judge_that_raises_falls_back_to_the_first_variant(monkeypatch):
 
     monkeypatch.setattr(build_module.llm, "complete", boom)
     assert (
-        build_module._pick_best(["first", "second"], slot=slot(), job=FakeJob(), requirements={})
+        build_module._pick_best(
+            ["first", "second"], slot=slot(), job=FakeJob(), requirements={}
+        )
         == "first"
     )
 
@@ -274,7 +276,7 @@ def test_a_fabricating_variant_never_reaches_the_judge(monkeypatch):
     monkeypatch.setattr(build_module, "_pick_best", spy)
     monkeypatch.setattr(settings, "document_variants", 3)
 
-    generated, unresolved = build_module.generate_ai_slots(
+    _generated, unresolved = build_module.generate_ai_slots(
         [slot()], profile=object(), job=FakeJob(), profile_text="SQL at Acme"
     )
 
@@ -333,7 +335,9 @@ def test_a_clean_document_passes(monkeypatch):
     monkeypatch.setattr(
         verify_module.llm, "complete_json", lambda *a, **k: {"unsupported": []}
     )
-    passed, detail = verify_module._fabrication_self_check("SQL at Acme.", object(), "resume")
+    passed, detail = verify_module._fabrication_self_check(
+        "SQL at Acme.", object(), "resume"
+    )
     assert passed
     assert detail == ""
 
@@ -351,7 +355,9 @@ def test_an_unavailable_check_passes_rather_than_failing_the_document(monkeypatc
 
     monkeypatch.setattr(verify_module.llm, "complete_json", boom)
 
-    passed, detail = verify_module._fabrication_self_check("anything", object(), "resume")
+    passed, detail = verify_module._fabrication_self_check(
+        "anything", object(), "resume"
+    )
     assert passed
     assert "skipped" in detail
 
@@ -379,7 +385,9 @@ def test_the_check_goes_through_the_stubbable_seam():
     # anti-pattern in order to warn against it, and matching that would make
     # this test fail on its own documentation.
     code = "\n".join(
-        line.split("#")[0] for line in source.splitlines() if not line.strip().startswith("#")
+        line.split("#")[0]
+        for line in source.splitlines()
+        if not line.strip().startswith("#")
     )
 
     assert "llm.complete_json(" in code

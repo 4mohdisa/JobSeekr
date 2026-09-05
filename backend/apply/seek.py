@@ -123,7 +123,9 @@ class SeekApplier:
 
         # visible=False: file inputs are hidden behind a styled button.
         file_input = self.knowledge.resolve(page, "resume_file_input", visible=False)
-        resume = next((d for d in documents if d.kind.value in {"resume", "combined"}), None)
+        resume = next(
+            (d for d in documents if d.kind.value in {"resume", "combined"}), None
+        )
         if resume is None:
             raise RuntimeError("no resume or combined document to attach")
         file_input.set_input_files(resume.path)
@@ -175,4 +177,3 @@ class SeekApplier:
             self.knowledge.observe_flow(self._steps_seen)
         self.knowledge.save()
         return confirmed
-

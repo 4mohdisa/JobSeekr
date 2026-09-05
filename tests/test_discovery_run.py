@@ -29,7 +29,12 @@ class RecordingSource:
 
     def search(self, *, terms, locations, hours_old=None, limit=None):
         self.calls.append(
-            {"terms": terms, "locations": locations, "hours_old": hours_old, "limit": limit}
+            {
+                "terms": terms,
+                "locations": locations,
+                "hours_old": hours_old,
+                "limit": limit,
+            }
         )
         return list(self.jobs)
 
@@ -113,9 +118,9 @@ def test_an_empty_database_widens_the_window(factory):
 
     assert source.calls, "the source should have been asked"
     assert source.calls[0]["hours_old"] == settings.discovery_backfill_hours
-    assert (
-        settings.discovery_backfill_hours > settings.discovery_default_hours_old
-    ), "the backfill window must actually be wider than the incremental one"
+    assert settings.discovery_backfill_hours > settings.discovery_default_hours_old, (
+        "the backfill window must actually be wider than the incremental one"
+    )
 
 
 def test_a_populated_database_stays_incremental(factory):

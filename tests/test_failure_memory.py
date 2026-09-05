@@ -94,7 +94,12 @@ def test_it_answers_which_employers_consistently_abstain(session):
             company="Globex",
             question="Do you hold a current forklift licence?",
         )
-    add(session, failure_type=FailureType.ANSWER_ABSTAINED, company="Initech", question="q")
+    add(
+        session,
+        failure_type=FailureType.ANSWER_ABSTAINED,
+        company="Initech",
+        question="q",
+    )
 
     report = failures.trends(session)
     assert [t.label for t in report.abstaining_companies] == ["Globex"]
@@ -112,7 +117,10 @@ def test_it_answers_which_questions_keep_arriving_unanswered(session):
         )
 
     report = failures.trends(session)
-    assert report.unanswered_questions[0].label == "Do you have a current driver's licence?"
+    assert (
+        report.unanswered_questions[0].label
+        == "Do you have a current driver's licence?"
+    )
     assert report.unanswered_questions[0].count == 3, (
         "the same question across three employers is one trend, not three"
     )
@@ -171,7 +179,9 @@ def test_resolving_leaves_other_elements_alone(session):
     session.flush()
 
     still_open = [
-        row for row in session.exec(select(FailureEvent)).all() if row.resolved_at is None
+        row
+        for row in session.exec(select(FailureEvent)).all()
+        if row.resolved_at is None
     ]
     assert [row.element_id for row in still_open] == ["b"]
 
@@ -180,7 +190,10 @@ def test_resolved_events_are_still_counted_in_the_total(session):
     for _ in range(2):
         add(session, element_id="a")
     failures.resolve(
-        session, platform="linkedin", failure_type=FailureType.SELECTOR_DRIFT, element_id="a"
+        session,
+        platform="linkedin",
+        failure_type=FailureType.SELECTOR_DRIFT,
+        element_id="a",
     )
     session.flush()
 

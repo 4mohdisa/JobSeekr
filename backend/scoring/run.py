@@ -60,7 +60,9 @@ def _price(model: str, direction: str) -> float:
     """
     prices = settings.llm_prices_per_m_tokens.get(model)
     if prices is None:
-        log.warning("no_price_for_model", model=model, hint="add it to LLM_PRICES_PER_M_TOKENS")
+        log.warning(
+            "no_price_for_model", model=model, hint="add it to LLM_PRICES_PER_M_TOKENS"
+        )
         return 0.0
     return float(prices.get(direction, 0.0))
 
@@ -90,7 +92,9 @@ def estimate_cost(
     scoring_model = scoring_model or settings.llm_model_scoring
     embedding_model = embedding_model or settings.llm_model_embedding
 
-    embed_tokens = n_jobs * (settings.scoring_embedding_char_budget + 120) / _CHARS_PER_TOKEN
+    embed_tokens = (
+        n_jobs * (settings.scoring_embedding_char_budget + 120) / _CHARS_PER_TOKEN
+    )
     stage1_usd = embed_tokens / 1_000_000 * _price(embedding_model, "input")
 
     scored = min(n_jobs, top_n)
@@ -100,10 +104,9 @@ def estimate_cost(
         / _CHARS_PER_TOKEN
     )
     output_tokens = scored * _STAGE2_OUTPUT_TOKENS
-    stage2_usd = (
-        input_tokens / 1_000_000 * _price(scoring_model, "input")
-        + output_tokens / 1_000_000 * _price(scoring_model, "output")
-    )
+    stage2_usd = input_tokens / 1_000_000 * _price(
+        scoring_model, "input"
+    ) + output_tokens / 1_000_000 * _price(scoring_model, "output")
 
     total = stage1_usd + stage2_usd
     target = settings.scoring_cost_target_usd
@@ -114,8 +117,10 @@ def estimate_cost(
         per_job = stage2_usd / scored if scored else 0.0
         affordable = int((target - stage1_usd) / per_job) if per_job else 0
         levers = [
-            f"set SCORING_STAGE2_MAX to about {max(1, affordable)} "
-            f"(currently {settings.scoring_stage2_max or 'unlimited'})",
+            (
+                f"set SCORING_STAGE2_MAX to about {max(1, affordable)} "
+                f"(currently {settings.scoring_stage2_max or 'unlimited'})"
+            ),
             f"lower SCORING_PROMPT_CHAR_BUDGET from {settings.scoring_prompt_char_budget}",
             f"configure a cheaper LLM_MODEL_SCORING than {scoring_model} (your call)",
             f"raise SCORING_COST_TARGET_USD above {target}",
@@ -343,7 +348,9 @@ def score_campaign(
         if final is None:
             continue
         job.status = (
-            JobStatus.SCORED if final >= (campaign.score_floor or 0) else JobStatus.REJECTED
+            JobStatus.SCORED
+            if final >= (campaign.score_floor or 0)
+            else JobStatus.REJECTED
         )
         session.add(job)
 
@@ -389,13 +396,18 @@ def run_scoring(
                     )
                 )
             except LLMBudgetExceeded as exc:
-                log.error("scoring_halted_on_budget", campaign=campaign.name, detail=str(exc))
+                log.error(
+                    "scoring_halted_on_budget", campaign=campaign.name, detail=str(exc)
+                )
                 errors.append({"campaign": campaign.name, "error": str(exc)})
                 break
             except Exception as exc:
                 log.exception("campaign_scoring_failed", campaign=campaign.name)
                 errors.append(
-                    {"campaign": campaign.name, "error": f"{type(exc).__name__}: {exc}"[:300]}
+                    {
+                        "campaign": campaign.name,
+                        "error": f"{type(exc).__name__}: {exc}"[:300],
+                    }
                 )
 
         run = Run(
@@ -419,7 +431,9 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
     parser.add_argument(
         "--force", action="store_true", help="re-score even if a score already exists"
     )
-    parser.add_argument("--dry-run", action="store_true", help="filter and rank, no LLM calls")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="filter and rank, no LLM calls"
+    )
     parser.add_argument(
         "--estimate",
         type=int,
@@ -436,7 +450,10 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
         return 0
 
     run = run_scoring(
-        campaign_id=args.campaign, limit=args.limit, force=args.force, dry_run=args.dry_run
+        campaign_id=args.campaign,
+        limit=args.limit,
+        force=args.force,
+        dry_run=args.dry_run,
     )
     return 0 if run.ok else 1
 

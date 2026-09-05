@@ -54,7 +54,12 @@ def test_no_selectors_remain_in_the_ats_adapter_source():
     # knowledge; everything else must be gone.
     code = code.split("_READBACK_SELECTORS")[0] + code.split("def _readback_texts")[-1]
 
-    for shape in (r"a\.ja-apply", r"#apply_button", r"a\.postings-btn", r"adventureButton"):
+    for shape in (
+        r"a\.ja-apply",
+        r"#apply_button",
+        r"a\.postings-btn",
+        r"adventureButton",
+    ):
         assert not re.search(shape, code), f"{shape} is still a literal in adapters.py"
 
 
@@ -174,7 +179,9 @@ def test_a_graduated_form_map_does_not_block():
             _Draft(platform="greenhouse", form_map_trusted=True),
             is_authenticated=lambda p: True,
         )
-        assert "form_map_trusted" not in [c.name for c in verdict.checks if not c.passed]
+        assert "form_map_trusted" not in [
+            c.name for c in verdict.checks if not c.passed
+        ]
 
 
 def test_a_known_platform_is_not_gated_on_form_trust():
@@ -191,7 +198,10 @@ def test_three_clean_applications_graduate_a_shape():
     SQLModel.metadata.create_all(engine)
 
     with Session(engine) as session:
-        save_map(session, FormMapData(fingerprint="abc", tier="platform", platform="greenhouse"))
+        save_map(
+            session,
+            FormMapData(fingerprint="abc", tier="platform", platform="greenhouse"),
+        )
         session.flush()
 
         for index in range(TRUST_THRESHOLD - 1):
@@ -211,7 +221,9 @@ def test_the_approval_request_only_fires_when_trust_is_the_only_blocker():
         def __init__(self, checks):
             self.checks = checks
 
-    only_trust = Verdict([Check("form_map_trusted", False), Check("inside_window", True)])
+    only_trust = Verdict(
+        [Check("form_map_trusted", False), Check("inside_window", True)]
+    )
     also_switch = Verdict(
         [Check("form_map_trusted", False), Check("allow_live_submit", False)]
     )
@@ -323,7 +335,9 @@ def loaded(tmp_path, monkeypatch):
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False})
     SQLModel.metadata.create_all(engine)
     with Session(engine) as session:
-        session.add(Profile(version=1, identity={"name": "A", "email": "a@example.com"}))
+        session.add(
+            Profile(version=1, identity={"name": "A", "email": "a@example.com"})
+        )
         session.add(
             Campaign(
                 id=1,
@@ -412,7 +426,11 @@ def test_map_fields_is_reached_by_a_real_application_run(loaded, monkeypatch):
     )
 
     flow.run_apply(
-        _Page(), loaded, loaded.get(Job, 1), adapter=adapter, is_authenticated=lambda p: True
+        _Page(),
+        loaded,
+        loaded.get(Job, 1),
+        adapter=adapter,
+        is_authenticated=lambda p: True,
     )
 
     assert called, "map_fields was never reached by a real run — it is dead again"
@@ -523,7 +541,9 @@ def test_map_fields_is_not_called_when_the_bank_already_knows(loaded, monkeypatc
     from backend.apply.draft import FormField
 
     called: list[Any] = []
-    monkeypatch.setattr(flow, "map_fields", lambda fields, **kw: called.append(fields) or [])
+    monkeypatch.setattr(
+        flow, "map_fields", lambda fields, **kw: called.append(fields) or []
+    )
 
     adapter = _Adapter(
         steps=[
@@ -538,7 +558,11 @@ def test_map_fields_is_not_called_when_the_bank_already_knows(loaded, monkeypatc
     )
 
     flow.run_apply(
-        _Page(), loaded, loaded.get(Job, 1), adapter=adapter, is_authenticated=lambda p: True
+        _Page(),
+        loaded,
+        loaded.get(Job, 1),
+        adapter=adapter,
+        is_authenticated=lambda p: True,
     )
 
     assert not called, "an answerable form must not cost an LLM call"

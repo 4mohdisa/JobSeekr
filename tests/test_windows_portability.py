@@ -156,7 +156,9 @@ def test_no_subprocess_uses_shell_true():
     offenders: list[str] = []
     for path, tree in parsed():
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and _is_const(_keywords(node).get("shell"), True):
+            if isinstance(node, ast.Call) and _is_const(
+                _keywords(node).get("shell"), True
+            ):
                 offenders.append(f"{path.relative_to(REPO)}:{node.lineno}")
     assert offenders == [], offenders
 
@@ -405,8 +407,9 @@ def test_latex_aux_cleanup_tolerates_a_locked_file(tmp_path, monkeypatch):
     monkeypatch.setattr(build.settings, "latex_passes", 0)
     monkeypatch.setattr(build, "_run_pdflatex", lambda *a, **k: (0, ""))
 
-    result = build.render_pdf("\\documentclass{article}\\begin{document}x\\end{document}",
-                              tmp_path, "resume")
+    result = build.render_pdf(
+        "\\documentclass{article}\\begin{document}x\\end{document}", tmp_path, "resume"
+    )
     assert result == pdf, "a locked .aux must not fail a completed build"
 
 

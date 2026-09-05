@@ -250,7 +250,9 @@ def save_map(
     return path
 
 
-def merge_maps(base: FormMapData | None, override: FormMapData | None) -> FormMapData | None:
+def merge_maps(
+    base: FormMapData | None, override: FormMapData | None
+) -> FormMapData | None:
     """Company tier over platform tier, field by field.
 
     Field-by-field rather than whole-file so one employer's odd question does
@@ -290,7 +292,9 @@ def load_map(
 
     trusted = False
     if session is not None:
-        row = session.exec(select(FormMap).where(FormMap.fingerprint == fingerprint)).first()
+        row = session.exec(
+            select(FormMap).where(FormMap.fingerprint == fingerprint)
+        ).first()
         trusted = bool(row and row.trusted)
 
     if merged is not None:
@@ -316,7 +320,9 @@ def record_outcome(session: Session, fingerprint: str, *, success: bool) -> bool
     must be *consecutive* to mean the mapping generalised, and a map that
     alternates is not one to trust.
     """
-    row = session.exec(select(FormMap).where(FormMap.fingerprint == fingerprint)).first()
+    row = session.exec(
+        select(FormMap).where(FormMap.fingerprint == fingerprint)
+    ).first()
     if row is None:
         log.warning("form_map_outcome_unknown_fingerprint", fingerprint=fingerprint)
         return False
@@ -347,9 +353,7 @@ def record_outcome(session: Session, fingerprint: str, *, success: bool) -> bool
     return graduated
 
 
-def relearn_targets(
-    existing: FormMapData | None, fields: Sequence[Any]
-) -> list[Any]:
+def relearn_targets(existing: FormMapData | None, fields: Sequence[Any]) -> list[Any]:
     """Which fields still need the LLM.
 
     On a partial failure only the unknown fields are re-learned and merged back.
@@ -359,9 +363,5 @@ def relearn_targets(
     if existing is None:
         return list(fields)
 
-    known = {
-        mapping.identifier
-        for mapping in existing.fields
-        if mapping.resolved
-    }
+    known = {mapping.identifier for mapping in existing.fields if mapping.resolved}
     return [f for f in fields if getattr(f, "identifier", "") not in known]

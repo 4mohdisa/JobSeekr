@@ -93,11 +93,15 @@ def test_an_unknown_strategy_type_is_rejected_at_construction():
 @pytest.mark.parametrize(
     ("strategy", "expected"),
     [
-        (Strategy(type="testid", value="apply", attr="data-automation"),
-         "[data-automation='apply']"),
+        (
+            Strategy(type="testid", value="apply", attr="data-automation"),
+            "[data-automation='apply']",
+        ),
         (Strategy(type="testid", value="ember*", attr="id"), "[id*='ember']"),
-        (Strategy(type="role", role="button", name="Submit"),
-         'role=button[name="Submit" i]'),
+        (
+            Strategy(type="role", role="button", name="Submit"),
+            'role=button[name="Submit" i]',
+        ),
         (Strategy(type="label", value="Easy Apply"), "[aria-label*='Easy Apply' i]"),
         (Strategy(type="css", value="button.foo"), "button.foo"),
     ],
@@ -181,13 +185,15 @@ def test_drift_is_reported_when_a_promotion_replaces_a_previous_one():
         Strategy(type="testid", value="apply", attr="data-automation"),
         Strategy(type="role", role="button", name="Quick apply"),
     )
-    knowledge.elements["apply_button"].last_working_strategy = (
-        "testid:[data-automation='apply']"
-    )
+    knowledge.elements[
+        "apply_button"
+    ].last_working_strategy = "testid:[data-automation='apply']"
 
     siteknowledge.on_strategy_drift = lambda *args: seen.append(args)
     try:
-        knowledge.resolve(FakePage({'role=button[name="Quick apply" i]'}), "apply_button")
+        knowledge.resolve(
+            FakePage({'role=button[name="Quick apply" i]'}), "apply_button"
+        )
     finally:
         siteknowledge.on_strategy_drift = None
 
@@ -246,7 +252,9 @@ def test_total_failure_fires_the_alert_hook():
 
 def test_an_optional_element_returns_none_instead_of_raising():
     """Seek's cover-letter textarea is genuinely absent on some forms."""
-    knowledge = knowledge_with(Strategy(type="css", value="textarea.cl"), required=False)
+    knowledge = knowledge_with(
+        Strategy(type="css", value="textarea.cl"), required=False
+    )
     assert knowledge.resolve(FakePage(set()), "apply_button") is None
 
 
@@ -415,7 +423,9 @@ SELECTOR_SHAPES = (
 )
 
 
-@pytest.mark.parametrize("module_path", ["backend/apply/seek.py", "backend/apply/linkedin.py"])
+@pytest.mark.parametrize(
+    "module_path", ["backend/apply/seek.py", "backend/apply/linkedin.py"]
+)
 def test_no_platform_selector_remains_in_python_source(module_path):
     """Acceptance: a redesign is a JSON edit, not a code change.
 
@@ -442,12 +452,12 @@ def test_no_platform_selector_remains_in_python_source(module_path):
     )
 
 
-@pytest.mark.parametrize("module_path", ["backend/apply/seek.py", "backend/apply/linkedin.py"])
+@pytest.mark.parametrize(
+    "module_path", ["backend/apply/seek.py", "backend/apply/linkedin.py"]
+)
 def test_the_adapters_no_longer_export_a_selectors_table(module_path):
     """The old module-level SELECTORS dict must be gone, not merely unused."""
     import importlib
 
-    module = importlib.import_module(
-        module_path.replace("/", ".").removesuffix(".py")
-    )
+    module = importlib.import_module(module_path.replace("/", ".").removesuffix(".py"))
     assert not hasattr(module, "SELECTORS")

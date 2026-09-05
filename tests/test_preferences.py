@@ -51,7 +51,9 @@ def session():
         yield s
 
 
-def skip_jobs(session, *, company: str = "Globex", title: str = "Data Analyst", count: int = 5):
+def skip_jobs(
+    session, *, company: str = "Globex", title: str = "Data Analyst", count: int = 5
+):
     for index in range(count):
         session.add(
             Job(
@@ -137,7 +139,10 @@ def test_an_observed_form_field_that_is_fact_shaped_is_declined(session):
         preferences.observed_field(session, key="preferred start date", value="2 weeks")
         is None
     )
-    assert preferences.observed_field(session, key="referral_source", value="Seek") is not None
+    assert (
+        preferences.observed_field(session, key="referral_source", value="Seek")
+        is not None
+    )
 
 
 # =========================================================================
@@ -189,7 +194,10 @@ def test_rejecting_keeps_the_row_so_it_is_not_proposed_again(session):
 
 def test_a_user_set_preference_is_not_overwritten_by_an_inference(session):
     preferences.set(
-        session, key="preferred_industry", value="health", source=PreferenceSource.USER_SET
+        session,
+        key="preferred_industry",
+        value="health",
+        source=PreferenceSource.USER_SET,
     )
     session.flush()
 

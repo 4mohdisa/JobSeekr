@@ -108,9 +108,14 @@ def list_jobs(
         rows = [r for r in rows if (r.score or 0) <= max_score]
 
     reverse = sort in {"score", "discovered_at"}
-    rows.sort(key=lambda r: getattr(r, sort) or (0 if sort == "score" else ""), reverse=reverse)
+    rows.sort(
+        key=lambda r: getattr(r, sort) or (0 if sort == "score" else ""),
+        reverse=reverse,
+    )
 
-    return Page(items=rows[offset : offset + limit], total=len(rows), offset=offset, limit=limit)
+    return Page(
+        items=rows[offset : offset + limit], total=len(rows), offset=offset, limit=limit
+    )
 
 
 @jobs_router.get("/{job_id}", response_model=JobDetail)
@@ -169,7 +174,9 @@ def get_queue(
     kind of pause that makes manual applying feel like work.
     """
     query = select(Job).where(
-        col(Job.status).in_([JobStatus.MANUAL_QUEUE, JobStatus.NEEDS_ANSWER, JobStatus.QUEUED])
+        col(Job.status).in_(
+            [JobStatus.MANUAL_QUEUE, JobStatus.NEEDS_ANSWER, JobStatus.QUEUED]
+        )
     )
     if campaign_id is not None:
         query = query.where(Job.campaign_id == campaign_id)
@@ -182,14 +189,17 @@ def get_queue(
     answers = list(
         session.exec(
             select(AnswerBank).where(
-                (AnswerBank.campaign_id == campaign_id) | (AnswerBank.campaign_id.is_(None))  # type: ignore[union-attr]
+                (AnswerBank.campaign_id == campaign_id)
+                | (AnswerBank.campaign_id.is_(None))  # type: ignore[union-attr]
             )
         ).all()
     )
 
     cards: list[QueueCard] = []
     for job, score in scored[:limit]:
-        documents = list(session.exec(select(Document).where(Document.job_id == job.id)).all())
+        documents = list(
+            session.exec(select(Document).where(Document.job_id == job.id)).all()
+        )
 
         def document_id(kind: DocumentKind, *, available=documents) -> int | None:
             """Id of a gate-passed document of this kind, if there is one.
@@ -207,10 +217,16 @@ def get_queue(
         letter = next(
             (d for d in documents if d.kind == DocumentKind.COVER_LETTER), None
         )
-        cover_text = (letter.parse_report or {}).get("cover_letter_text", "") if letter else ""
+        cover_text = (
+            (letter.parse_report or {}).get("cover_letter_text", "") if letter else ""
+        )
 
-        usable = [a for a in answers if (a.answer_value or "").strip()][:QUEUE_ANSWER_LIMIT]
-        blank = [a.question_pattern for a in answers if not (a.answer_value or "").strip()]
+        usable = [a for a in answers if (a.answer_value or "").strip()][
+            :QUEUE_ANSWER_LIMIT
+        ]
+        blank = [
+            a.question_pattern for a in answers if not (a.answer_value or "").strip()
+        ]
 
         cards.append(
             QueueCard(
@@ -241,7 +257,9 @@ def mark_queue_done(job_id: int, session: Session = Depends(get_session)) -> Job
     if job is None:
         raise HTTPException(404, "no such job")
 
-    existing = session.exec(select(Application).where(Application.job_id == job_id)).first()
+    existing = session.exec(
+        select(Application).where(Application.job_id == job_id)
+    ).first()
     if existing is None:
         session.add(
             Application(
@@ -307,16 +325,23 @@ def list_applications(
     rows = [_application_out(session, a) for a in session.exec(query).all()]
     if campaign_id is not None:
         job_ids = {
-            job.id for job in session.exec(select(Job).where(Job.campaign_id == campaign_id)).all()
+            job.id
+            for job in session.exec(
+                select(Job).where(Job.campaign_id == campaign_id)
+            ).all()
         }
         rows = [r for r in rows if r.job_id in job_ids]
 
-    return Page(items=rows[offset : offset + limit], total=len(rows), offset=offset, limit=limit)
+    return Page(
+        items=rows[offset : offset + limit], total=len(rows), offset=offset, limit=limit
+    )
 
 
 @applications_router.patch("/{application_id}", response_model=ApplicationOut)
 def patch_application(
-    application_id: int, payload: ApplicationPatch, session: Session = Depends(get_session)
+    application_id: int,
+    payload: ApplicationPatch,
+    session: Session = Depends(get_session),
 ) -> ApplicationOut:
     row = session.get(Application, application_id)
     if row is None:
@@ -397,7 +422,9 @@ REPLIED_STATUSES = {
 def _bucket(key: str, applications: list[Application], minimum: int) -> AnalyticsBucket:
     """Summarise one breakdown group, refusing to report a rate off noise."""
     applied = len(applications)
-    acknowledged = sum(1 for a in applications if a.response_status == ResponseStatus.ACKNOWLEDGED)
+    acknowledged = sum(
+        1 for a in applications if a.response_status == ResponseStatus.ACKNOWLEDGED
+    )
     replied = sum(1 for a in applications if a.response_status in REPLIED_STATUSES)
     interviews = sum(
         1 for a in applications if a.response_status == ResponseStatus.INTERVIEW_REQUEST
@@ -414,7 +441,9 @@ def _bucket(key: str, applications: list[Application], minimum: int) -> Analytic
         # Rates are None below the threshold ON PURPOSE. A 100% interview rate
         # from one application is not a small sample, it is a wrong number, and
         # rendering it invites a real decision to be made on noise.
-        interview_rate=round(interviews / applied, 4) if sufficient and applied else None,
+        interview_rate=round(interviews / applied, 4)
+        if sufficient and applied
+        else None,
         any_reply_rate=round(replied / applied, 4) if sufficient and applied else None,
     )
 
@@ -436,7 +465,9 @@ def get_analytics(session: Session = Depends(get_session)) -> AnalyticsResponse:
         campaign_key = str(job.campaign_id) if job and job.campaign_id else "none"
         by_campaign.setdefault(campaign_key, []).append(application)
 
-        by_platform.setdefault(application.platform or "unknown", []).append(application)
+        by_platform.setdefault(application.platform or "unknown", []).append(
+            application
+        )
 
         score = _latest_score(session, application.job_id)
         if score and score.final is not None:
@@ -467,7 +498,9 @@ def get_analytics(session: Session = Depends(get_session)) -> AnalyticsResponse:
         FunnelStage(
             stage="interview",
             count=sum(
-                1 for a in applications if a.response_status == ResponseStatus.INTERVIEW_REQUEST
+                1
+                for a in applications
+                if a.response_status == ResponseStatus.INTERVIEW_REQUEST
             ),
         ),
     ]
@@ -540,7 +573,9 @@ def get_document_file(
 
 
 @documents_router.get("/job/{job_id}", response_model=list[DocumentOut])
-def list_job_documents(job_id: int, session: Session = Depends(get_session)) -> list[Document]:
+def list_job_documents(
+    job_id: int, session: Session = Depends(get_session)
+) -> list[Document]:
     return list(session.exec(select(Document).where(Document.job_id == job_id)).all())
 
 
@@ -557,6 +592,8 @@ def build_job_documents(
         "ok": result.ok,
         "failure_reason": result.failure_reason,
         "documents": {kind: doc.id for kind, doc in result.documents.items()},
-        "reports": {kind: report.model_dump() for kind, report in result.reports.items()},
+        "reports": {
+            kind: report.model_dump() for kind, report in result.reports.items()
+        },
         "violations": [str(v) for v in result.violations],
     }

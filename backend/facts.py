@@ -442,7 +442,11 @@ def resolve_from_facts(
         if on_confirmation_needed is not None:
             try:
                 on_confirmation_needed(
-                    row.id, question, derivation.answer, fact.key, fact.text,
+                    row.id,
+                    question,
+                    derivation.answer,
+                    fact.key,
+                    fact.text,
                     derivation.reasoning,
                 )
             except Exception as exc:  # noqa: BLE001 - asking must not abort

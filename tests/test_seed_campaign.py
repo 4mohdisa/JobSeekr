@@ -180,6 +180,9 @@ def test_seed_all_includes_the_campaign(session_scope):
 
     seed_all()
     with session_scope() as session:
-        assert session.exec(
-            select(Campaign).where(Campaign.name == STARTER_CAMPAIGN_NAME)
-        ).first() is not None
+        assert (
+            session.exec(
+                select(Campaign).where(Campaign.name == STARTER_CAMPAIGN_NAME)
+            ).first()
+            is not None
+        )

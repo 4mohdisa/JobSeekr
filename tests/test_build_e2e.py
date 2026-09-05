@@ -59,7 +59,9 @@ def session(tmp_path, monkeypatch):
                     "headline": "Data Analyst",
                     "summary": "Efficient financial reporting and certification workflow design.",
                 },
-                work_rights={"statement": "Australian citizen with full working rights."},
+                work_rights={
+                    "statement": "Australian citizen with full working rights."
+                },
                 experience=[
                     {
                         "title": "Senior Analyst",
@@ -169,7 +171,9 @@ def test_find_ai_slots_returns_only_the_slots_used():
 
 
 def test_rendering_escapes_substituted_values_automatically():
-    out = render_string(r"Company: \VAR{job.company}", {"job": {"company": "Smith & Co"}})
+    out = render_string(
+        r"Company: \VAR{job.company}", {"job": {"company": "Smith & Co"}}
+    )
     assert r"Smith \& Co" in out
 
 
@@ -208,7 +212,12 @@ def test_the_target_company_may_be_named(session):
     """Naming the employer being applied to is not fabrication."""
     profile = session.get(Profile, 1)
     job = session.get(Job, 1)
-    assert validate_no_fabrication("Wattle Group is hiring for work I have done.", profile, job) == []
+    assert (
+        validate_no_fabrication(
+            "Wattle Group is hiring for work I have done.", profile, job
+        )
+        == []
+    )
 
 
 # ------------------------------------------------------------------- full build
@@ -258,5 +267,7 @@ def test_aux_files_are_cleaned_up(session, monkeypatch):
     stub_llm(monkeypatch, CLEAN_TEXT)
     result = build_module.build_documents(session, 1)
     out_dir = Path(result.documents["resume"].path).parent
-    leftovers = [p.name for p in out_dir.iterdir() if p.suffix in {".aux", ".log", ".out"}]
+    leftovers = [
+        p.name for p in out_dir.iterdir() if p.suffix in {".aux", ".log", ".out"}
+    ]
     assert leftovers == [], leftovers

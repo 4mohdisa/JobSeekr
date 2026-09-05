@@ -231,7 +231,9 @@ def _resume_tex(profile: Profile) -> str:
     return render_string(source, context)
 
 
-def _compile_and_extract(profile: Profile, tmp_path: Path, stem: str) -> tuple[str, str]:
+def _compile_and_extract(
+    profile: Profile, tmp_path: Path, stem: str
+) -> tuple[str, str]:
     """Render the shipped template, compile it, and read the text back."""
     pdf = render_pdf(_resume_tex(profile), tmp_path, stem)
     return _extract_pypdf(pdf)[0], _extract_pdfplumber(pdf)[0]
@@ -311,7 +313,9 @@ def test_no_escaped_fact_leaks_a_raw_special_character(fact: str):
 
 @needs_pdflatex
 def test_every_syntax_breaking_fact_survives_a_real_build(tmp_path):
-    pypdf_text, plumber_text = _compile_and_extract(BREAKING_PROFILE, tmp_path, "breaking")
+    pypdf_text, plumber_text = _compile_and_extract(
+        BREAKING_PROFILE, tmp_path, "breaking"
+    )
 
     assert _missing(BREAKING, pypdf_text) == [], pypdf_text
     assert _missing(BREAKING, plumber_text) == [], plumber_text
@@ -446,7 +450,9 @@ def test_the_gate_would_have_caught_a_curled_apostrophe(tmp_path):
 
     # The pre-fix behaviour: emit the raw ASCII quote and let LaTeX curl it.
     regressed = tex.replace(r"\textquotesingle{}", "'")
-    report = verify_pdf(render_pdf(regressed, tmp_path, "curled"), kind="resume", expect=expect)
+    report = verify_pdf(
+        render_pdf(regressed, tmp_path, "curled"), kind="resume", expect=expect
+    )
 
     check = next(c for c in report.checks if c.name == "verbatim_facts_present")
     assert check.passed is False, "a curled apostrophe must fail the gate"
@@ -465,7 +471,9 @@ def test_the_old_keyword_list_passes_a_document_the_new_gate_rejects(tmp_path):
     keyword check sees nothing wrong.
     """
     tex = _resume_tex(BREAKING_PROFILE)
-    broken = render_pdf(tex.replace(r"\_", r"\textbackslash{}\_"), tmp_path, "underscore")
+    broken = render_pdf(
+        tex.replace(r"\_", r"\textbackslash{}\_"), tmp_path, "underscore"
+    )
 
     common = {
         "name": "José Müller-Ångström",
@@ -476,18 +484,25 @@ def test_the_old_keyword_list_passes_a_document_the_new_gate_rejects(tmp_path):
     }
     skills = [str(skill) for skill in BREAKING_PROFILE.skills][:12]
 
-    old = verify_pdf(broken, kind="resume", expect=ParseExpectations(claimed_keywords=skills, **common))
+    old = verify_pdf(
+        broken,
+        kind="resume",
+        expect=ParseExpectations(claimed_keywords=skills, **common),
+    )
     assert old.passed, "the old gate is expected to miss this — that is the point"
 
     new = verify_pdf(
         broken,
         kind="resume",
-        expect=ParseExpectations(verbatim=expected_verbatim(BREAKING_PROFILE), **common),
+        expect=ParseExpectations(
+            verbatim=expected_verbatim(BREAKING_PROFILE), **common
+        ),
     )
     assert not new.passed
-    assert "data_pipeline_v2" in next(
-        c for c in new.failures if c.name == "verbatim_facts_present"
-    ).detail
+    assert (
+        "data_pipeline_v2"
+        in next(c for c in new.failures if c.name == "verbatim_facts_present").detail
+    )
 
 
 # =========================================================================
@@ -517,7 +532,10 @@ def test_an_escaped_percent_is_content_not_a_comment():
     from backend.documents.verify import _strip_latex_comments
 
     assert _strip_latex_comments(r"Delivered 100\% uptime") == r"Delivered 100\% uptime"
-    assert _strip_latex_comments(r"Delivered 100\% uptime % aside") == r"Delivered 100\% uptime "
+    assert (
+        _strip_latex_comments(r"Delivered 100\% uptime % aside")
+        == r"Delivered 100\% uptime "
+    )
 
 
 @needs_pdflatex

@@ -96,7 +96,9 @@ def job():
     )
 
 
-def add_submitted(session, *, job_id: int, when: datetime, platform: str = "seek") -> None:
+def add_submitted(
+    session, *, job_id: int, when: datetime, platform: str = "seek"
+) -> None:
     """Insert a submitted application, creating its job first.
 
     backend.db enables PRAGMA foreign_keys for every connection, so an
@@ -246,7 +248,9 @@ def test_excluded_company_blocks(session, job, campaign, live):
 
 
 def test_a_document_that_failed_the_parse_gate_blocks(session, job, campaign, live):
-    draft = FakeDraft(campaign=campaign, documents=[FakeDocument(parse_check_passed=False)])
+    draft = FakeDraft(
+        campaign=campaign, documents=[FakeDocument(parse_check_passed=False)]
+    )
     result = run(session, job, draft)
     assert named(result, "documents_parse_checked").passed is False
 
@@ -273,14 +277,18 @@ def test_an_unrendered_or_empty_cover_letter_blocks(session, job, campaign, live
 
 
 def test_one_abstention_blocks(session, job, campaign, live):
-    result = run(session, job, FakeDraft(campaign=campaign, abstentions=[FakeAbstain()]))
+    result = run(
+        session, job, FakeDraft(campaign=campaign, abstentions=[FakeAbstain()])
+    )
     check = named(result, "no_abstentions")
     assert check.passed is False
     assert "forklift" in check.detail
 
 
 def test_an_unauthenticated_session_blocks(session, job, campaign, live):
-    result = run(session, job, FakeDraft(campaign=campaign), is_authenticated=lambda p: False)
+    result = run(
+        session, job, FakeDraft(campaign=campaign), is_authenticated=lambda p: False
+    )
     assert named(result, "session_authenticated").passed is False
 
 
@@ -341,9 +349,10 @@ def test_the_window_is_evaluated_across_a_dst_transition(session, job, campaign,
 
     # The two instants are a different number of hours from UTC, proving the
     # zone (not a fixed offset) is doing the work.
-    assert before_dst.astimezone(ADELAIDE).utcoffset() != after_dst.astimezone(
-        ADELAIDE
-    ).utcoffset()
+    assert (
+        before_dst.astimezone(ADELAIDE).utcoffset()
+        != after_dst.astimezone(ADELAIDE).utcoffset()
+    )
 
 
 # ------------------------------------------------------------------ interval
@@ -452,19 +461,30 @@ def test_pacing_respects_the_floor_and_is_never_constant():
 
 
 def test_pacing_is_deterministic_for_a_seeded_rng():
-    assert next_interval_seconds(random.Random(7)) == next_interval_seconds(random.Random(7))
+    assert next_interval_seconds(random.Random(7)) == next_interval_seconds(
+        random.Random(7)
+    )
 
 
 # --------------------------------------------------------------- reporting
 
 
-def test_all_checks_are_reported_not_just_the_first_failure(session, job, campaign, live):
+def test_all_checks_are_reported_not_just_the_first_failure(
+    session, job, campaign, live
+):
     campaign.active = False
-    draft = FakeDraft(campaign=campaign, score=10.0, cover_letter_text="", abstentions=[FakeAbstain()])
+    draft = FakeDraft(
+        campaign=campaign, score=10.0, cover_letter_text="", abstentions=[FakeAbstain()]
+    )
     result = run(session, job, draft)
 
     failed = {c.name for c in result.failures}
-    assert {"campaign_active", "score_threshold", "cover_letter_clean", "no_abstentions"} <= failed
+    assert {
+        "campaign_active",
+        "score_threshold",
+        "cover_letter_clean",
+        "no_abstentions",
+    } <= failed
 
 
 def test_there_is_no_bypass_parameter():

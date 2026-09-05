@@ -19,14 +19,13 @@ from __future__ import annotations
 
 import argparse
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from sqlmodel import select
 
-from pathlib import Path
-
-from backend.config import settings
 from backend import facts, failures, preferences, sessions
+from backend.config import settings
 from backend.db import session_scope
 from backend.integrations.notify import Priority, set_sender
 from backend.logging_setup import configure_logging, get_logger
@@ -79,7 +78,11 @@ def send_message(text: str, priority: Priority = Priority.NORMAL) -> bool:
             timeout=15,
         )
         if response.status_code != 200:
-            log.error("telegram_send_failed", status=response.status_code, body=response.text[:200])
+            log.error(
+                "telegram_send_failed",
+                status=response.status_code,
+                body=response.text[:200],
+            )
             return False
         return True
     except Exception as exc:
@@ -189,8 +192,10 @@ def request_form_approval(
     lines = [
         f"*Form approval needed* — job {job_id} on {platform}",
         "",
-        "This form's field mapping came from the model and has not been proven "
-        "on this shape yet, so nothing was submitted.",
+        (
+            "This form's field mapping came from the model and has not been proven "
+            "on this shape yet, so nothing was submitted."
+        ),
     ]
     if answers:
         lines.append("")
@@ -213,7 +218,9 @@ def request_form_approval(
     return send_message(body, Priority.IMMEDIATE)
 
 
-def escalate_question(job_id: int, question: str, *, choices: list[str] | None = None) -> bool:
+def escalate_question(
+    job_id: int, question: str, *, choices: list[str] | None = None
+) -> bool:
     """Ask the user one screening question about a parked job.
 
     Called after the job is already parked and the browser is already closed.
@@ -226,15 +233,19 @@ def escalate_question(job_id: int, question: str, *, choices: list[str] | None =
         title, company, url = job.title, job.company, job.url
 
     hint = (
-        f"\nOptions: {' / '.join(choices)}" if choices else "\nReply with the answer as text."
+        f"\nOptions: {' / '.join(choices)}"
+        if choices
+        else "\nReply with the answer as text."
     )
     return send_message(
-        f"*Question needed*\n"
-        f"{title} at {company}\n"
-        f"[open the ad]({url})\n\n"
-        f"_{question}_{hint}\n\n"
-        f"The answer is saved to the answer bank, so this is asked once.\n"
-        f"Reply: `/answer {job_id} <your answer>`",
+        (
+            f"*Question needed*\n"
+            f"{title} at {company}\n"
+            f"[open the ad]({url})\n\n"
+            f"_{question}_{hint}\n\n"
+            f"The answer is saved to the answer bank, so this is asked once.\n"
+            f"Reply: `/answer {job_id} <your answer>`"
+        ),
         Priority.IMMEDIATE,
     )
 
@@ -320,7 +331,9 @@ def build_digest(*, hours: int = 24) -> str:
 
     with session_scope() as session:
         applications = list(
-            session.exec(select(Application).where(Application.applied_at >= since)).all()
+            session.exec(
+                select(Application).where(Application.applied_at >= since)
+            ).all()
         )
         jobs = {job.id: job for job in session.exec(select(Job)).all()}
         campaigns = {c.id: c for c in session.exec(select(Campaign)).all()}
@@ -331,7 +344,9 @@ def build_digest(*, hours: int = 24) -> str:
         queued = list(
             session.exec(select(Job).where(Job.status == JobStatus.MANUAL_QUEUE)).all()
         )
-        failed = list(session.exec(select(Job).where(Job.status == JobStatus.FAILED)).all())
+        failed = list(
+            session.exec(select(Job).where(Job.status == JobStatus.FAILED)).all()
+        )
 
     submitted = [a for a in applications if a.outcome == ApplicationOutcome.SUBMITTED]
 
@@ -353,13 +368,17 @@ def build_digest(*, hours: int = 24) -> str:
                 continue
             documents = ""
             if application.resume_doc_id:
-                documents = f" · [resume](/api/documents/{application.resume_doc_id}/file)"
+                documents = (
+                    f" · [resume](/api/documents/{application.resume_doc_id}/file)"
+                )
             if application.cover_letter_doc_id:
                 documents += f" · [letter](/api/documents/{application.cover_letter_doc_id}/file)"
             lines.append(f"· {job.title} — {job.company}{documents}")
 
     if parked:
-        lines.append(f"\n*Waiting on you* — {len(parked)} parked for a screening answer")
+        lines.append(
+            f"\n*Waiting on you* — {len(parked)} parked for a screening answer"
+        )
         for job in parked[:5]:
             lines.append(f"· {job.title} at {job.company} (`/job {job.id}`)")
 
@@ -367,7 +386,9 @@ def build_digest(*, hours: int = 24) -> str:
         lines.append(f"\n*Manual queue* — {len(queued)} waiting")
 
     if failed:
-        lines.append(f"\n*Failed* — {len(failed)} (parse gate or apply errors; see the dashboard)")
+        lines.append(
+            f"\n*Failed* — {len(failed)} (parse gate or apply errors; see the dashboard)"
+        )
 
     # Trends, not events: a failure worth an immediate alert already got one
     # from the layer that detected it. What the digest adds is repetition.
@@ -392,9 +413,7 @@ def build_digest(*, hours: int = 24) -> str:
         # answer until it is confirmed.
         waiting = facts.pending_confirmations(session)
         if waiting:
-            lines.append(
-                f"\n*Derived answers awaiting you* — {len(waiting)}"
-            )
+            lines.append(f"\n*Derived answers awaiting you* — {len(waiting)}")
             for row in waiting[:5]:
                 lines.append(
                     f"· {row.question_text[:60]} -> {row.answer_value[:30]} "
@@ -439,7 +458,8 @@ def _cmd_stop(argument: str) -> str:
 
     settings.stop_file.parent.mkdir(parents=True, exist_ok=True)
     settings.stop_file.write_text(
-        f"stopped {datetime.now(UTC).isoformat()}\nvia Telegram /stop\n", encoding="utf-8"
+        f"stopped {datetime.now(UTC).isoformat()}\nvia Telegram /stop\n",
+        encoding="utf-8",
     )
     # Any job mid-application will fail its guardrail check on the next submit
     # attempt and return to the queue rather than being sent.
@@ -471,13 +491,25 @@ def _cmd_status(_: str) -> str:
 
     with session_scope() as session:
         today = len(
-            list(session.exec(select(Application).where(Application.applied_at >= since)).all())
+            list(
+                session.exec(
+                    select(Application).where(Application.applied_at >= since)
+                ).all()
+            )
         )
         parked = len(
-            list(session.exec(select(Job).where(Job.status == JobStatus.NEEDS_ANSWER)).all())
+            list(
+                session.exec(
+                    select(Job).where(Job.status == JobStatus.NEEDS_ANSWER)
+                ).all()
+            )
         )
         queued = len(
-            list(session.exec(select(Job).where(Job.status == JobStatus.MANUAL_QUEUE)).all())
+            list(
+                session.exec(
+                    select(Job).where(Job.status == JobStatus.MANUAL_QUEUE)
+                ).all()
+            )
         )
 
     spend = budget_status()
@@ -554,15 +586,13 @@ def _cmd_answer(argument: str) -> str:
     # would make every other campaign ask the same question again.
     save_answer(question, parts[1], row_id=row_id)
     requeued = requeue_job(job_id)
-    return (
-        f"Saved: _{question}_ → *{parts[1]}*\n"
-        + ("Job re-queued." if requeued else "Job was not parked; answer still saved.")
+    return f"Saved: _{question}_ → *{parts[1]}*\n" + (
+        "Job re-queued." if requeued else "Job was not parked; answer still saved."
     )
 
 
 def _cmd_digest(_: str) -> str:
     return build_digest()
-
 
 
 def _decide_derivation(derivation_id: int, *, confirm: bool) -> str:
@@ -582,6 +612,7 @@ def _decide_derivation(derivation_id: int, *, confirm: bool) -> str:
             "Rejected. It will be re-derived next time — if the fact itself is "
             "wrong, fix it on the Facts page first."
         )
+
 
 def _cmd_yes(argument: str) -> str:
     """Confirm a proposed preference. Only this makes an inference take effect."""
@@ -654,7 +685,9 @@ def build_application() -> Any:
     if not _configured():
         raise RuntimeError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
 
-    application = TelegramApplication.builder().token(settings.telegram_bot_token).build()
+    application = (
+        TelegramApplication.builder().token(settings.telegram_bot_token).build()
+    )
 
     async def on_message(update: Update, _: ContextTypes.DEFAULT_TYPE) -> None:
         if update.effective_chat is None or update.message is None:
@@ -672,7 +705,9 @@ def build_application() -> Any:
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
     parser = argparse.ArgumentParser(prog="python -m backend.integrations.telegram")
-    parser.add_argument("--digest", action="store_true", help="send the digest and exit")
+    parser.add_argument(
+        "--digest", action="store_true", help="send the digest and exit"
+    )
     args = parser.parse_args(argv)
 
     configure_logging()

@@ -33,7 +33,13 @@ from backend.logging_setup import get_logger
 
 log = get_logger(__name__)
 
-__all__ = ["ATS_REGISTRY", "AtsPlatform", "detect", "detect_from_html", "detect_from_url"]
+__all__ = [
+    "ATS_REGISTRY",
+    "AtsPlatform",
+    "detect",
+    "detect_from_html",
+    "detect_from_url",
+]
 
 
 @dataclass(frozen=True)
@@ -83,7 +89,11 @@ ATS_REGISTRY: tuple[AtsPlatform, ...] = (
         key="greenhouse",
         label="Greenhouse",
         priority=4,
-        host_patterns=("greenhouse.io", "boards.greenhouse.io", "job-boards.greenhouse.io"),
+        host_patterns=(
+            "greenhouse.io",
+            "boards.greenhouse.io",
+            "job-boards.greenhouse.io",
+        ),
         html_markers=("greenhouse.io", "grnhse", "gh_jid"),
     ),
     AtsPlatform(
@@ -238,16 +248,21 @@ def detect(url: str, html: str | None = None) -> Detection:
     """URL first, then the page source. Returns unknown rather than guessing."""
     result = detect_from_url(url)
     if result.platform is not None:
-        log.debug("ats_detected", platform=result.key, via="url", evidence=result.evidence)
+        log.debug(
+            "ats_detected", platform=result.key, via="url", evidence=result.evidence
+        )
         return result
 
     if html:
         result = detect_from_html(html)
         if result.platform is not None:
-            log.info("ats_detected", platform=result.key, via="html", evidence=result.evidence)
+            log.info(
+                "ats_detected",
+                platform=result.key,
+                via="html",
+                evidence=result.evidence,
+            )
             return result
 
     log.info("ats_unknown", url=url[:120])
     return Detection(platform=None, confidence="none")
-
-

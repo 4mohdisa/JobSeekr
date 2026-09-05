@@ -74,7 +74,9 @@ def check_platform(page: Any, platform: str) -> CanaryResult:
     """Load the canary page and report which watched selectors are missing."""
     url = CANARY_PAGES.get(platform)
     if url is None:
-        return CanaryResult(platform=platform, reachable=False, error="no canary URL configured")
+        return CanaryResult(
+            platform=platform, reachable=False, error="no canary URL configured"
+        )
 
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=30000)
@@ -82,7 +84,9 @@ def check_platform(page: Any, platform: str) -> CanaryResult:
         # A blocked or offline host is not drift. Saying so plainly matters:
         # this environment cannot reach either platform at all.
         return CanaryResult(
-            platform=platform, reachable=False, error=f"{type(exc).__name__}: {exc}"[:200]
+            platform=platform,
+            reachable=False,
+            error=f"{type(exc).__name__}: {exc}"[:200],
         )
 
     drifted = [
@@ -93,7 +97,9 @@ def check_platform(page: Any, platform: str) -> CanaryResult:
     return CanaryResult(platform=platform, reachable=True, drifted=drifted)
 
 
-def run_canary(platforms: list[str] | None = None, *, page: Any = None) -> dict[str, Any]:
+def run_canary(
+    platforms: list[str] | None = None, *, page: Any = None
+) -> dict[str, Any]:
     """Check each platform. Warns on drift; never halts the pipeline."""
     platforms = platforms or sorted(CANARY_PAGES)
     results: list[CanaryResult] = []
@@ -116,7 +122,9 @@ def run_canary(platforms: list[str] | None = None, *, page: Any = None) -> dict[
 
     for result in results:
         if not result.reachable:
-            log.warning("canary_unreachable", platform=result.platform, error=result.error)
+            log.warning(
+                "canary_unreachable", platform=result.platform, error=result.error
+            )
         elif result.drifted:
             log.warning(
                 "canary_drift_detected",

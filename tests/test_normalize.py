@@ -135,7 +135,10 @@ def test_relative_dates(text, expected):
 
 
 def test_iso_and_epoch_forms_land_on_utc():
-    assert parse_posted_at("2026-08-20T03:00:00Z").isoformat() == "2026-08-20T03:00:00+00:00"
+    assert (
+        parse_posted_at("2026-08-20T03:00:00Z").isoformat()
+        == "2026-08-20T03:00:00+00:00"
+    )
     assert parse_posted_at("2026-08-20").tzinfo is UTC
     assert parse_posted_at(1756000000).tzinfo is UTC
     assert parse_posted_at(1756000000000).tzinfo is UTC  # milliseconds

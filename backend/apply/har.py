@@ -35,9 +35,9 @@ __all__ = [
     "VARIANTS",
     "Variant",
     "har_path",
+    "ingest",
     "list_recordings",
     "missing_recordings",
-    "ingest",
     "record",
     "replay",
     "snapshots_path",
@@ -182,9 +182,7 @@ def record(platform: str, variant: str, *, url: str | None = None) -> Path:
             ),
             encoding="utf-8",
         )
-        log.info(
-            "har_snapshots_saved", path=str(snapshot_target), steps=len(steps)
-        )
+        log.info("har_snapshots_saved", path=str(snapshot_target), steps=len(steps))
     else:
         log.warning(
             "har_no_snapshots",
@@ -198,7 +196,9 @@ def record(platform: str, variant: str, *, url: str | None = None) -> Path:
     return target
 
 
-def replay(context: Any, platform: str, variant: str, *, url_glob: str = "**/*") -> bool:
+def replay(
+    context: Any, platform: str, variant: str, *, url_glob: str = "**/*"
+) -> bool:
     """Serve a recording back to a browser context. Returns False if absent.
 
     Tests call this instead of touching the network, so an adapter can be run
@@ -206,7 +206,9 @@ def replay(context: Any, platform: str, variant: str, *, url_glob: str = "**/*")
     """
     path = har_path(platform, variant)
     if not path.exists():
-        log.warning("har_recording_missing", platform=platform, variant=variant, path=str(path))
+        log.warning(
+            "har_recording_missing", platform=platform, variant=variant, path=str(path)
+        )
         return False
     context.route_from_har(str(path), url=url_glob, not_found="abort")
     return True
@@ -223,7 +225,11 @@ def ingest(platform: str, variant: str, *, dry_run: bool = False) -> int:
     evidence about what has actually been working, which a capture cannot know,
     so a re-capture adds strategies and never resets them.
     """
-    from backend.apply.harextract import extract, merge_into, push_questions_to_answer_bank
+    from backend.apply.harextract import (
+        extract,
+        merge_into,
+        push_questions_to_answer_bank,
+    )
     from backend.db import session_scope
     from backend.siteknowledge import load
 
@@ -274,8 +280,12 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
 
     record_parser = sub.add_parser("record", help="capture a real application flow")
     record_parser.add_argument("--platform", required=True)
-    record_parser.add_argument("--variant", required=True, choices=[v.key for v in VARIANTS])
-    record_parser.add_argument("--url", default=None, help="start at a specific job URL")
+    record_parser.add_argument(
+        "--variant", required=True, choices=[v.key for v in VARIANTS]
+    )
+    record_parser.add_argument(
+        "--url", default=None, help="start at a specific job URL"
+    )
 
     sub.add_parser("list", help="show which variants have been recorded")
 
@@ -283,7 +293,9 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
         "ingest", help="turn a recording into site knowledge (merges, never overwrites)"
     )
     ingest_parser.add_argument("--platform", required=True)
-    ingest_parser.add_argument("--variant", required=True, choices=[v.key for v in VARIANTS])
+    ingest_parser.add_argument(
+        "--variant", required=True, choices=[v.key for v in VARIANTS]
+    )
     ingest_parser.add_argument(
         "--dry-run",
         action="store_true",

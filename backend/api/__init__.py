@@ -12,8 +12,8 @@ from backend.api.routers.core import (
     control_router,
     facts_router,
     preferences_router,
-    sessions_router,
     profile_router,
+    sessions_router,
     settings_router,
     templates_router,
 )

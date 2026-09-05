@@ -38,6 +38,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from sqlmodel import Session, select
 
+from backend import failures
 from backend.apply import guardrails
 from backend.apply.answers import (
     Abstain,
@@ -53,22 +54,22 @@ from backend.ats.formmaps import fingerprint_fields, record_outcome
 from backend.ats.generic import last_map_trusted, map_fields
 from backend.ats.queueing import decide_queueing
 from backend.base import ApplyOutcome, ApplyResult
-from backend import failures
 from backend.config import settings
 from backend.logging_setup import get_logger
-from backend.siteknowledge import ElementNotFound
 from backend.models import (
     Application,
     ApplicationOutcome,
     ApplyType,
-    FailureType,
     Campaign,
     Document,
+    FailureType,
     Job,
     JobStatus,
     Profile,
+    Region,
     Score,
 )
+from backend.siteknowledge import ElementNotFound
 
 log = get_logger(__name__)
 
@@ -154,12 +155,19 @@ def build_draft(
     campaign: Campaign | None = None,
 ) -> ApplicationDraft:
     """Resolve every enumerated field into a complete, inspectable draft."""
-    campaign = campaign or (session.get(Campaign, job.campaign_id) if job.campaign_id else None)
-    profile = profile or session.exec(
-        select(Profile).order_by(Profile.version.desc())  # type: ignore[union-attr]
-    ).first()
+    campaign = campaign or (
+        session.get(Campaign, job.campaign_id) if job.campaign_id else None
+    )
+    profile = (
+        profile
+        or session.exec(
+            select(Profile).order_by(Profile.version.desc())  # type: ignore[union-attr]
+        ).first()
+    )
 
-    documents = list(session.exec(select(Document).where(Document.job_id == job.id)).all())
+    documents = list(
+        session.exec(select(Document).where(Document.job_id == job.id)).all()
+    )
     score_row = session.exec(
         select(Score).where(Score.job_id == job.id).order_by(Score.scored_at.desc())  # type: ignore[union-attr]
     ).first()
@@ -167,7 +175,9 @@ def build_draft(
     cover_letter_text = ""
     letter_doc = next((d for d in documents if d.kind.value == "cover_letter"), None)
     if letter_doc is not None:
-        cover_letter_text = (letter_doc.parse_report or {}).get("cover_letter_text", "") or ""
+        cover_letter_text = (letter_doc.parse_report or {}).get(
+            "cover_letter_text", ""
+        ) or ""
 
     draft = ApplicationDraft(
         job=job,
@@ -187,7 +197,9 @@ def build_draft(
             continue
         value = _match_profile_field(field, profile)
         if value is not None:
-            draft.answers[field.label or field.identifier] = _synthetic_answer(field, value)
+            draft.answers[field.label or field.identifier] = _synthetic_answer(
+                field, value
+            )
         else:
             screening.append(field)
 
@@ -240,7 +252,6 @@ def build_draft(
     return draft
 
 
-
 def _resolve_via_facts(
     session: Session,
     abstentions: list[Abstain],
@@ -290,8 +301,11 @@ def _resolve_via_facts(
             log.warning("fact_resolution_failed", error=str(exc)[:200])
 
         if answer:
-            rescued[field_.label if field_ else abstention.question] = _synthetic_answer(
-                field_ or FormField(identifier=key, label=abstention.question), answer
+            rescued[field_.label if field_ else abstention.question] = (
+                _synthetic_answer(
+                    field_ or FormField(identifier=key, label=abstention.question),
+                    answer,
+                )
             )
             log.info("answered_from_fact", question=key[:80])
         else:
@@ -349,8 +363,10 @@ def _resolve_via_form_map(
     if not unresolved:
         return {}, abstentions
 
-    mapped = {m.identifier: m for m in map_fields(unresolved, platform=platform, session=session)}
-
+    mapped = {
+        m.identifier: m
+        for m in map_fields(unresolved, platform=platform, session=session)
+    }
 
     rescued: dict[str, Any] = {}
     cleared: set[str] = set()
@@ -432,7 +448,9 @@ def _record(
     status: JobStatus,
 ) -> None:
     """Write the audit row and update the job. Never fails silently."""
-    existing = session.exec(select(Application).where(Application.job_id == job.id)).first()
+    existing = session.exec(
+        select(Application).where(Application.job_id == job.id)
+    ).first()
     if existing is None:
         session.add(
             Application(
@@ -509,7 +527,6 @@ def run_apply(
         return _park_unresolvable(session, job, adapter.platform, exc)
 
 
-
 def _blocked_only_on_form_trust(verdict: Any) -> bool:
     """Whether the sole reason this was blocked is an ungraduated form map.
 
@@ -517,7 +534,9 @@ def _blocked_only_on_form_trust(verdict: Any) -> bool:
     window is closed, approving the form changes nothing and the message would
     be a question whose answer does not unblock anything.
     """
-    failures = [check.name for check in getattr(verdict, "checks", []) if not check.passed]
+    failures = [
+        check.name for check in getattr(verdict, "checks", []) if not check.passed
+    ]
     return failures == ["form_map_trusted"]
 
 
@@ -585,7 +604,9 @@ def _run_apply(
 
     # 1 — preconditions. Re-asserted here as well as in the guardrails: defence
     # in depth, because attaching an ungated document is unrecoverable.
-    already = session.exec(select(Application).where(Application.job_id == job.id)).first()
+    already = session.exec(
+        select(Application).where(Application.job_id == job.id)
+    ).first()
     if already is not None:
         return _abort(
             session,
@@ -606,7 +627,9 @@ def _run_apply(
     except Exception as exc:
         log.exception("adapter_open_failed", job_id=job.id, platform=adapter.platform)
         guardrails.record_failure(adapter.platform, f"open failed: {exc}")
-        return _abort(session, job, None, ApplyOutcome.FAILED, f"could not open form: {exc}")
+        return _abort(
+            session, job, None, ApplyOutcome.FAILED, f"could not open form: {exc}"
+        )
 
     if _restricted(adapter, page):
         guardrails.trip_global_halt(
@@ -696,7 +719,11 @@ def _run_apply(
             except Exception as exc:
                 log.exception("fill_failed", job_id=job.id, field=field.identifier)
                 return _abort(
-                    session, job, draft, ApplyOutcome.FAILED, f"could not fill {field.label}: {exc}"
+                    session,
+                    job,
+                    draft,
+                    ApplyOutcome.FAILED,
+                    f"could not fill {field.label}: {exc}",
                 )
 
         # 7 — attach, then PROVE the right file is attached.
@@ -706,7 +733,11 @@ def _run_apply(
             planned = draft.attachment_plan(slots=slots)
             if not planned:
                 return _abort(
-                    session, job, draft, ApplyOutcome.FAILED, "no gated document to attach"
+                    session,
+                    job,
+                    draft,
+                    ApplyOutcome.FAILED,
+                    "no gated document to attach",
                 )
             if not all(d.parse_check_passed for d in planned):
                 return _abort(
@@ -718,9 +749,7 @@ def _run_apply(
                 )
 
             adapter.attach(page, planned)
-            draft.attachment_intent = {
-                d.kind.value: Path(d.path).name for d in planned
-            }
+            draft.attachment_intent = {d.kind.value: Path(d.path).name for d in planned}
 
             readback = adapter.read_back_attachments(page)
             mismatch = _readback_mismatch(draft.attachment_intent, readback)
@@ -728,7 +757,9 @@ def _run_apply(
                 # LinkedIn silently reuses a stale upload. This is the only
                 # thing standing between the user and sending last week's
                 # resume, so it is a hard abort — never a warning.
-                guardrails.record_failure(adapter.platform, "attachment readback mismatch")
+                guardrails.record_failure(
+                    adapter.platform, "attachment readback mismatch"
+                )
                 return _abort(
                     session,
                     job,
@@ -802,7 +833,12 @@ def _run_apply(
                 log.warning("form_approval_request_failed", error=str(exc)[:150])
 
         return _abort(
-            session, job, draft, ApplyOutcome.BLOCKED, verdict.summary(), status=JobStatus.QUEUED
+            session,
+            job,
+            draft,
+            ApplyOutcome.BLOCKED,
+            verdict.summary(),
+            status=JobStatus.QUEUED,
         )
 
     # 10 — submit.
@@ -822,7 +858,9 @@ def _run_apply(
     # is not evidence that anything was received.
     draft.screenshot_post = _screenshot(page, job.id, "post")
     if not adapter.confirmed(page):
-        guardrails.record_failure(adapter.platform, "no confirmation state after submit")
+        guardrails.record_failure(
+            adapter.platform, "no confirmation state after submit"
+        )
         return _abort(
             session,
             job,
@@ -865,7 +903,6 @@ def _run_apply(
 # --------------------------------------------------------------------------
 
 
-
 def _remember_observed_fields(session: Session, draft: ApplicationDraft) -> None:
     """Propose preferences from the plain fields on an accepted application.
 
@@ -893,6 +930,7 @@ def _remember_observed_fields(session: Session, draft: ApplicationDraft) -> None
             )
         except Exception as exc:  # noqa: BLE001 - never fail a sent application
             log.debug("observed_field_skipped", error=str(exc)[:120])
+
 
 def _restricted(adapter: Adapter, page: Any) -> bool:
     """Whether the platform is showing an account-restriction interstitial.
@@ -1000,7 +1038,9 @@ def _abort(
     status: JobStatus = JobStatus.FAILED,
 ) -> ApplyResult:
     """Every failure path lands here: logged loudly, audited, never silent."""
-    log.error("application_aborted", job_id=job.id, outcome=outcome.value, reason=reason)
+    log.error(
+        "application_aborted", job_id=job.id, outcome=outcome.value, reason=reason
+    )
 
     if draft is not None:
         _record(

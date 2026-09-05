@@ -27,12 +27,11 @@ from typing import Any
 
 import pdfplumber
 import pypdf
-
-from backend.config import settings
-from backend.llm.client import llm
 from pydantic import BaseModel, Field
 from rapidfuzz import fuzz
 
+from backend.config import settings
+from backend.llm.client import llm
 from backend.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -179,7 +178,9 @@ def _extract_pypdf(path: Path) -> tuple[str, int, str | None]:
         return "", 0, f"{type(exc).__name__}: {exc}"[:200]
 
 
-def _extract_pdfplumber(path: Path) -> tuple[str, list[list[dict[str, Any]]], str | None]:
+def _extract_pdfplumber(
+    path: Path,
+) -> tuple[str, list[list[dict[str, Any]]], str | None]:
     try:
         words_per_page: list[list[dict[str, Any]]] = []
         chunks: list[str] = []
@@ -280,7 +281,6 @@ def _detect_two_columns(words_per_page: list[list[dict[str, Any]]]) -> tuple[boo
                 f"layouts extract as interleaved text"
             )
     return False, ""
-
 
 
 _SELF_CHECK_SCHEMA: dict[str, Any] = {
@@ -396,7 +396,9 @@ def verify_pdf(
             passed=False,
             kind=kind,
             path=str(path),
-            checks=[CheckResult(name="file_exists", passed=False, detail="no such file")],
+            checks=[
+                CheckResult(name="file_exists", passed=False, detail="no such file")
+            ],
         )
 
     pypdf_text, pages, pypdf_error = _extract_pypdf(path)
@@ -444,7 +446,9 @@ def verify_pdf(
     canaries += [_normalise(e) for e in expect.employers if e]
     if expect.name:
         canaries.append(_normalise(expect.name))
-    missing_canaries = [word for word in dict.fromkeys(canaries) if word and word not in normalised]
+    missing_canaries = [
+        word for word in dict.fromkeys(canaries) if word and word not in normalised
+    ]
     checks.append(
         CheckResult(
             name="no_ligature_corruption",
@@ -487,7 +491,9 @@ def verify_pdf(
             CheckResult(
                 name="standard_sections_present",
                 passed=not missing,
-                detail=f"missing section headers: {missing}" if missing else "all present",
+                detail=f"missing section headers: {missing}"
+                if missing
+                else "all present",
             )
         )
 

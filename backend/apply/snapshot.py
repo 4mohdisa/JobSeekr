@@ -129,7 +129,9 @@ class SnapshotLocator:
         return "display:none" not in style and "visibility:hidden" not in style
 
     def all(self) -> list[SnapshotLocator]:
-        return [SnapshotLocator(self._page, [tag], self._selector) for tag in self._tags]
+        return [
+            SnapshotLocator(self._page, [tag], self._selector) for tag in self._tags
+        ]
 
     def all_inner_texts(self) -> list[str]:
         return [" ".join(tag.get_text(" ", strip=True).split()) for tag in self._tags]
@@ -221,9 +223,12 @@ class SnapshotPage:
                     found.append(tag)
                     continue
                 name = _accessible_name(tag, self.soup)
-                if exact is not None and name.casefold() == exact.casefold():
-                    found.append(tag)
-                elif pattern is not None and re.search(pattern, name, re.IGNORECASE):
+                if (
+                    exact is not None
+                    and name.casefold() == exact.casefold()
+                    or pattern is not None
+                    and re.search(pattern, name, re.IGNORECASE)
+                ):
                     found.append(tag)
             return found
 

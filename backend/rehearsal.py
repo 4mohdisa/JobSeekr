@@ -128,7 +128,9 @@ class StubLLM:
             "concerns": [],
         }
 
-    def embed(self, texts: list[str], *, purpose: str = "", **kwargs: Any) -> list[list[float]]:
+    def embed(
+        self, texts: list[str], *, purpose: str = "", **kwargs: Any
+    ) -> list[list[float]]:
         self._count(purpose or "embedding")
         # Deterministic, non-degenerate vectors: cosine must not be NaN.
         out = []
@@ -303,7 +305,8 @@ def seed(session: Session) -> tuple[Any, Any]:
     board_key = source_boards()[0].key
     jobs = []
     for n, (title, company) in enumerate(
-        [("Data Analyst", "Wattle Group"), ("Reporting Analyst", "Redgum Corp")], start=1
+        [("Data Analyst", "Wattle Group"), ("Reporting Analyst", "Redgum Corp")],
+        start=1,
     ):
         job = Job(
             source=board_key,
@@ -476,7 +479,9 @@ def rehearse(root: Path, *, keep: bool = False) -> RehearsalReport:
         "daily_cap",
     }
     with factory() as session:
-        reasons = [a.failure_reason or "" for a in session.exec(select(Application)).all()]
+        reasons = [
+            a.failure_reason or "" for a in session.exec(select(Application)).all()
+        ]
     failed: set[str] = set()
     for reason in reasons:
         failed.update(_GUARDRAIL_NAME.findall(reason))
@@ -495,7 +500,11 @@ def rehearse(root: Path, *, keep: bool = False) -> RehearsalReport:
         + (
             f"  UNEXPECTED={sorted(unexpected)}"
             if unexpected
-            else (" (all environmental)" if parsed_ok else "  PARSE FAILED: no allow_live_submit")
+            else (
+                " (all environmental)"
+                if parsed_ok
+                else "  PARSE FAILED: no allow_live_submit"
+            )
         ),
     )
 
@@ -548,11 +557,17 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
     parser.add_argument(
         "--keep", action="store_true", help="leave the rehearsal directory in place"
     )
-    parser.add_argument("--root", default=None, help="where to build (default: a temp dir)")
+    parser.add_argument(
+        "--root", default=None, help="where to build (default: a temp dir)"
+    )
     args = parser.parse_args(argv)
 
     configure_logging()
-    root = Path(args.root) if args.root else Path(tempfile.mkdtemp(prefix="jobseekr-rehearsal-"))
+    root = (
+        Path(args.root)
+        if args.root
+        else Path(tempfile.mkdtemp(prefix="jobseekr-rehearsal-"))
+    )
 
     started = datetime.now(UTC)
     report = rehearse(root, keep=args.keep or args.root is not None)

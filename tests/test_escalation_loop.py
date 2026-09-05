@@ -148,7 +148,9 @@ def steps_with_rights() -> list[list[FormField]]:
     return [
         [
             FormField(identifier="name", label="Full name"),
-            FormField(identifier="rights", label=RIGHTS_QUESTION, choices=["Yes", "No"]),
+            FormField(
+                identifier="rights", label=RIGHTS_QUESTION, choices=["Yes", "No"]
+            ),
             FormField(identifier="resume", label="Resume", kind="file"),
         ]
     ]
@@ -193,10 +195,14 @@ def test_the_full_answer_bank_loop_closes(parked_job, sent):
     with session_scope() as session:
         job = session.get(Job, job_id)
         assert job.status == JobStatus.NEEDS_ANSWER
-        assert job.needs_answer_question, "the parked question must be recorded on the job"
+        assert job.needs_answer_question, (
+            "the parked question must be recorded on the job"
+        )
 
     # 2 — escalate. This is the half that was never called.
-    apply_run._escalate_parked([(job_id, result.needs_answer, result.needs_answer_choices)])
+    apply_run._escalate_parked(
+        [(job_id, result.needs_answer, result.needs_answer_choices)]
+    )
     assert len(sent) == 1, "the user was never asked"
     message = sent[0]
     assert "Question needed" in message
@@ -282,7 +288,9 @@ def test_a_second_parked_job_does_not_steal_the_first_ones_answer(parked_job, se
         assert session.get(Job, second_id).status == JobStatus.DOCUMENTS_READY
 
 
-def test_a_failed_send_leaves_the_job_parked_and_says_so(parked_job, monkeypatch, caplog):
+def test_a_failed_send_leaves_the_job_parked_and_says_so(
+    parked_job, monkeypatch, caplog
+):
     """A Telegram outage must not look like a delivered question."""
     monkeypatch.setattr(telegram, "send_message", lambda *a, **k: False)
 
@@ -295,7 +303,9 @@ def test_a_failed_send_leaves_the_job_parked_and_says_so(parked_job, monkeypatch
     assert "escalation_not_delivered" in caplog.text
 
 
-def test_an_escalation_that_raises_does_not_end_the_pass(parked_job, monkeypatch, caplog):
+def test_an_escalation_that_raises_does_not_end_the_pass(
+    parked_job, monkeypatch, caplog
+):
     """One unreachable job must not stop the others being asked about."""
 
     def explode(*args: Any, **kwargs: Any) -> bool:

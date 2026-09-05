@@ -290,15 +290,17 @@ _QUALIFIER_FAMILIES: tuple[tuple[str, dict[str, str]], ...] = (
     ),
 )
 
-_COMPILED_FAMILIES: tuple[tuple[str, tuple[tuple[str, re.Pattern[str]], ...]], ...] = tuple(
-    (
-        family,
-        tuple(
-            (member, re.compile(rf"\b(?:{pattern})\b", re.IGNORECASE))
-            for member, pattern in members.items()
-        ),
+_COMPILED_FAMILIES: tuple[tuple[str, tuple[tuple[str, re.Pattern[str]], ...]], ...] = (
+    tuple(
+        (
+            family,
+            tuple(
+                (member, re.compile(rf"\b(?:{pattern})\b", re.IGNORECASE))
+                for member, pattern in members.items()
+            ),
+        )
+        for family, members in _QUALIFIER_FAMILIES
     )
-    for family, members in _QUALIFIER_FAMILIES
 )
 
 
@@ -314,15 +316,91 @@ def _qualifier_signature(text: str) -> dict[str, frozenset[str]]:
 
 # Words that carry no subject matter. Kept small on purpose: "current",
 # "australian" and "own" all change what is being asked.
-_FUNCTION_WORDS = frozenset({
-    "a", "an", "the", "and", "or", "but", "if", "of", "in", "on", "at", "to", "for", "with",
-    "by", "from", "as", "is", "are", "was", "were", "be", "been", "being", "do", "does", "did",
-    "done", "have", "has", "had", "you", "your", "yours", "my", "me", "i", "it", "its", "this",
-    "that", "these", "those", "any", "all", "please", "provide", "confirm", "tell", "us", "we",
-    "they", "there", "will", "would", "can", "could", "shall", "should", "may", "might",
-    "must", "about", "into", "over", "under", "than", "then", "so", "such", "which", "what",
-    "when", "where", "who", "whom", "whose", "how", "why", "not", "no"
-})
+_FUNCTION_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "if",
+        "of",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "with",
+        "by",
+        "from",
+        "as",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "do",
+        "does",
+        "did",
+        "done",
+        "have",
+        "has",
+        "had",
+        "you",
+        "your",
+        "yours",
+        "my",
+        "me",
+        "i",
+        "it",
+        "its",
+        "this",
+        "that",
+        "these",
+        "those",
+        "any",
+        "all",
+        "please",
+        "provide",
+        "confirm",
+        "tell",
+        "us",
+        "we",
+        "they",
+        "there",
+        "will",
+        "would",
+        "can",
+        "could",
+        "shall",
+        "should",
+        "may",
+        "might",
+        "must",
+        "about",
+        "into",
+        "over",
+        "under",
+        "than",
+        "then",
+        "so",
+        "such",
+        "which",
+        "what",
+        "when",
+        "where",
+        "who",
+        "whom",
+        "whose",
+        "how",
+        "why",
+        "not",
+        "no",
+    }
+)
 
 _TYPO_RATIO = 80.0
 """How close two unmatched words must be to count as spellings of one word.
@@ -358,7 +436,9 @@ def _substitution(question: str, pattern: str) -> str:
         return ""
 
     smaller, larger = (
-        (left_only, right_only) if len(left_only) <= len(right_only) else (right_only, left_only)
+        (left_only, right_only)
+        if len(left_only) <= len(right_only)
+        else (right_only, left_only)
     )
     unpaired = [
         word
@@ -470,7 +550,9 @@ def coerce_to_choices(value: str, choices: Sequence[str] | None) -> str | None:
             return hits[0]
         return None
 
-    contains = [choice for choice in choices if folded and folded in choice.strip().casefold()]
+    contains = [
+        choice for choice in choices if folded and folded in choice.strip().casefold()
+    ]
     if len(contains) == 1:
         return contains[0]
 
@@ -489,7 +571,10 @@ def load_answers(session: Any, campaign_id: int | None) -> list[AnswerBank]:
     return list(
         session.exec(
             select(AnswerBank).where(
-                or_(AnswerBank.campaign_id == campaign_id, AnswerBank.campaign_id.is_(None))
+                or_(
+                    AnswerBank.campaign_id == campaign_id,
+                    AnswerBank.campaign_id.is_(None),
+                )
             )
         ).all()
     )
@@ -632,7 +717,9 @@ def matching_rows(
         if region is None or row.region is None or row.region == region
     ]
     ranked = sorted(
-        _candidates(question_text, question, in_region), key=lambda c: c[0], reverse=True
+        _candidates(question_text, question, in_region),
+        key=lambda c: c[0],
+        reverse=True,
     )
     return [row for _, _, row in ranked]
 
@@ -666,7 +753,10 @@ def resolve_answer(
     if not question:
         return Abstain(question=question_text or "", reason=AbstainReason.NO_MATCH)
 
-    if len(question) < MIN_QUESTION_CHARS or len(question.split()) < MIN_QUESTION_TOKENS:
+    if (
+        len(question) < MIN_QUESTION_CHARS
+        or len(question.split()) < MIN_QUESTION_TOKENS
+    ):
         return Abstain(
             question=question,
             reason=AbstainReason.NO_MATCH,
@@ -685,7 +775,9 @@ def resolve_answer(
     # A row scoped to another campaign is not evidence about this one. load_answers
     # already filters, but resolve_answer takes whatever list it is handed.
     answers = [
-        row for row in answers if row.campaign_id is None or row.campaign_id == campaign_id
+        row
+        for row in answers
+        if row.campaign_id is None or row.campaign_id == campaign_id
     ]
 
     # Region is a harder boundary than campaign. A row scoped to NZ is not a
@@ -701,9 +793,7 @@ def resolve_answer(
         region_conflicted = [
             row for row in answers if row.region is not None and row.region != region
         ]
-        answers = [
-            row for row in answers if row.region is None or row.region == region
-        ]
+        answers = [row for row in answers if row.region is None or row.region == region]
 
     # --- the deliberate override: a declared EXACT row, matched verbatim -----
     declared_exact = [
@@ -740,7 +830,9 @@ def resolve_answer(
         # and reporting them identically is how someone ends up "fixing" it by
         # widening the existing row to cover both countries.
         if region_conflicted:
-            other = sorted({row.region.value for row in region_conflicted if row.region})
+            other = sorted(
+                {row.region.value for row in region_conflicted if row.region}
+            )
             log.warning(
                 "answer_cross_region_abstain",
                 question=question[:120],
@@ -771,7 +863,10 @@ def resolve_answer(
     best_score, best_match_type, best_row = in_scope[0]
 
     contenders = [c for c in in_scope if best_score - c[0] <= AMBIGUITY_MARGIN]
-    if len({(row.answer_value or "").strip().casefold() for _, _, row in contenders}) > 1:
+    if (
+        len({(row.answer_value or "").strip().casefold() for _, _, row in contenders})
+        > 1
+    ):
         return Abstain(
             question=question,
             reason=AbstainReason.AMBIGUOUS,

@@ -82,7 +82,9 @@ def _public_definitions() -> tuple[dict[str, list[str]], set[str]]:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         rel = path.relative_to(BACKEND.parent).as_posix()
         for node in ast.walk(tree):
-            if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            if not isinstance(
+                node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+            ):
                 continue
             if node.name.startswith("_"):
                 continue
@@ -125,11 +127,16 @@ def unreachable() -> dict[str, list[str]]:
 def test_no_new_unreachable_public_code():
     """Nothing public may be added that production never calls."""
     found = unreachable()
-    surprises = {name: sites for name, sites in found.items() if name not in KNOWN_UNREACHABLE}
+    surprises = {
+        name: sites for name, sites in found.items() if name not in KNOWN_UNREACHABLE
+    }
 
     assert not surprises, (
         "public code nothing in backend/ calls — wire it up or delete it:\n"
-        + "\n".join(f"  {name}  ({', '.join(sites)})" for name, sites in sorted(surprises.items()))
+        + "\n".join(
+            f"  {name}  ({', '.join(sites)})"
+            for name, sites in sorted(surprises.items())
+        )
         + "\n\nIf it is genuinely not wired yet, add it to KNOWN_UNREACHABLE "
         "with the reason."
     )
@@ -141,8 +148,7 @@ def test_the_allowlist_does_not_outlive_its_entries():
     stale = sorted(set(KNOWN_UNREACHABLE) - set(found))
 
     assert not stale, (
-        "these are called now and should be removed from KNOWN_UNREACHABLE: "
-        f"{stale}"
+        f"these are called now and should be removed from KNOWN_UNREACHABLE: {stale}"
     )
 
 

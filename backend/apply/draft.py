@@ -93,7 +93,9 @@ class ApplicationDraft:
 
     @property
     def all_documents_gated(self) -> bool:
-        return bool(self.documents) and all(d.parse_check_passed for d in self.documents)
+        return bool(self.documents) and all(
+            d.parse_check_passed for d in self.documents
+        )
 
     def attachment_plan(self, *, slots: int) -> list[Document]:
         """Which documents to attach given how many upload slots the form has.

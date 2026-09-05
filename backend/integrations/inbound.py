@@ -82,9 +82,7 @@ CATEGORY_TO_STATUS = {
 def classify_email(email: InboundEmail) -> dict[str, Any]:
     """Classify one message. Returns 'irrelevant' rather than raising."""
     prompt = (
-        f"From: {email.from_address}\n"
-        f"Subject: {email.subject}\n\n"
-        f"{email.body[:2500]}"
+        f"From: {email.from_address}\nSubject: {email.subject}\n\n{email.body[:2500]}"
     )
     try:
         return llm.complete_json(
@@ -97,8 +95,14 @@ def classify_email(email: InboundEmail) -> dict[str, Any]:
     except LLMBudgetExceeded:
         raise
     except Exception as exc:
-        log.exception("classification_failed", subject=email.subject[:80], error=str(exc)[:200])
-        return {"category": "irrelevant", "confidence": 0.0, "summary": "classification failed"}
+        log.exception(
+            "classification_failed", subject=email.subject[:80], error=str(exc)[:200]
+        )
+        return {
+            "category": "irrelevant",
+            "confidence": 0.0,
+            "summary": "classification failed",
+        }
 
 
 def _seen_path() -> Path:
@@ -136,7 +140,13 @@ def run_inbound_sweep(
     """Read recent mail, attach what matches, and record the run."""
     started = datetime.now(UTC)
     since = since or default_since()
-    counts = {"fetched": 0, "matched": 0, "unmatched": 0, "irrelevant": 0, "interviews": 0}
+    counts = {
+        "fetched": 0,
+        "matched": 0,
+        "unmatched": 0,
+        "irrelevant": 0,
+        "interviews": 0,
+    }
     errors: list[dict[str, Any]] = []
 
     if reader is None:
@@ -157,7 +167,9 @@ def run_inbound_sweep(
     with session_factory() as session:
         applications = list(
             session.exec(
-                select(Application).where(Application.outcome == ApplicationOutcome.SUBMITTED)
+                select(Application).where(
+                    Application.outcome == ApplicationOutcome.SUBMITTED
+                )
             ).all()
         )
         jobs = {job.id: job for job in session.exec(select(Job)).all()}
@@ -273,7 +285,9 @@ def sweep_ghosted(
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
     parser = argparse.ArgumentParser(prog="python -m backend.integrations.inbound")
     parser.add_argument("--days", type=int, default=7, help="how far back to read")
-    parser.add_argument("--ghost-after", type=int, default=None, help="run the ghosting sweep")
+    parser.add_argument(
+        "--ghost-after", type=int, default=None, help="run the ghosting sweep"
+    )
     args = parser.parse_args(argv)
 
     configure_logging()

@@ -30,9 +30,9 @@ from urllib.parse import urlparse
 
 from backend.base import RawJob, SourceUnavailable
 from backend.config import settings
+from backend.logging_setup import get_logger
 from backend.models import Region
 from backend.regions import config_for
-from backend.logging_setup import get_logger
 
 log = get_logger(__name__)
 

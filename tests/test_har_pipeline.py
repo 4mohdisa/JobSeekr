@@ -29,7 +29,7 @@ from backend.models import AnswerBank
 from backend.siteknowledge import Element, SiteKnowledge, Strategy
 
 FIXTURES = pathlib.Path(__file__).parent / "fixtures" / "captures"
-SEEK = FIXTURES / "seek_quick_apply.har"          # .steps.json sits beside it
+SEEK = FIXTURES / "seek_quick_apply.har"  # .steps.json sits beside it
 LINKEDIN = FIXTURES / "linkedin_two_step.har"
 HAR_ONLY = FIXTURES / "seek_har_only.har"
 
@@ -106,7 +106,9 @@ def test_a_volatile_linkedin_id_becomes_a_pattern(linkedin_capture):
 
 def test_a_urn_bearing_id_becomes_a_pattern(linkedin_capture):
     email = next(
-        element for element in linkedin_capture.elements if element.identifier == "email"
+        element
+        for element in linkedin_capture.elements
+        if element.identifier == "email"
     )
     selectors = [strategy.selector for strategy in email.strategies]
     assert not any("4012345678" in s for s in selectors), (
@@ -207,7 +209,8 @@ def test_a_captured_question_carries_its_options(session, seek_capture):
     session.flush()
     row = session.exec(
         select(AnswerBank).where(
-            AnswerBank.question_pattern == "Do you have full working rights in Australia?"
+            AnswerBank.question_pattern
+            == "Do you have full working rights in Australia?"
         )
     ).first()
     assert row is not None
@@ -353,7 +356,11 @@ def test_merging_does_not_invent_adapter_element_keys(seek_capture):
 
     assert knowledge.elements["submit_button"].success_count == 9
     assert knowledge.elements["submit_button"].strategies[0].value == "#curated"
-    assert all(key.startswith("captured_") for key in knowledge.elements if key != "submit_button")
+    assert all(
+        key.startswith("captured_")
+        for key in knowledge.elements
+        if key != "submit_button"
+    )
 
 
 # ------------------------------------------------------------- replay harness
@@ -379,11 +386,13 @@ def test_the_harness_resolves_a_wildcard_pattern():
 
 def test_the_harness_resolves_a_text_regex():
     page = page_for_capture(SEEK.with_suffix(".steps.json"), step=0)
-    assert page.locator(Strategy(type="text", value="Quick apply").selector).count() >= 1
+    assert (
+        page.locator(Strategy(type="text", value="Quick apply").selector).count() >= 1
+    )
 
 
 def test_the_harness_refuses_a_selector_it_cannot_honour():
-    """"No match" and "I did not understand that" must not look the same."""
+    """ "No match" and "I did not understand that" must not look the same."""
     page = SnapshotPage("<button>x</button>")
     with pytest.raises(NotImplementedError):
         page.locator("button:has-text('x')").count()
@@ -428,7 +437,9 @@ def test_the_seek_adapter_resolves_its_elements_against_captured_markup():
             ),
             "submit_button": Element(
                 key="submit_button",
-                strategies=[Strategy(type="role", role="button", name="Submit application")],
+                strategies=[
+                    Strategy(type="role", role="button", name="Submit application")
+                ],
             ),
         },
     )

@@ -121,6 +121,12 @@ def latex_safe_url(value: object) -> str:
         return ""
     text = value if isinstance(value, str) else str(value)
     text = _CONTROL_CHARS.sub("", text).strip()
-    for source, target in (("\\", r"\\"), ("%", r"\%"), ("#", r"\#"), ("{", r"\{"), ("}", r"\}")):
+    for source, target in (
+        ("\\", r"\\"),
+        ("%", r"\%"),
+        ("#", r"\#"),
+        ("{", r"\{"),
+        ("}", r"\}"),
+    ):
         text = text.replace(source, target)
     return text

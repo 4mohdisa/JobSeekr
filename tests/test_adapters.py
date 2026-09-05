@@ -47,7 +47,9 @@ def test_linkedin_handles_only_easy_apply():
 
 def test_seek_does_not_claim_linkedin_jobs():
     applier = seek.SeekApplier()
-    assert applier.can_handle(job(source="seek", apply_type=ApplyType.QUICK_APPLY)) is True
+    assert (
+        applier.can_handle(job(source="seek", apply_type=ApplyType.QUICK_APPLY)) is True
+    )
     assert applier.can_handle(job(source="linkedin")) is False
 
 

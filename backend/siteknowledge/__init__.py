@@ -537,7 +537,8 @@ class SiteKnowledge:
             {
                 "platform": self.platform,
                 "elements": {
-                    key: asdict(element) for key, element in sorted(self.elements.items())
+                    key: asdict(element)
+                    for key, element in sorted(self.elements.items())
                 },
             },
         )
@@ -558,7 +559,9 @@ class SiteKnowledge:
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     """Write atomically. A half-written knowledge file breaks every later run."""
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    temporary.write_text(
+        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+    )
     temporary.replace(path)
 
 
@@ -638,4 +641,3 @@ def load(platform: str, *, directory: Path | None = None) -> SiteKnowledge:
         quirks=len(knowledge.quirks),
     )
     return knowledge
-

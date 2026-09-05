@@ -119,7 +119,9 @@ def apply_hard_filters(
     applied = already_applied_job_ids or set()
     excluded_companies = _excluded_companies(campaign)
     excluded_words = _excluded_title_words(campaign)
-    work_types = {str(w).casefold() for w in (getattr(campaign, "work_types", None) or [])}
+    work_types = {
+        str(w).casefold() for w in (getattr(campaign, "work_types", None) or [])
+    }
     exclusions = getattr(campaign, "exclusions", None) or {}
     keep_unstated = not bool(exclusions.get("drop_unstated_salary", False))
 
@@ -156,7 +158,11 @@ def apply_hard_filters(
             continue
 
         if work_types:
-            raw = (job.raw_work_type or "").casefold() if hasattr(job, "raw_work_type") else ""
+            raw = (
+                (job.raw_work_type or "").casefold()
+                if hasattr(job, "raw_work_type")
+                else ""
+            )
             # Work type is not a first-class column; the ad text is the only
             # evidence available, so this only rejects on an explicit mismatch
             # rather than on absence.

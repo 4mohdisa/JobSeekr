@@ -210,7 +210,10 @@ BOARDS: tuple[Board, ...] = (
                 "quick_apply",
                 "Seek Quick Apply: resume upload plus the editable cover-letter textarea.",
             ),
-            ("screening_step", "Seek with screening questions on their own separate step."),
+            (
+                "screening_step",
+                "Seek with screening questions on their own separate step.",
+            ),
         ),
         notes="Largest Australian board. Search endpoint is undocumented — see NOTES.md.",
     ),
@@ -238,7 +241,12 @@ BOARDS: tuple[Board, ...] = (
         canary_url=(
             "https://www.linkedin.com/jobs/search/?keywords=developer&location=Adelaide"
         ),
-        canary_selectors=("easy_apply_button", "modal", "submit_button", "confirmation"),
+        canary_selectors=(
+            "easy_apply_button",
+            "modal",
+            "submit_button",
+            "confirmation",
+        ),
         make_source=_jobspy_source("linkedin", easy_apply_only=True),
         make_applier=_linkedin_applier,
         selectors=_knowledge_selectors("linkedin"),

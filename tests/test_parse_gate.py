@@ -130,7 +130,8 @@ def test_a_clean_single_column_resume_passes_every_check(tmp_path):
         pdf,
         kind="resume",
         expect=expectations(
-            claimed_keywords=["Python", "SQL"], section_order=["EXPERIENCE", "EDUCATION"]
+            claimed_keywords=["Python", "SQL"],
+            section_order=["EXPERIENCE", "EDUCATION"],
         ),
     )
     assert report.passed, report.summary()
@@ -243,7 +244,9 @@ Python, SQL
     # The gate is told to look for the address in the body; a header-only
     # contact block is exactly the failure being simulated.
     report = verify_pdf(
-        pdf, kind="resume", expect=expectations(name=NAME, email="not.in.body@example.com")
+        pdf,
+        kind="resume",
+        expect=expectations(name=NAME, email="not.in.body@example.com"),
     )
     assert not report.passed
     assert "email_present" in [c.name for c in report.failures], report.summary()
@@ -325,7 +328,9 @@ BSc Computer Science
     report = verify_pdf(pdf, kind="resume", expect=expectations())
 
     assert not report.passed
-    assert "standard_sections_present" in [c.name for c in report.failures], report.summary()
+    assert "standard_sections_present" in [c.name for c in report.failures], (
+        report.summary()
+    )
 
 
 def test_claimed_keywords_that_did_not_survive_are_rejected(tmp_path):
@@ -402,7 +407,9 @@ Dear Hiring Team,
 """
     )
     pdf = compile_tex(tmp_path, "longletter", source)
-    report = verify_pdf(pdf, kind="cover_letter", expect=ParseExpectations(name=NAME, email=EMAIL))
+    report = verify_pdf(
+        pdf, kind="cover_letter", expect=ParseExpectations(name=NAME, email=EMAIL)
+    )
     assert not report.passed
     assert "page_limit" in [c.name for c in report.failures]
 
@@ -441,7 +448,9 @@ Dear Hiring Team,
 """
     )
     pdf = compile_tex(tmp_path, "gluedate", source)
-    report = verify_pdf(pdf, kind="cover_letter", expect=ParseExpectations(name=NAME, email=EMAIL))
+    report = verify_pdf(
+        pdf, kind="cover_letter", expect=ParseExpectations(name=NAME, email=EMAIL)
+    )
     assert not report.passed
     assert "contact_line_uncontaminated" in [c.name for c in report.failures]
 
@@ -472,7 +481,9 @@ Dear Hiring Team,
 """
     )
     pdf = compile_tex(tmp_path, "cleandate", source)
-    report = verify_pdf(pdf, kind="cover_letter", expect=ParseExpectations(name=NAME, email=EMAIL))
+    report = verify_pdf(
+        pdf, kind="cover_letter", expect=ParseExpectations(name=NAME, email=EMAIL)
+    )
     assert report.passed, report.summary()
 
 
@@ -513,6 +524,8 @@ def test_the_contaminated_line_is_found_even_when_a_clean_one_precedes_it(tmp_pa
 """
     )
     pdf = compile_tex(tmp_path, "combineddate", source)
-    report = verify_pdf(pdf, kind="combined", expect=ParseExpectations(name=NAME, email=EMAIL))
+    report = verify_pdf(
+        pdf, kind="combined", expect=ParseExpectations(name=NAME, email=EMAIL)
+    )
     assert not report.passed
     assert "contact_line_uncontaminated" in [c.name for c in report.failures]

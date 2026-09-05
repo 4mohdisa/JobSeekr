@@ -27,10 +27,10 @@ from backend.api.schemas import (
     FactOut,
     PlaceholderIssueOut,
     PreferenceIn,
-    SessionHealthOut,
     PreferenceOut,
     ProfileIn,
     ProfileOut,
+    SessionHealthOut,
     SettingsIn,
     SettingsOut,
     TemplateIn,
@@ -43,18 +43,18 @@ from backend.logging_setup import get_logger
 from backend.models import (
     AnswerBank,
     Application,
-    SessionHealth,
-    SessionStatus,
-    DerivedAnswer,
-    Fact,
-    Region,
-    Preference,
-    PreferenceSource,
     ApplicationOutcome,
     Campaign,
+    DerivedAnswer,
+    Fact,
     Job,
     JobStatus,
+    Preference,
+    PreferenceSource,
     Profile,
+    Region,
+    SessionHealth,
+    SessionStatus,
     Template,
 )
 
@@ -89,7 +89,9 @@ def get_profile(session: Session = Depends(get_session)) -> Profile:
 
 
 @profile_router.put("", response_model=ProfileOut)
-def update_profile(payload: ProfileIn, session: Session = Depends(get_session)) -> Profile:
+def update_profile(
+    payload: ProfileIn, session: Session = Depends(get_session)
+) -> Profile:
     """Save a NEW profile version rather than editing the current one.
 
     Scores record the ``profile_version`` they were computed against. Editing
@@ -161,7 +163,9 @@ def create_campaign(
 
 
 @campaigns_router.get("/{campaign_id}", response_model=CampaignOut)
-def get_campaign(campaign_id: int, session: Session = Depends(get_session)) -> CampaignOut:
+def get_campaign(
+    campaign_id: int, session: Session = Depends(get_session)
+) -> CampaignOut:
     campaign = session.get(Campaign, campaign_id)
     if campaign is None:
         raise HTTPException(404, "no such campaign")
@@ -184,7 +188,11 @@ def update_campaign(
     # not comparable, and the analytics page groups by rubric_version.
     if (payload.rubric or {}) != previous_rubric:
         campaign.rubric_version += 1
-        log.info("rubric_version_bumped", campaign=campaign.name, version=campaign.rubric_version)
+        log.info(
+            "rubric_version_bumped",
+            campaign=campaign.name,
+            version=campaign.rubric_version,
+        )
 
     campaign.updated_at = datetime.now(UTC)
     session.add(campaign)
@@ -203,12 +211,16 @@ def delete_campaign(campaign_id: int, session: Session = Depends(get_session)) -
 
 
 @campaigns_router.post("/{campaign_id}/pause", response_model=CampaignOut)
-def pause_campaign(campaign_id: int, session: Session = Depends(get_session)) -> CampaignOut:
+def pause_campaign(
+    campaign_id: int, session: Session = Depends(get_session)
+) -> CampaignOut:
     return _set_active(session, campaign_id, active=False)
 
 
 @campaigns_router.post("/{campaign_id}/resume", response_model=CampaignOut)
-def resume_campaign(campaign_id: int, session: Session = Depends(get_session)) -> CampaignOut:
+def resume_campaign(
+    campaign_id: int, session: Session = Depends(get_session)
+) -> CampaignOut:
     return _set_active(session, campaign_id, active=True)
 
 
@@ -239,7 +251,9 @@ def control_state() -> ControlState:
             reason = settings.stop_file.read_text(encoding="utf-8")[:500]
         except OSError:
             reason = "stop file present but unreadable"
-    return ControlState(stopped=stopped, stop_file=str(settings.stop_file), reason=reason)
+    return ControlState(
+        stopped=stopped, stop_file=str(settings.stop_file), reason=reason
+    )
 
 
 @control_router.post("/stop", response_model=ControlState)
@@ -276,7 +290,9 @@ def list_answers(
     unanswered_only: bool = False,
     session: Session = Depends(get_session),
 ) -> list[AnswerBank]:
-    rows = list(session.exec(select(AnswerBank).order_by(AnswerBank.question_pattern)).all())  # type: ignore[arg-type]
+    rows = list(
+        session.exec(select(AnswerBank).order_by(AnswerBank.question_pattern)).all()
+    )  # type: ignore[arg-type]
     if campaign_id is not None:
         rows = [r for r in rows if r.campaign_id in (campaign_id, None)]
     if unanswered_only:
@@ -285,7 +301,9 @@ def list_answers(
 
 
 @answers_router.post("", response_model=AnswerOut, status_code=201)
-def create_answer(payload: AnswerIn, session: Session = Depends(get_session)) -> AnswerBank:
+def create_answer(
+    payload: AnswerIn, session: Session = Depends(get_session)
+) -> AnswerBank:
     row = AnswerBank(
         **payload.model_dump(exclude={"verified"}),
         verified_at=datetime.now(UTC) if payload.verified else None,
@@ -350,11 +368,15 @@ def delete_answer(answer_id: int, session: Session = Depends(get_session)) -> No
 
 @templates_router.get("", response_model=list[TemplateOut])
 def list_templates(session: Session = Depends(get_session)) -> list[Template]:
-    return list(session.exec(select(Template).order_by(Template.kind, Template.name)).all())  # type: ignore[arg-type]
+    return list(
+        session.exec(select(Template).order_by(Template.kind, Template.name)).all()
+    )  # type: ignore[arg-type]
 
 
 @templates_router.post("", response_model=TemplateOut, status_code=201)
-def create_template(payload: TemplateIn, session: Session = Depends(get_session)) -> Template:
+def create_template(
+    payload: TemplateIn, session: Session = Depends(get_session)
+) -> Template:
     row = Template(**payload.model_dump())
     session.add(row)
     session.commit()
@@ -441,7 +463,9 @@ def preview_template(
             "campaign": {"name": ""},
             "today": _today_context(),
             # Preview shows the slot names rather than paying an LLM call.
-            "ai": {name: f"[{name} — generated per job]" for name in KNOWN_FIELDS["ai"]},
+            "ai": {
+                name: f"[{name} — generated per job]" for name in KNOWN_FIELDS["ai"]
+            },
         }
         try:
             rendered = render_string(body, context)
@@ -455,7 +479,9 @@ def preview_template(
         rendered=rendered,
         issues=issues,
         ai_slots=slots,
-        known_placeholders={root: list(fields) for root, fields in KNOWN_FIELDS.items()},
+        known_placeholders={
+            root: list(fields) for root, fields in KNOWN_FIELDS.items()
+        },
         error=error,
     )
 
@@ -520,7 +546,9 @@ def get_spend() -> dict[str, Any]:
 
 
 @settings_router.get("/runs")
-def recent_runs(limit: int = 20, session: Session = Depends(get_session)) -> list[dict[str, Any]]:
+def recent_runs(
+    limit: int = 20, session: Session = Depends(get_session)
+) -> list[dict[str, Any]]:
     from backend.models import Run
 
     rows = session.exec(
@@ -631,7 +659,9 @@ def reject_preference(
 
 
 @preferences_router.delete("/{preference_id}", status_code=204)
-def delete_preference(preference_id: int, session: Session = Depends(get_session)) -> None:
+def delete_preference(
+    preference_id: int, session: Session = Depends(get_session)
+) -> None:
     row = session.get(Preference, preference_id)
     if row is None:
         raise HTTPException(404, "no such preference")
@@ -666,7 +696,9 @@ def update_fact(
     """Write a fact verbatim. Editing one invalidates its derived answers."""
     row = session.exec(select(Fact).where(Fact.key == key)).first()
     if row is None:
-        raise HTTPException(404, f"no fact {key!r}; run `uv run python -m backend.seed`")
+        raise HTTPException(
+            404, f"no fact {key!r}; run `uv run python -m backend.seed`"
+        )
 
     facts.set_fact(
         session,
@@ -707,9 +739,7 @@ def list_derived(
 
 
 @facts_router.post("/derived/{derivation_id}/confirm", response_model=DerivedAnswerOut)
-def confirm_derived(
-    derivation_id: int, session: Session = Depends(get_session)
-) -> Any:
+def confirm_derived(derivation_id: int, session: Session = Depends(get_session)) -> Any:
     row = facts.confirm(session, derivation_id)
     if row is None:
         raise HTTPException(404, "no such derivation")

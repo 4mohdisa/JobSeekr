@@ -166,7 +166,9 @@ def test_a_flawless_application_is_still_not_sent_by_default(perfect):
         _draft_for(perfect),
         is_authenticated=lambda platform: True,
     )
-    assert [c.name for c in verdict.failures] == ["allow_live_submit"], verdict.summary()
+    assert [c.name for c in verdict.failures] == ["allow_live_submit"], (
+        verdict.summary()
+    )
 
     adapter = FakeAdapter(steps=steps())
     result = apply_once(perfect, adapter)
@@ -231,7 +233,10 @@ def test_nothing_in_the_repository_sets_allow_live_submit_true():
     env_example = REPO / ".env.example"
     if env_example.exists():
         for line in env_example.read_text(encoding="utf-8").splitlines():
-            if line.strip().lower().startswith("allow_live_submit=") and "true" in line.lower():
+            if (
+                line.strip().lower().startswith("allow_live_submit=")
+                and "true" in line.lower()
+            ):
                 offenders.append(f".env.example: {line.strip()}")
 
     assert offenders == [], offenders
@@ -304,7 +309,9 @@ def test_no_adapter_imports_or_calls_the_guardrails():
         if not path.exists():
             continue
         imports = _imported_modules(path)
-        assert not any("guardrails" in module for module in imports), f"{name} imports guardrails"
+        assert not any("guardrails" in module for module in imports), (
+            f"{name} imports guardrails"
+        )
         assert "check_can_submit" not in _called_names(path), f"{name} calls the gate"
 
 

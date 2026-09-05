@@ -51,14 +51,15 @@ def notify(title: str, body: str = "", priority: Priority = Priority.NORMAL) -> 
     if _sender is None:
         # Not an error: a user who has not configured Telegram still gets
         # everything in the log, which is where the digest reads from anyway.
-        log.warning("notify_unsent", title=title, body=body[:400], priority=priority.value)
+        log.warning(
+            "notify_unsent", title=title, body=body[:400], priority=priority.value
+        )
         return
 
     try:
         _sender(message, priority)
     except Exception as exc:
         log.exception("notify_failed", title=title, error=str(exc)[:200])
-
 
 
 def _record_drift(platform: str, key: str, was: str, now: str) -> None:
@@ -99,7 +100,9 @@ def _request_form_approval(job_id, fingerprint, platform, screenshot, answers) -
     )
 
 
-def _confirm_derivation(derivation_id, question, answer, fact_key, fact_text, reasoning):
+def _confirm_derivation(
+    derivation_id, question, answer, fact_key, fact_text, reasoning
+):
     """Ask the user to confirm an answer derived from one of their facts."""
     from backend.integrations.telegram import request_derivation_confirmation
 
@@ -170,11 +173,11 @@ def register_hooks() -> None:
     siteknowledge.on_strategy_drift = lambda platform, key, was, now: (
         _record_drift(platform, key, was, now),
         notify(
-        "Strategy drift",
-        f"{platform}: `{key}` stopped resolving via `{was}` and now resolves via "
-        f"`{now}`. Applications continue — the working strategy has been promoted "
-        f"in data/siteknowledge/{platform}/elements.json.",
-        Priority.DIGEST,
+            "Strategy drift",
+            f"{platform}: `{key}` stopped resolving via `{was}` and now resolves via "
+            f"`{now}`. Applications continue — the working strategy has been promoted "
+            f"in data/siteknowledge/{platform}/elements.json.",
+            Priority.DIGEST,
         ),
     )
 
@@ -186,5 +189,3 @@ def register_hooks() -> None:
     )
 
     log.info("notify_hooks_registered")
-
-

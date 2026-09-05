@@ -49,7 +49,9 @@ def string_constants(tree: ast.AST) -> list[tuple[int, str]]:
     """Every string literal that is not a docstring."""
     docstrings = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
+        if isinstance(
+            node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
+        ):
             first = node.body[0] if node.body else None
             if (
                 isinstance(first, ast.Expr)
@@ -163,7 +165,9 @@ def test_discovery_does_not_import_the_apply_layer():
                 module = node.module
             elif isinstance(node, ast.Import):
                 module = node.names[0].name
-            if module and module.startswith(("backend.apply", "backend.ats", "playwright")):
+            if module and module.startswith(
+                ("backend.apply", "backend.ats", "playwright")
+            ):
                 offenders.append(f"{path.relative_to(REPO)}:{node.lineno} {module}")
     assert offenders == [], offenders
 

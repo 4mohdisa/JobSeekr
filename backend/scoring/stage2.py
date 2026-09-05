@@ -90,7 +90,9 @@ def _coerce(payload: dict[str, Any], job_id: int) -> StageTwoResult:
     try:
         score = float(payload["score"])
     except (KeyError, TypeError, ValueError):
-        return StageTwoResult(job_id=job_id, ok=False, error="score missing or non-numeric")
+        return StageTwoResult(
+            job_id=job_id, ok=False, error="score missing or non-numeric"
+        )
 
     return StageTwoResult(
         job_id=job_id,
@@ -123,7 +125,9 @@ def score_job(job: Job, *, summary: str, rubric: dict[str, Any]) -> StageTwoResu
         raise
     except Exception as exc:
         log.exception("stage2_call_failed", job_id=job.id, error=str(exc)[:300])
-        return StageTwoResult(job_id=job.id, ok=False, error=f"{type(exc).__name__}: {exc}"[:300])
+        return StageTwoResult(
+            job_id=job.id, ok=False, error=f"{type(exc).__name__}: {exc}"[:300]
+        )
 
     return _coerce(payload, job.id)
 

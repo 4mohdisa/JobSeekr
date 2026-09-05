@@ -86,7 +86,9 @@ def draft_for_job(session: Session, job_id: int) -> OutboundDraft:
 
     documents = [
         document
-        for document in session.exec(select(Document).where(Document.job_id == job_id)).all()
+        for document in session.exec(
+            select(Document).where(Document.job_id == job_id)
+        ).all()
         if document.parse_check_passed
     ]
     if not documents:
@@ -113,7 +115,9 @@ def draft_for_job(session: Session, job_id: int) -> OutboundDraft:
     subject, _, body = rendered.partition("\n")
     subject = subject.removeprefix("Subject:").strip()
 
-    attachments = [Path(d.path) for d in documents if d.kind.value in {"resume", "cover_letter"}]
+    attachments = [
+        Path(d.path) for d in documents if d.kind.value in {"resume", "cover_letter"}
+    ]
     if not attachments:
         attachments = [Path(documents[0].path)]
 
@@ -156,7 +160,9 @@ def _ai_context(session: Session, job: Job, profile: Profile) -> dict[str, Any]:
     and produce prose the parse gate never saw.
     """
     letter = session.exec(
-        select(Document).where(Document.job_id == job.id, Document.kind == "cover_letter")
+        select(Document).where(
+            Document.job_id == job.id, Document.kind == "cover_letter"
+        )
     ).first()
     report = (letter.parse_report or {}) if letter else {}
     slots = report.get("ai_slots") or {}
@@ -169,7 +175,10 @@ def _ai_context(session: Session, job: Job, profile: Profile) -> dict[str, Any]:
 
     wanted = [SLOT_SPECS[name] for name in ("opening_hook", "skills_bridge", "closing")]
     generated, violations = generate_ai_slots(
-        wanted, profile=profile, job=job, profile_text=profile_fact_index(profile)[:6000]
+        wanted,
+        profile=profile,
+        job=job,
+        profile_text=profile_fact_index(profile)[:6000],
     )
     if violations:
         raise OutboundRefused(
@@ -187,10 +196,14 @@ def send_draft(draft: OutboundDraft, *, approved_by: str) -> bool:
     scheduled caller and no retry.
     """
     if not approved_by:
-        raise OutboundRefused("send_draft requires an explicit approval; there is no auto-send")
+        raise OutboundRefused(
+            "send_draft requires an explicit approval; there is no auto-send"
+        )
 
     if not settings.gmail_address or not settings.gmail_app_password:
-        raise OutboundRefused("GMAIL_ADDRESS and GMAIL_APP_PASSWORD are required to send")
+        raise OutboundRefused(
+            "GMAIL_ADDRESS and GMAIL_APP_PASSWORD are required to send"
+        )
 
     message = EmailMessage()
     message["From"] = settings.gmail_address

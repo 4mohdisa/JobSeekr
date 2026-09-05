@@ -302,7 +302,9 @@ def _remember(
     at learning time.
     """
     by_id = {m.identifier: m for m in mapped}
-    stored = [_to_stored(f, by_id[f.identifier]) for f in fields if f.identifier in by_id]
+    stored = [
+        _to_stored(f, by_id[f.identifier]) for f in fields if f.identifier in by_id
+    ]
     if not any(mapping.resolved for mapping in stored):
         # Nothing was learned — a failed call or a form the model could not
         # read. Writing an all-unknown map would add a file that teaches the
@@ -382,13 +384,17 @@ def map_fields(
         elif form_field.identifier in known:
             result.append(_cached_to_mapped(known[form_field.identifier]))
         else:  # pragma: no cover - relearn_targets covers every field
-            result.append(MappedField(identifier=form_field.identifier, source="unknown"))
+            result.append(
+                MappedField(identifier=form_field.identifier, source="unknown")
+            )
 
     _remember(session, fingerprint, fields, result, platform=platform)
     return result
 
 
-def _map_via_llm(fields: list[FormField], *, platform: str | None = None) -> list[MappedField]:
+def _map_via_llm(
+    fields: list[FormField], *, platform: str | None = None
+) -> list[MappedField]:
     """Ask the model where each field's value comes from.
 
     Only the fields passed in are mapped — the caller passes just the ones the

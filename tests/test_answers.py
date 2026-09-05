@@ -98,7 +98,9 @@ def test_sponsorship_and_working_rights_never_leak_across_each_other():
     bank = [row("Do you have full working rights in Australia?", "Yes")]
     outcome = resolve("Do you require visa sponsorship?", bank)
 
-    assert isinstance(outcome, Abstain), f"sponsorship answered 'Yes' from working rights: {outcome}"
+    assert isinstance(outcome, Abstain), (
+        f"sponsorship answered 'Yes' from working rights: {outcome}"
+    )
 
 
 def test_working_rights_is_not_answered_from_a_sponsorship_entry_either():
@@ -236,7 +238,9 @@ def test_yes_maps_onto_a_yes_no_choice_list():
 def test_yes_does_NOT_map_onto_visa_status_options():
     """Answering 'Yes' to a citizenship dropdown would assert a visa status."""
     assert (
-        coerce_to_choices("Yes", ["Australian Citizen", "Permanent Resident", "Visa holder"])
+        coerce_to_choices(
+            "Yes", ["Australian Citizen", "Permanent Resident", "Visa holder"]
+        )
         is None
     )
 
@@ -250,7 +254,11 @@ def test_an_answer_that_cannot_be_mapped_abstains_with_invalid_choice():
     )
     assert isinstance(outcome, Abstain)
     assert outcome.reason == AbstainReason.INVALID_CHOICE
-    assert outcome.candidates == ["Australian Citizen", "Permanent Resident", "Visa holder"]
+    assert outcome.candidates == [
+        "Australian Citizen",
+        "Permanent Resident",
+        "Visa holder",
+    ]
 
 
 def test_an_exact_choice_match_is_used_verbatim():

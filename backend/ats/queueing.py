@@ -24,7 +24,12 @@ from backend.logging_setup import get_logger
 
 log = get_logger(__name__)
 
-__all__ = ["MANUAL_QUEUE_PREMIUM", "QueueDecision", "decide_queueing", "manual_queue_floor"]
+__all__ = [
+    "MANUAL_QUEUE_PREMIUM",
+    "QueueDecision",
+    "decide_queueing",
+    "manual_queue_floor",
+]
 
 
 MANUAL_QUEUE_PREMIUM = 8.0
@@ -67,9 +72,7 @@ def decide_queueing(
 
     if score is None:
         # Unscored and unautomatable: nothing to justify spending attention on.
-        return QueueDecision(
-            "skip", "not automatable and never scored", floor
-        )
+        return QueueDecision("skip", "not automatable and never scored", floor)
 
     if score < floor:
         return QueueDecision(

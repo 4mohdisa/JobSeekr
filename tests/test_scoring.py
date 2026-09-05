@@ -76,13 +76,17 @@ def test_excluded_title_keyword_is_dropped():
 
 
 def test_already_applied_job_is_dropped():
-    outcome = apply_hard_filters([make_job(job_id=7)], make_campaign(), already_applied_job_ids={7})
+    outcome = apply_hard_filters(
+        [make_job(job_id=7)], make_campaign(), already_applied_job_ids={7}
+    )
     assert outcome.rejected[0].reason == "already_applied"
 
 
 def test_salary_clearly_below_floor_is_dropped():
     campaign = make_campaign(salary_floor=120000)
-    outcome = apply_hard_filters([make_job(salary_min=60000, salary_max=70000)], campaign)
+    outcome = apply_hard_filters(
+        [make_job(salary_min=60000, salary_max=70000)], campaign
+    )
     assert outcome.rejected[0].reason == "below_salary_floor"
 
 
@@ -118,7 +122,10 @@ def test_embedding_text_is_truncated_to_the_budget():
 
 
 def test_ranking_puts_the_closest_job_first(monkeypatch):
-    jobs = [make_job(1, title="Warehouse Storeperson"), make_job(2, title="Python Developer")]
+    jobs = [
+        make_job(1, title="Warehouse Storeperson"),
+        make_job(2, title="Python Developer"),
+    ]
 
     vectors = {
         "summary": [1.0, 0.0],
@@ -134,7 +141,9 @@ def test_ranking_puts_the_closest_job_first(monkeypatch):
         return out
 
     monkeypatch.setattr(stage1.llm, "embed", fake_embed)
-    ranked = stage1.rank_jobs(jobs, summary="summary", cache=EmbeddingCache(Path("/nonexistent/x")))
+    ranked = stage1.rank_jobs(
+        jobs, summary="summary", cache=EmbeddingCache(Path("/nonexistent/x"))
+    )
     assert ranked[0][0].title == "Python Developer"
 
 
@@ -227,7 +236,9 @@ def test_stage2_clamps_an_out_of_range_score(monkeypatch):
             "red_flags": [],
         },
     )
-    assert stage2.score_job(make_job(), summary="s", rubric=DEFAULT_RUBRIC).score == 100.0
+    assert (
+        stage2.score_job(make_job(), summary="s", rubric=DEFAULT_RUBRIC).score == 100.0
+    )
 
 
 def test_stage2_records_a_failure_rather_than_crashing_the_pass(monkeypatch):

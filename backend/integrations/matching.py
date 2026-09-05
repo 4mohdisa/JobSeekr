@@ -58,11 +58,13 @@ MAX_REPLY_AGE = timedelta(days=120)
 
 # Known ATS reference shapes seen in Australian recruitment mail.
 _REFERENCE_PATTERNS = (
-    re.compile(r"\b(?:ref|reference|job\s*(?:id|no|number)|requisition)\s*[:#]?\s*([A-Z0-9\-]{4,20})\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:ref|reference|job\s*(?:id|no|number)|requisition)\s*[:#]?\s*([A-Z0-9\-]{4,20})\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b([A-Z]{2,5}-\d{3,8})\b"),
     re.compile(r"\bposition\s+(?:id|number)\s*[:#]?\s*(\d{4,10})\b", re.IGNORECASE),
 )
-
 
 
 @dataclass

@@ -34,10 +34,10 @@ from sqlmodel import Session, select
 
 from backend.boards import BOARDS
 from backend.config import settings
-from backend.regions import config_for
 from backend.discovery.normalize import canonical_company
 from backend.logging_setup import get_logger
 from backend.models import Application, ApplicationOutcome, Job
+from backend.regions import config_for
 
 log = get_logger(__name__)
 
@@ -220,7 +220,10 @@ def trip_global_halt(reason: str) -> None:
         log.error("stop_file_unwritable", error=str(exc))
 
     log.error("global_halt", reason=reason)
-    _notify("GLOBAL HALT", f"All applications stopped.\n\n{reason}\n\nDelete data/STOP to resume.")
+    _notify(
+        "GLOBAL HALT",
+        f"All applications stopped.\n\n{reason}\n\nDelete data/STOP to resume.",
+    )
 
 
 # --------------------------------------------------------------------------
@@ -239,7 +242,9 @@ def _local_day_bounds(now: datetime) -> tuple[datetime, datetime]:
     tz = ZoneInfo(settings.timezone)
     local = now.astimezone(tz)
     start_local = datetime.combine(local.date(), time.min, tzinfo=tz)
-    return start_local.astimezone(UTC), (start_local + timedelta(days=1)).astimezone(UTC)
+    return start_local.astimezone(UTC), (start_local + timedelta(days=1)).astimezone(
+        UTC
+    )
 
 
 def _applications_today(session: Session, now: datetime, platform: str | None) -> int:
@@ -323,12 +328,12 @@ def _warmup_allowance(now: datetime) -> tuple[int | None, str]:
 
 
 def _last_submit_at(session: Session, platform: str | None) -> datetime | None:
-    query = select(Application).where(Application.outcome == ApplicationOutcome.SUBMITTED)
+    query = select(Application).where(
+        Application.outcome == ApplicationOutcome.SUBMITTED
+    )
     if platform:
         query = query.where(Application.platform == platform)
-    rows = sorted(
-        session.exec(query).all(), key=lambda r: r.applied_at, reverse=True
-    )
+    rows = sorted(session.exec(query).all(), key=lambda r: r.applied_at, reverse=True)
     if not rows:
         return None
     stamp = rows[0].applied_at
@@ -423,7 +428,9 @@ def check_can_submit(
         add("campaign_target_goal", True, "no goal configured")
 
     # 5 — one application per job, ever.
-    already = session.exec(select(Application).where(Application.job_id == job.id)).first()
+    already = session.exec(
+        select(Application).where(Application.job_id == job.id)
+    ).first()
     add(
         "not_already_applied",
         already is None,
@@ -455,7 +462,9 @@ def check_can_submit(
     # 8 — every attached document passed the parse gate.
     documents: Sequence[Any] = getattr(draft, "documents", None) or []
     ungated = [
-        getattr(d, "kind", "?") for d in documents if not getattr(d, "parse_check_passed", False)
+        getattr(d, "kind", "?")
+        for d in documents
+        if not getattr(d, "parse_check_passed", False)
     ]
     add(
         "documents_parse_checked",

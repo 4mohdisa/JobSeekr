@@ -19,12 +19,11 @@ from __future__ import annotations
 import pytest
 from sqlmodel import Session, SQLModel, create_engine
 
-from backend.apply.answers import AbstainReason, Abstain, resolve_answer
+from backend.apply.answers import Abstain, AbstainReason, resolve_answer
 from backend.discovery.seek_source import SeekSource, parse_json_payload
 from backend.models import AnswerBank, AnswerType, MatchType, Region
 from backend.regions import REGIONS, config_for, currency_for, region_of_job
 from backend.scoring.filters import _salary_below_floor
-
 
 # ---------------------------------------------------------------- configuration
 
@@ -130,7 +129,9 @@ def test_a_floor_never_compares_across_currencies():
 def test_a_floor_still_filters_within_one_currency():
     """Refusing to compare across currencies must not disable the filter."""
     au_job = FakeJob(salary_min=50_000, salary_max=60_000, currency="AUD")
-    assert _salary_below_floor(au_job, 100_000, keep_unstated=True, floor_currency="AUD")
+    assert _salary_below_floor(
+        au_job, 100_000, keep_unstated=True, floor_currency="AUD"
+    )
 
 
 def test_a_job_with_no_explicit_currency_uses_its_region():
@@ -150,7 +151,9 @@ def test_an_uncomparable_job_is_kept_rather_than_dropped():
     costs one manual look. Only the unconverted comparison is ruled out.
     """
     job = FakeJob(salary_min=1, salary_max=2, currency="NZD")
-    assert not _salary_below_floor(job, 999_999, keep_unstated=True, floor_currency="AUD")
+    assert not _salary_below_floor(
+        job, 999_999, keep_unstated=True, floor_currency="AUD"
+    )
 
 
 # ---------------------------------------------------------------- work rights
@@ -233,7 +236,7 @@ def test_the_same_broad_row_still_answers_its_own_region(session):
 
 
 def test_the_abstention_says_which_region_it_had_instead():
-    """"Nothing in the bank" and "the other country's answer" need different fixes.
+    """ "Nothing in the bank" and "the other country's answer" need different fixes.
 
     Reporting them identically is how someone "fixes" it by widening the
     existing row to cover both countries — which is the bug, not the fix.
@@ -338,5 +341,7 @@ def test_the_jobspy_source_passes_its_region_country():
     """Hardcoding Australia returns the wrong market's jobs for an NZ campaign."""
     from backend.discovery.jobspy_source import JobSpySource
 
-    assert JobSpySource("indeed", region=Region.NZ).config.jobspy_country == "New Zealand"
+    assert (
+        JobSpySource("indeed", region=Region.NZ).config.jobspy_country == "New Zealand"
+    )
     assert JobSpySource("indeed").config.jobspy_country == "Australia"

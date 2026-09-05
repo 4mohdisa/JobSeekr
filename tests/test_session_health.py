@@ -174,7 +174,8 @@ def test_the_alert_fires_on_the_transition_not_every_pass(session):
     try:
         for _ in range(4):
             sessions.record(
-                session, sessions.SiteCheck("pageup", SessionStatus.DEAD, "login page", 4)
+                session,
+                sessions.SiteCheck("pageup", SessionStatus.DEAD, "login page", 4),
             )
             session.flush()
     finally:
@@ -301,13 +302,11 @@ def test_an_ats_cookie_domain_is_named_by_the_existing_detector():
 
 def test_an_unknown_host_keeps_its_own_name():
     """Which is also the URL worth checking it at."""
-    assert (
-        sessions._site_for_domain("careers.acme.com.au") == "careers.acme.com.au"
-    )
+    assert sessions._site_for_domain("careers.acme.com.au") == "careers.acme.com.au"
 
 
 def test_a_site_with_no_cookies_is_reported_not_omitted(session):
-    """"LinkedIn is missing from this list" is not something anyone notices."""
+    """ "LinkedIn is missing from this list" is not something anyone notices."""
     results = sessions.check_all(session, FakeContext([]), FakePage())
     by_site = {check.site: check for check in results}
 
@@ -338,7 +337,9 @@ def test_a_site_found_only_in_cookies_is_still_checked(session):
 
 
 def test_check_all_records_every_result(session):
-    sessions.check_all(session, FakeContext([{"domain": "careers.acme.com.au"}]), FakePage())
+    sessions.check_all(
+        session, FakeContext([{"domain": "careers.acme.com.au"}]), FakePage()
+    )
     stored = {row.site for row in session.exec(select(SessionHealth)).all()}
     assert "careers.acme.com.au" in stored
     assert "seek" in stored
@@ -386,7 +387,9 @@ def test_the_digest_is_silent_when_everything_is_signed_in(session):
 
 
 def test_the_digest_names_the_dead_site_and_the_command(session):
-    sessions.record(session, sessions.SiteCheck("pageup", SessionStatus.DEAD, "login page"))
+    sessions.record(
+        session, sessions.SiteCheck("pageup", SessionStatus.DEAD, "login page")
+    )
     session.flush()
 
     body = "\n".join(sessions.digest_lines(session))

@@ -166,7 +166,9 @@ def canonical_suburb(location: str | None) -> str:
         return ""
 
     def _clean_part(part: str) -> str:
-        return _WHITESPACE.sub(" ", re.sub(r"\b\d{4}\b", "", _PUNCT.sub(" ", part))).strip()
+        return _WHITESPACE.sub(
+            " ", re.sub(r"\b\d{4}\b", "", _PUNCT.sub(" ", part))
+        ).strip()
 
     suburb = _clean_part(parts[0])
     state = ""
@@ -224,7 +226,9 @@ def clean_description(raw: str | None) -> str:
         for tag in soup(["script", "style"]):
             tag.decompose()
         # Turn block boundaries into newlines before flattening.
-        for tag in soup.find_all(["br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4"]):
+        for tag in soup.find_all(
+            ["br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4"]
+        ):
             tag.append("\n")
         text = soup.get_text()
 
@@ -256,7 +260,9 @@ _HOURLY_HINT = re.compile(
     r"(per\s+hour|/\s*h(?:r|our)?\b|\bp\.?h\.?\b|\bhourly\b|an\s+hour)", re.IGNORECASE
 )
 _DAILY_HINT = re.compile(r"(per\s+day|/\s*day\b|\bdaily\b|\bper diem\b)", re.IGNORECASE)
-_MONTHLY_HINT = re.compile(r"(per\s+month|/\s*month\b|\bmonthly\b|\bpcm\b)", re.IGNORECASE)
+_MONTHLY_HINT = re.compile(
+    r"(per\s+month|/\s*month\b|\bmonthly\b|\bpcm\b)", re.IGNORECASE
+)
 _ANNUAL_HINT = re.compile(
     r"(per\s+annum|\bp\.?\s?a\.?\b|annual(?:ly)?|per\s+year|/\s*(?:yr|year)\b"
     r"|\bsalary\s+package\b|\bpackage\b|\bbase\s+salary\b|\+\s*super)",
@@ -503,7 +509,9 @@ def normalize_job(
     if raw.salary_min is None and raw.salary_max is None:
         salary = parse_salary(description[:600] or raw.title)
 
-    contact = raw.ad_contact_email or extract_contact_email(description, source_url=raw.url)
+    contact = raw.ad_contact_email or extract_contact_email(
+        description, source_url=raw.url
+    )
 
     return Job(
         source=raw.source,
