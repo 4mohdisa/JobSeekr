@@ -3181,3 +3181,1071 @@ this session it reports **3 blocking, 4 warnings**:
 
 Then merge #17 → #18 → #19 → #20, retargeting each next PR to `main` before
 deleting the merged branch.
+
+---
+
+# Session — 2026-09-05 (macOS, unattended)
+
+Two phases: import the real templates, then browser tab lifecycle.
+`ALLOW_LIVE_SUBMIT` and `OUTBOUND_ENABLED` were not touched and are still false.
+
+## Phase 1 — real templates  (`feat/real-templates`)
+
+### The audit: what your resume source does, and what it does to an ATS
+
+Your `main.tex` compiles and looks good. Extracted, it is much worse than it
+looks. This is `pdfplumber` on **your existing PDF**, which is roughly what an
+ATS reads:
+
+```
+M I
+OHAMMED SA
+(cid:131)+61450106807 #mohdisa233@gmail.com (cid:239)linkedin.com/in/4mohdisa §github.com/4mohdisa (cid:128)isaxcode.com
+TECHNICAL SKILLS
+Languages: TypeScript,JavaScript,Python,Go,Rust,Swift,Dart, Cloud&Data: AWSEC2,CloudflareR2/D1,GCP,Supabase,
+SQL PostgreSQL,Vercel
+...
+MagainRealEstate Feb2026toPresent
+PropertyManager Adelaide,SA
+```
+
+Six separate failures in eleven lines. Every change below is one of them.
+
+| # | What I changed | Why — measured, not assumed |
+|---|---|---|
+| 1 | `charter` → `lmodern` | **The single worst defect.** charter's interword space at 10pt is **2.77pt**; `pdfplumber`'s default `x_tolerance` is **3pt**, and it only starts a new word when the gap *exceeds* the tolerance. So every space in your resume is discarded: `MagainRealEstate`, `PropertyManager`, `Adelaide,SA`. An ATS searching for "Real Estate" finds nothing. lmodern at 10pt measures **3.33pt** and clears it. Measured for charter/lmodern at 10 and 11pt — charter only survives from 11pt (3.03pt), which is one hundredth of a point of margin. |
+| 2 | Removed `\usepackage{fontawesome5}` and `marvosym`, dropped all icons | Your contact icons extract as `(cid:131)`, `#`, `(cid:239)`, `§`, `(cid:128)`. Your **email extracts as `#mohdisa233@gmail.com`** — an ATS email field that no employer can reply to. `marvosym` is also absent from a stock TeX Live/MiKTeX install, so it is a build dependency you do not need. |
+| 3 | Removed `\scshape` from the name | `\scshape` over mixed case split your name into two interleaved lines: `M I` / `OHAMMED SA`. Section headings keep the look because they are typed uppercase, where small caps changes nothing. |
+| 4 | `\begin{multicols}{2}` skills block → single column | This is the two-column failure `Claude.md` names, and it is visible above: `Languages: TypeScript,...,Dart, Cloud&Data: AWSEC2,...` on one line. The parse gate's `single_column_layout` check would reject it. |
+| 5 | `letterpaper` → `a4paper` | Australian standard. Also removed the five `\addtolength` margin hacks and `\usepackage[empty]{fullpage}` in favour of one `geometry` call — `fullpage.sty` lives in the `preprint` bundle and is **not** in TeX Live basic or a minimal MiKTeX, so on a fresh Windows box it is an on-the-fly package download mid-build (or a hard failure offline). |
+| 6 | Contact details already in the body; kept there, split over two lines | See "blind spot 8" below — one line of five fields overflows the measure and strands a separator. |
+| 7 | Removed `\usepackage{tikz}`, `svg.path`, `xcolor`, `latexsym`, `verbatim`, `babel`, `tabularx`, `graphicx` | Unused, or used only for the icons and colours that had to go. Fewer packages, fewer things absent on Windows. |
+| 8 | Kept `\input{glyphtounicode}` and `\pdfgentounicode=1` | The one part of your preamble that was actively helping: it makes pdftex write a correct ToUnicode CMap. |
+| 9 | Employer / institution / project names: `\textbf` → `\large` | Found late, and it is not obvious. See blind spot 7. |
+
+### What I did NOT preserve, and why
+
+- **The two-column skills block with its six category labels** (`Languages:`,
+  `Frontend:`, `Backend:`, `Cloud & Data:`, `AI & ML:`, `Tools:`). The columns
+  had to go regardless — that is failure #4. The *labels* went with them
+  because `Profile.skills` is a flat `list[str]`, which is what the scoring
+  embeddings match on, what `expected_verbatim` harvests one-by-one for the
+  gate, and what the dashboard's profile editor edits. Keeping the labels means
+  either storing the same skills twice (they would drift) or restructuring
+  `skills` into groups, which is a frontend change well outside "import my
+  templates". All 43 skills are in the resume, verbatim, comma-separated.
+  Say the word if you want the labels back and I will do the editor properly.
+- **Underlined contact links.** `\underline` makes a link unbreakable, so a
+  slightly longer handle overflows the line instead of wrapping. The links are
+  still links (`hyperref`, `hidelinks`).
+- **`\resumeSubheading`'s `tabular*`.** Replaced with `\hfill`, which is
+  visually identical here and is what the gate has already been calibrated
+  against.
+
+### Your content, in the database, verbatim
+
+`Profile` version **2**. Every string is copied character-for-character out of
+`main.tex` — nothing paraphrased, nothing summarised, nothing inferred.
+
+- identity (name, email, phone, location, linkedin, **github**, website)
+- 43 skills, 5 roles with 13 bullets, 12 projects, 3 education entries
+- `references`: "Professional references are available upon request."
+
+**Left empty rather than invented:** `headline`, `summary`, `work_rights`,
+`certifications`. Your resume states none of them, and hard rule 1 says facts
+come from you or not at all. `work_rights` being blank will keep showing up in
+`backend.doctor` — that is correct, it needs your answer, not my guess.
+
+Two schema notes:
+- `identity` gained `github` and `references`, which the old template had no
+  concept of. Added to `KNOWN_FIELDS`, `_profile_context` and the editor
+  vocabulary so they are real fields, not smuggled ones.
+- **`source='imported'`** is on `identity`, `work_rights`, and every row of
+  `experience`, `projects`, `education` and `certifications`. `skills` is a
+  flat list of strings and cannot carry a per-item key without breaking the
+  template vocabulary and the profile editor, so its provenance is recorded in
+  `preferences.field_sources`, along with every other field's.
+
+The import script is in the session scratchpad, not the repo — your contact
+details and employment history are not something I will commit to git without
+you asking.
+
+### The fact / narrative split, made explicit
+
+The rule you asked for is now enforced by the template's own vocabulary:
+
+| | Source | What it covers |
+|---|---|---|
+| `profile.*`, `job.*`, `today.*` | Deterministic substitution | Every employer, date, title, institution, qualification, project name, stack, link, and every contact detail. A model never touches these. |
+| `ai.*` | Generated per job, word-capped, validated against the profile | The cover letter's four paragraphs, and the resume's **experience bullet points**. |
+
+`ai.bullets` is new. Each role's bullets are rewritten toward the specific ad
+**from your own bullets** — one model call per role, told it may reorder and
+rephrase but may not add or drop a fact. The result is checked by
+`validate_no_fabrication`, and the bullet count must match going in and coming
+out (a model that merges two bullets into one has dropped a fact without
+inventing a word). **Any failure falls back to your verbatim highlights** and
+logs why. That is deliberately different from the cover letter, where an
+unsupported claim fails the build: a letter paragraph has no truthful version
+to fall back to, and a resume bullet always does — the one you wrote.
+
+Project descriptions are deliberately **not** an AI slot. They are dense with
+checkable facts ("317 tests", "the published ACSM metabolic equations",
+"50+ languages", "Apple TestFlight") and belong on the substitution side.
+
+### Nine artifacts, three real jobs, all gated
+
+Built against the three real Seek ads already in SQLite. **The four cover-letter
+paragraphs are stand-in text, not a writing sample** — there is still no API
+key, so nothing was generated. The resume's `ai.bullets` was deliberately *not*
+stubbed: it was left to fail the real way, so the production fallback path ran
+and the bullets in these PDFs are your own words.
+
+### Job 1 — Data Analyst @ Energy Logistix  (Largs North, Adelaide SA)
+
+`https://au.seek.com/job/94360955`
+
+| artifact | gate | pages | extracted chars | checks |
+|---|---|---|---|---|
+| resume | PASS | 2 | 5828 | 19 |
+| cover_letter | PASS | 1 | 947 | 12 |
+| combined | PASS | 3 | 6776 | 16 |
+
+### Job 4 — Business Analyst @ ACH Group  (Adelaide SA)
+
+`https://au.seek.com/job/94266944`
+
+| artifact | gate | pages | extracted chars | checks |
+|---|---|---|---|---|
+| resume | PASS | 2 | 5828 | 19 |
+| cover_letter | PASS | 1 | 936 | 12 |
+| combined | PASS | 3 | 6765 | 16 |
+
+### Job 17 — Senior Manager Data, AI and Analytics (Chief Data and AI Officer) @ SA Water  (Adelaide SA)
+
+`https://au.seek.com/job/94321820`
+
+| artifact | gate | pages | extracted chars | checks |
+|---|---|---|---|---|
+| resume | PASS | 2 | 5828 | 19 |
+| cover_letter | PASS | 1 | 1033 | 12 |
+| combined | PASS | 3 | 6862 | 16 |
+9/9 passed. Check counts are **19 / 12 / 16** — up from 14 / 9 / 11 last session,
+because of the four new checks below. The resume is 2 pages, same as yours.
+
+### The gate had four more blind spots. All four are now checks.
+
+You said it had four; I found four more. Every one of them passed **all**
+existing checks on documents I was about to call finished. They are numbered
+5–8 continuing the list in this file.
+
+#### 5. `word_spacing_survives_extraction` — a squeezed line loses every space on it
+
+The nine PDFs passed 15/15. Reading the text found this:
+
+```
+LLM-powered resume engine that rewrites a resume against a specific job ad, scores it the way an ATS would, and drafts the
+coverletter. Promptpipelinetunedforfactualgroundingsothemodelreshapesrealexperienceinsteadofinventingit. Builtsolo
+```
+
+and
+
+```
+nutrition-labelpathscovertherest. DailyenergybalancecomputedfromthepublishedACSMmetabolicequationsratherthana
+```
+
+**The mechanism is arithmetic.** `pdfplumber` starts a new word when the gap
+between two characters *exceeds* `x_tolerance`, default 3pt. lmodern's
+interword space is 0.333em: 3.33pt at 10pt, but **3.00pt under `\small`** —
+which does not exceed 3.0 — and justification can shrink it further. Every
+space on a squeezed line is discarded.
+
+It was worse than "some lines": the **same paragraph extracted differently in
+different artifacts**. `cover_letter.pdf` kept its spaces and `combined.pdf`,
+built from it by `PdfWriter.append`, did not. Combined is the artifact attached
+wherever a form has a single upload slot, so the broken one is the one that
+gets sent.
+
+Two fixes, both root-cause:
+- `\raggedright` on both templates. Justification is what lets TeX shrink the
+  glue; ragged right removes the shrink entirely. Measured on a fixed
+  paragraph: justified loses 11% of its spaces, ragged loses none.
+- No `\small` anywhere that carries a keyword — which turned out to be
+  everywhere, since dates, locations and technology stacks are all keywords.
+
+The check itself extracts a **second time at `x_tolerance=1.2`** — below any
+kerning gap, above nothing — and reports every token the default pass merged
+that the tight pass separates. A token counts only when the tight pass splits
+it into two or more pieces of two or more characters, which is what keeps a URL
+(no internal gap for either pass) from ever being reported.
+
+#### 6. `record_headings_start_a_line` — the next employer glued to the previous entry
+
+Also found by reading text that had just passed everything:
+
+```
+EDUCATION
+Performance Education Jan 2026 to Dec 2026
+Professional Year Program, ICT Adelaide, SA Torrens University Australia May 2023 to May 2025
+Bachelor of Information Technology Adelaide, SA 42 Adelaide Piscine Jan 2023
+```
+
+`\vspace` does **not** end a paragraph. The four-point gap I put between
+entries was added inside the paragraph, so LaTeX flowed the next institution
+onto the previous entry's last line — visually as well as in the text. An ATS
+segments education and work history by line, so "Professional Year Program,
+ICT" would be filed against Torrens University with Torrens' dates. The same
+thing happened between every pair of projects.
+
+Fixed with `\par\vspace{4pt}`. The check asserts every employer and institution
+the profile states begins an extracted line, driven by a new
+`ParseExpectations.line_starts` that `build_documents` fills. Supplied for the
+resume and the combined PDF only — a cover letter names employers inside
+sentences, where mid-line is exactly right.
+
+#### 7. `facts_survive_both_extractors` — the gate was grading the friendlier extraction
+
+This is the one I would have shipped. `verify_pdf` runs **two** extractors and
+then does this:
+
+```python
+text = plumber_text if len(plumber_text) >= len(pypdf_text) else pypdf_text
+```
+
+pdfplumber always wins, because it rebuilds words from glyph positions. So
+**every content check in the gate has only ever read pdfplumber**, and the
+pypdf text was thrown away before any of them saw it.
+
+pypdf reads the content stream instead, and inserts a space wherever pdfTeX
+emitted a tightening kern. In lmodern **bold**:
+
+```
+W emark Real Estate    Mar 2024 to F eb 2026
+V ericent              Sep 2023 to F eb 2024
+T orrens University Australia
+```
+
+Two of your five employers and one of your three institutions were unfindable
+by an entire class of parser, on a document reporting "passed all 15 checks".
+Isolated and confirmed: bold splits, italic and upright do not, at every size.
+
+Fixing it needed a real choice, so here is the measurement. Every alternative
+font that survives pypdf in bold fails the word-spacing test at 10pt:
+
+| | pypdf: facts lost | pdfplumber: facts lost | merged words | pages |
+|---|---|---|---|---|
+| lmodern 10pt, bold facts (what I had) | **3** | 0 | 0 | 2 |
+| helvet 11pt, bold facts | 3 | 0 | 12 | 2 |
+| charter 11pt, bold facts | 2 | 0 | 9 | — |
+| times 11/12pt, bold facts | 2 | 6 | 82 | — |
+| **lmodern 10pt, facts not bold** | **0** | **0** | **0** | **2** |
+
+So: employer, institution and project names are set in `\large` rather than
+`\textbf`. They are still the largest thing on their line and still read as
+headings; they are simply not bold. Section headings **stay bold** — they
+survive both extractors, and I checked.
+
+The same change fixed something I had not diagnosed yet. `\hfill` emits no
+space glyph, and pypdf only infers one across it when the font does not change:
+so `\large` employer + normal-size date welded into `Wemark Real EstateMar
+2024`, and italic stack + upright status welded into `AWS EC2Live, paid`,
+`RAGOpen source`, `extensionmacOS`. Putting the same font on both sides of
+every `\hfill` fixed all of them.
+
+The check compares the profile's own facts against **both** extractions and
+fails on any that only one can find. Deliberately scoped to facts rather than
+whole text: the two extractors are allowed to disagree about layout — that is
+what `extractor_agreement`'s 90% tolerance is for — but not about whether your
+employer appears in your resume.
+
+#### 8. `contact_line_not_truncated` — a field wrapped off the end of the contact strip
+
+Your contact strip is one centred line. Five fields do not fit the measure:
+
+```
++61 450 106 807 | mohdisa233@gmail.com | Adelaide, SA | linkedin.com/in/4mohdisa | github.com/4mohdisa |
+isaxcode.com
+```
+
+The line ends on a **dangling separator with nothing after it**, and
+`isaxcode.com` is orphaned onto its own line — directly between the contact
+block and the first section heading, which is the slot a parser reads as a
+headline. Splitting that line on `|` yields a trailing empty field, and the
+gate's own model of an ATS (in the `contact_line_uncontaminated` comment) is
+that it "takes the trailing run of that line as the location". The trailing run
+is empty and the field before it is a GitHub URL.
+
+It is also width-fragile: one more character in the location and `Adelaide, SA`
+itself falls off, with nothing noticing.
+
+Both templates now use a deliberate two-line contact block. The check looks for
+a **stranded separator** — leading, trailing, or doubled — on any line carrying
+the email. Keying on the stranded separator rather than on a list of expected
+fields is what keeps a two-line contact block and the cover letter's signature
+line legal; an earlier draft that asserted "the email line must contain every
+URL field" false-positived on both, and on its own control.
+
+**It found a second instance immediately.** I fixed the resume, rebuilt, and
+the check failed the *cover letter*, whose strip overflows at 11pt for the same
+reason. I had not noticed.
+
+### Also observed in the extracted text, deliberately NOT turned into checks
+
+- **Overlapping employment.** Neutral Base LLC (Jul–Dec 2025) sits inside the
+  Wemark Real Estate range (Mar 2024 – Feb 2026). That is your history, not a
+  document defect, and a gate that second-guessed it would be wrong.
+- **In `combined.pdf` the cover letter falls after the resume's REFERENCES
+  heading**, so a section-following parser attributes the letter to that
+  section, and the letter's recipient block (`Talent Acquisition Team` /
+  title / company / location) reads like a dated employment record at the
+  company being applied to. Real, but inherent to concatenating two documents,
+  and the fix is a design decision about `combined.pdf` rather than a check.
+  Flagged for you.
+- **`Lumo` links to `github.com/4mohdisa/VeltAI`.** That is what your `main.tex`
+  says, so that is what was imported. Change it in the profile if it is stale.
+- Date ranges read "Feb 2026 to Present" with the word "to", as yours do. Kept
+  — an en-dash is what the previous session flagged as an ATS date-parser risk.
+
+### Two fixes to things that were already there
+
+- **`validate_placeholders` reported every loop variable as an unknown
+  namespace.** `\VAR{role.title}` inside `\BLOCK{for role in ...}` produced
+  "'role' is not a known namespace" — fourteen of them for the shipped resume
+  alone, so the dashboard's template editor showed a wall of errors that were
+  not errors and a real typo had nowhere to stand out. It now collects the
+  names a template binds for itself.
+- **`find_ai_slots` scanned `\VAR{...}` only.** The resume reads `ai.bullets`
+  from a block expression, so the resume reported itself as using no AI slots —
+  and a slot that is used but not generated is a `StrictUndefined` failure at
+  render time, on every build. It now scans block expressions too.
+- **`preview_ai_context` is new and shared.** Three places were building the
+  `ai` context by hand (the template editor's preview endpoint, the
+  hostile-documents fixture, the builder), and `ai.bullets` is shaped
+  differently from the prose slots. A hand-built one is free to be a shape the
+  shipped template never sees, which is exactly what happened.
+
+### Tests that could not fail
+
+**17 mutations, 17 killed, 0 survivors.** Every new check and every new guard
+was mutated and the naming test confirmed to fail. The harness records whether
+the target string was *found* before editing, because a mutation that does not
+apply looks identical to a test that caught it — which has fooled this project
+before.
+
+The mutations that mattered most, because each one is a plausible way to write
+the check slightly wrong:
+
+- glued-word probe run at `x_tolerance=3.0` (the same as the default, so it can
+  never disagree with it) → killed
+- glued-word probe keyed on the x range only, ignoring which line a piece is on
+  → killed by the two **acceptance** tests, not the rejection test: it makes
+  every word on the page look glued
+- `record_headings_start_a_line` relaxed from `line.startswith(heading)` to
+  `heading in line` → killed
+- `facts_survive_both_extractors` comparing pdfplumber against itself → killed
+- `contact_line_not_truncated` no longer anchored at end-of-line → killed
+- `generate_role_bullets` iterating `profile.experience` instead of the same
+  `_normalise_rows(...)` the template loops over → killed
+
+That last one was a **real bug in my own new code**, found by an adversarial
+pass rather than by me. `ai.bullets` is indexed by loop position; the template
+iterates normalised rows, which drop anything that is not a dict. One junk row
+in `experience` and every later role silently inherits the previous employer's
+bullet points — a fabrication containing no invented words, which nothing
+downstream could catch. Both lists now come from the same function.
+
+Each rejection test also asserts the failure is the **only** one, and asserts
+its own premise (that the fixture really is broken in the way it claims), so a
+fixture that quietly stops reproducing the defect fails rather than passes.
+
+
+### Extracted text — all nine PDFs
+
+Verbatim `pdfplumber` output, which is roughly what an ATS sees.
+
+#### Job 1 (Energy Logistix) — resume.pdf
+
+```
+Mohammed Isa
++61 450 106 807 | mohdisa233@gmail.com | Adelaide, SA
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+TECHNICAL SKILLS
+TypeScript, JavaScript, Python, Go, Rust, Swift, Dart, SQL, React, Next.js, React Native, Expo, Flutter, Tailwind
+CSS, Node.js, FastAPI, Convex, REST APIs, Clerk, Stripe, AWS EC2, Cloudflare R2/D1, GCP, Supabase,
+PostgreSQL, Vercel, LLM integration, OpenAI & Gemini APIs, GPT-4o Vision, Whisper, RAG pipelines, prompt
+engineering, multi-model orchestration, agentic workflows, MCP, computer vision, OCR, Git, Docker, GitHub Actions,
+Playwright, Testing, Documentation
+EXPERIENCE
+Magain Real Estate Feb 2026 to Present
+Property Manager Adelaide, SA
+• Manage digital property workflows, documentation, records, and system updates.
+• Use PropertyMe and related platforms for operations and reporting.
+• Build internal AI tooling to automate document drafting and record reconciliation.
+Neutral Base LLC Jul 2025 to Dec 2025
+Junior Software Engineer, Contract Remote
+• Architected universal S3 storage component for Convex providers.
+• Integrated Cloudflare R2, GCP uploads, CORS, and Clerk workflows.
+• Contributed macOS app features and Cloudflare database workflows.
+Wemark Real Estate Mar 2024 to Feb 2026
+Property Manager and Systems Support Adelaide, SA
+• Maintained property systems, digital records, documents, and workflow updates.
+• Supported internal IT issues, platform usage, and process improvements.
+• Managed high-volume communications, reporting, invoices, and operational data.
+Vericent Sep 2023 to Feb 2024
+Junior Software Engineer, Contract Remote
+• Built fraud detection software for enterprise real estate operations.
+• Developed SQL pipelines, Python detection logic, and Go services.
+StepSharp Digital May 2023 to Sep 2023
+Web Developer and Project Coordinator Adelaide, SA
+• Built responsive websites with frontend and server-side integrations.
+• Managed deployments, testing, security checks, and client delivery tasks.
+PROJECTS
+Applyable | Next.js, FastAPI, Gemini API, LaTeX, Stripe, AWS EC2 Live, paid
+LLM-powered resume engine that rewrites a resume against a specific job ad, scores it the way an ATS would, and
+drafts the cover letter. Prompt pipeline tuned for factual grounding so the model reshapes real experience instead of
+inventing it. Built solo end to end with subscription billing in production.
+Datavisual Studio | Next.js, FastAPI, PostgreSQL, multi-model LLM, Caddy, EC2 Live
+Upload a messy CSV and get a working dashboard plus a research write-up synthesised from several models at once.
+Multi-model orchestration layer fans a prompt out across providers and reconciles the answers; aggregation stays
+deterministic so the numbers never come from a model.
+Lumo | Expo React Native, Go, Supabase, Clerk, vision models, RevenueCat iOS
+Calorie and gym tracking for iOS. Log a meal by photo and a vision model identifies the food and portion; barcode and
+nutrition-label paths cover the rest. Daily energy balance computed from the published ACSM metabolic equations
+rather than a flat multiplier. Go API, Expo app, 317 tests.
+Motionaire | Tauri v2, Rust, wgpu, React, FFmpeg, LLM agent Open source
+Desktop video editor with a natural-language timeline: describe the cut you want and an LLM agent translates it into
+timeline operations. Rust and wgpu handle compositing, React drives the timeline UI, FFmpeg does the export.
+Mindbase | Next.js, MCP, Tauri v2, PostgreSQL, retrieval Live
+Shared memory layer so AI agents stop re-asking things the team already answered. Ships a Model Context Protocol
+server that any MCP-capable agent can query, a human review console for curating what gets remembered, and a
+macOS companion app.
+VisionExtract | Next.js, TypeScript, GPT-4o Vision, OCR Live
+Computer-vision text extraction from any document or photo across 50+ languages, using GPT-4o Vision where
+classical OCR breaks down on handwriting and poor scans. Privacy-first: pages are processed and discarded rather
+than stored.
+Crawl2AI | Python, FastAPI, Playwright, Next.js, RAG Open source
+RAG ingestion crawler that walks documentation sidebars and pagination links and returns clean, chunk-ready
+Markdown for feeding to an LLM. Playwright handles JavaScript-rendered docs that plain scrapers miss.
+accrual-audit | TypeScript, deterministic engine Open source
+Rent ledger audit engine: coverage-based payment allocation, gap detection, late payment events, and period
+reconciliation. Deliberately deterministic rather than model-driven, so every arrears figure is reproducible and
+defensible in a tribunal.
+Renlio | Next.js, TypeScript, Clerk, Tailwind, shadcn/ui In progress
+Rental management tool built from the property manager side of the desk: listings, tenant applications, and the
+paperwork trail in one place instead of four inboxes.
+X-Finder | Flutter, Dart, Python TestFlight
+Cross-platform mobile app that resolves a single username into public profiles across many online platforms in real
+time. Flutter client, Python aggregation backend, shipped to Apple TestFlight.
+NeutralDrive | Swift, Xcode, File Provider extension macOS
+Native macOS client that surfaces remote object storage in Finder through a file provider extension, so files sync on
+demand rather than downloading a whole bucket.
+Crime Management System | JavaScript, Node.js, SQL Open source
+Web platform for police case reporting and investigation workflows, with role-based access control and full audit
+tracking on every record change.
+EDUCATION
+Performance Education Jan 2026 to Dec 2026
+Professional Year Program, ICT Adelaide, SA
+Torrens University Australia May 2023 to May 2025
+Bachelor of Information Technology Adelaide, SA
+42 Adelaide Piscine Jan 2023
+Intensive Programming Bootcamp Adelaide, SA
+REFERENCES
+Professional references are available upon request.
+```
+
+#### Job 1 (Energy Logistix) — cover_letter.pdf
+
+```
+Mohammed Isa
+Adelaide, SA
++61 450 106 807 | mohdisa233@gmail.com
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+05 September 2026
+Talent Acquisition Team
+Data Analyst
+Energy Logistix
+Largs North, Adelaide SA
+Re: Data Analyst
+Dear Hiring Team,
+My most recent engineering work has been building and shipping data-facing web applications end
+to end, which is the substance of what this role asks for.
+The advertisement describes a team that owns its own reporting and tooling rather than
+outsourcing it, which is the kind of work I have chosen deliberately in every role so far.
+My day to day has been Python, TypeScript and SQL against real production data: pipelines at
+Vericent, reporting and operational data at Wemark Real Estate, and storage and upload
+infrastructure at Neutral Base LLC.
+I would welcome a conversation about how this fits what the team needs.
+Yours sincerely,
+Mohammed Isa
+mohdisa233@gmail.com | +61 450 106 807
+```
+
+#### Job 1 (Energy Logistix) — combined.pdf
+
+```
+Mohammed Isa
++61 450 106 807 | mohdisa233@gmail.com | Adelaide, SA
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+TECHNICAL SKILLS
+TypeScript, JavaScript, Python, Go, Rust, Swift, Dart, SQL, React, Next.js, React Native, Expo, Flutter, Tailwind
+CSS, Node.js, FastAPI, Convex, REST APIs, Clerk, Stripe, AWS EC2, Cloudflare R2/D1, GCP, Supabase,
+PostgreSQL, Vercel, LLM integration, OpenAI & Gemini APIs, GPT-4o Vision, Whisper, RAG pipelines, prompt
+engineering, multi-model orchestration, agentic workflows, MCP, computer vision, OCR, Git, Docker, GitHub Actions,
+Playwright, Testing, Documentation
+EXPERIENCE
+Magain Real Estate Feb 2026 to Present
+Property Manager Adelaide, SA
+• Manage digital property workflows, documentation, records, and system updates.
+• Use PropertyMe and related platforms for operations and reporting.
+• Build internal AI tooling to automate document drafting and record reconciliation.
+Neutral Base LLC Jul 2025 to Dec 2025
+Junior Software Engineer, Contract Remote
+• Architected universal S3 storage component for Convex providers.
+• Integrated Cloudflare R2, GCP uploads, CORS, and Clerk workflows.
+• Contributed macOS app features and Cloudflare database workflows.
+Wemark Real Estate Mar 2024 to Feb 2026
+Property Manager and Systems Support Adelaide, SA
+• Maintained property systems, digital records, documents, and workflow updates.
+• Supported internal IT issues, platform usage, and process improvements.
+• Managed high-volume communications, reporting, invoices, and operational data.
+Vericent Sep 2023 to Feb 2024
+Junior Software Engineer, Contract Remote
+• Built fraud detection software for enterprise real estate operations.
+• Developed SQL pipelines, Python detection logic, and Go services.
+StepSharp Digital May 2023 to Sep 2023
+Web Developer and Project Coordinator Adelaide, SA
+• Built responsive websites with frontend and server-side integrations.
+• Managed deployments, testing, security checks, and client delivery tasks.
+PROJECTS
+Applyable | Next.js, FastAPI, Gemini API, LaTeX, Stripe, AWS EC2 Live, paid
+LLM-powered resume engine that rewrites a resume against a specific job ad, scores it the way an ATS would, and
+drafts the cover letter. Prompt pipeline tuned for factual grounding so the model reshapes real experience instead of
+inventing it. Built solo end to end with subscription billing in production.
+Datavisual Studio | Next.js, FastAPI, PostgreSQL, multi-model LLM, Caddy, EC2 Live
+Upload a messy CSV and get a working dashboard plus a research write-up synthesised from several models at once.
+Multi-model orchestration layer fans a prompt out across providers and reconciles the answers; aggregation stays
+deterministic so the numbers never come from a model.
+Lumo | Expo React Native, Go, Supabase, Clerk, vision models, RevenueCat iOS
+Calorie and gym tracking for iOS. Log a meal by photo and a vision model identifies the food and portion; barcode and
+nutrition-label paths cover the rest. Daily energy balance computed from the published ACSM metabolic equations
+rather than a flat multiplier. Go API, Expo app, 317 tests.
+Motionaire | Tauri v2, Rust, wgpu, React, FFmpeg, LLM agent Open source
+Desktop video editor with a natural-language timeline: describe the cut you want and an LLM agent translates it into
+timeline operations. Rust and wgpu handle compositing, React drives the timeline UI, FFmpeg does the export.
+Mindbase | Next.js, MCP, Tauri v2, PostgreSQL, retrieval Live
+Shared memory layer so AI agents stop re-asking things the team already answered. Ships a Model Context Protocol
+server that any MCP-capable agent can query, a human review console for curating what gets remembered, and a
+macOS companion app.
+VisionExtract | Next.js, TypeScript, GPT-4o Vision, OCR Live
+Computer-vision text extraction from any document or photo across 50+ languages, using GPT-4o Vision where
+classical OCR breaks down on handwriting and poor scans. Privacy-first: pages are processed and discarded rather
+than stored.
+Crawl2AI | Python, FastAPI, Playwright, Next.js, RAG Open source
+RAG ingestion crawler that walks documentation sidebars and pagination links and returns clean, chunk-ready
+Markdown for feeding to an LLM. Playwright handles JavaScript-rendered docs that plain scrapers miss.
+accrual-audit | TypeScript, deterministic engine Open source
+Rent ledger audit engine: coverage-based payment allocation, gap detection, late payment events, and period
+reconciliation. Deliberately deterministic rather than model-driven, so every arrears figure is reproducible and
+defensible in a tribunal.
+Renlio | Next.js, TypeScript, Clerk, Tailwind, shadcn/ui In progress
+Rental management tool built from the property manager side of the desk: listings, tenant applications, and the
+paperwork trail in one place instead of four inboxes.
+X-Finder | Flutter, Dart, Python TestFlight
+Cross-platform mobile app that resolves a single username into public profiles across many online platforms in real
+time. Flutter client, Python aggregation backend, shipped to Apple TestFlight.
+NeutralDrive | Swift, Xcode, File Provider extension macOS
+Native macOS client that surfaces remote object storage in Finder through a file provider extension, so files sync on
+demand rather than downloading a whole bucket.
+Crime Management System | JavaScript, Node.js, SQL Open source
+Web platform for police case reporting and investigation workflows, with role-based access control and full audit
+tracking on every record change.
+EDUCATION
+Performance Education Jan 2026 to Dec 2026
+Professional Year Program, ICT Adelaide, SA
+Torrens University Australia May 2023 to May 2025
+Bachelor of Information Technology Adelaide, SA
+42 Adelaide Piscine Jan 2023
+Intensive Programming Bootcamp Adelaide, SA
+REFERENCES
+Professional references are available upon request.
+Mohammed Isa
+Adelaide, SA
++61 450 106 807 | mohdisa233@gmail.com
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+05 September 2026
+Talent Acquisition Team
+Data Analyst
+Energy Logistix
+Largs North, Adelaide SA
+Re: Data Analyst
+Dear Hiring Team,
+My most recent engineering work has been building and shipping data-facing web applications end
+to end, which is the substance of what this role asks for.
+The advertisement describes a team that owns its own reporting and tooling rather than
+outsourcing it, which is the kind of work I have chosen deliberately in every role so far.
+My day to day has been Python, TypeScript and SQL against real production data: pipelines at
+Vericent, reporting and operational data at Wemark Real Estate, and storage and upload
+infrastructure at Neutral Base LLC.
+I would welcome a conversation about how this fits what the team needs.
+Yours sincerely,
+Mohammed Isa
+mohdisa233@gmail.com | +61 450 106 807
+```
+
+#### Job 4 (ACH Group) — resume.pdf
+
+```
+Mohammed Isa
++61 450 106 807 | mohdisa233@gmail.com | Adelaide, SA
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+TECHNICAL SKILLS
+TypeScript, JavaScript, Python, Go, Rust, Swift, Dart, SQL, React, Next.js, React Native, Expo, Flutter, Tailwind
+CSS, Node.js, FastAPI, Convex, REST APIs, Clerk, Stripe, AWS EC2, Cloudflare R2/D1, GCP, Supabase,
+PostgreSQL, Vercel, LLM integration, OpenAI & Gemini APIs, GPT-4o Vision, Whisper, RAG pipelines, prompt
+engineering, multi-model orchestration, agentic workflows, MCP, computer vision, OCR, Git, Docker, GitHub Actions,
+Playwright, Testing, Documentation
+EXPERIENCE
+Magain Real Estate Feb 2026 to Present
+Property Manager Adelaide, SA
+• Manage digital property workflows, documentation, records, and system updates.
+• Use PropertyMe and related platforms for operations and reporting.
+• Build internal AI tooling to automate document drafting and record reconciliation.
+Neutral Base LLC Jul 2025 to Dec 2025
+Junior Software Engineer, Contract Remote
+• Architected universal S3 storage component for Convex providers.
+• Integrated Cloudflare R2, GCP uploads, CORS, and Clerk workflows.
+• Contributed macOS app features and Cloudflare database workflows.
+Wemark Real Estate Mar 2024 to Feb 2026
+Property Manager and Systems Support Adelaide, SA
+• Maintained property systems, digital records, documents, and workflow updates.
+• Supported internal IT issues, platform usage, and process improvements.
+• Managed high-volume communications, reporting, invoices, and operational data.
+Vericent Sep 2023 to Feb 2024
+Junior Software Engineer, Contract Remote
+• Built fraud detection software for enterprise real estate operations.
+• Developed SQL pipelines, Python detection logic, and Go services.
+StepSharp Digital May 2023 to Sep 2023
+Web Developer and Project Coordinator Adelaide, SA
+• Built responsive websites with frontend and server-side integrations.
+• Managed deployments, testing, security checks, and client delivery tasks.
+PROJECTS
+Applyable | Next.js, FastAPI, Gemini API, LaTeX, Stripe, AWS EC2 Live, paid
+LLM-powered resume engine that rewrites a resume against a specific job ad, scores it the way an ATS would, and
+drafts the cover letter. Prompt pipeline tuned for factual grounding so the model reshapes real experience instead of
+inventing it. Built solo end to end with subscription billing in production.
+Datavisual Studio | Next.js, FastAPI, PostgreSQL, multi-model LLM, Caddy, EC2 Live
+Upload a messy CSV and get a working dashboard plus a research write-up synthesised from several models at once.
+Multi-model orchestration layer fans a prompt out across providers and reconciles the answers; aggregation stays
+deterministic so the numbers never come from a model.
+Lumo | Expo React Native, Go, Supabase, Clerk, vision models, RevenueCat iOS
+Calorie and gym tracking for iOS. Log a meal by photo and a vision model identifies the food and portion; barcode and
+nutrition-label paths cover the rest. Daily energy balance computed from the published ACSM metabolic equations
+rather than a flat multiplier. Go API, Expo app, 317 tests.
+Motionaire | Tauri v2, Rust, wgpu, React, FFmpeg, LLM agent Open source
+Desktop video editor with a natural-language timeline: describe the cut you want and an LLM agent translates it into
+timeline operations. Rust and wgpu handle compositing, React drives the timeline UI, FFmpeg does the export.
+Mindbase | Next.js, MCP, Tauri v2, PostgreSQL, retrieval Live
+Shared memory layer so AI agents stop re-asking things the team already answered. Ships a Model Context Protocol
+server that any MCP-capable agent can query, a human review console for curating what gets remembered, and a
+macOS companion app.
+VisionExtract | Next.js, TypeScript, GPT-4o Vision, OCR Live
+Computer-vision text extraction from any document or photo across 50+ languages, using GPT-4o Vision where
+classical OCR breaks down on handwriting and poor scans. Privacy-first: pages are processed and discarded rather
+than stored.
+Crawl2AI | Python, FastAPI, Playwright, Next.js, RAG Open source
+RAG ingestion crawler that walks documentation sidebars and pagination links and returns clean, chunk-ready
+Markdown for feeding to an LLM. Playwright handles JavaScript-rendered docs that plain scrapers miss.
+accrual-audit | TypeScript, deterministic engine Open source
+Rent ledger audit engine: coverage-based payment allocation, gap detection, late payment events, and period
+reconciliation. Deliberately deterministic rather than model-driven, so every arrears figure is reproducible and
+defensible in a tribunal.
+Renlio | Next.js, TypeScript, Clerk, Tailwind, shadcn/ui In progress
+Rental management tool built from the property manager side of the desk: listings, tenant applications, and the
+paperwork trail in one place instead of four inboxes.
+X-Finder | Flutter, Dart, Python TestFlight
+Cross-platform mobile app that resolves a single username into public profiles across many online platforms in real
+time. Flutter client, Python aggregation backend, shipped to Apple TestFlight.
+NeutralDrive | Swift, Xcode, File Provider extension macOS
+Native macOS client that surfaces remote object storage in Finder through a file provider extension, so files sync on
+demand rather than downloading a whole bucket.
+Crime Management System | JavaScript, Node.js, SQL Open source
+Web platform for police case reporting and investigation workflows, with role-based access control and full audit
+tracking on every record change.
+EDUCATION
+Performance Education Jan 2026 to Dec 2026
+Professional Year Program, ICT Adelaide, SA
+Torrens University Australia May 2023 to May 2025
+Bachelor of Information Technology Adelaide, SA
+42 Adelaide Piscine Jan 2023
+Intensive Programming Bootcamp Adelaide, SA
+REFERENCES
+Professional references are available upon request.
+```
+
+#### Job 4 (ACH Group) — cover_letter.pdf
+
+```
+Mohammed Isa
+Adelaide, SA
++61 450 106 807 | mohdisa233@gmail.com
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+05 September 2026
+Talent Acquisition Team
+Business Analyst
+ACH Group
+Adelaide SA
+Re: Business Analyst
+Dear Hiring Team,
+My most recent engineering work has been building and shipping data-facing web applications end
+to end, which is the substance of what this role asks for.
+The advertisement describes a team that owns its own reporting and tooling rather than
+outsourcing it, which is the kind of work I have chosen deliberately in every role so far.
+My day to day has been Python, TypeScript and SQL against real production data: pipelines at
+Vericent, reporting and operational data at Wemark Real Estate, and storage and upload
+infrastructure at Neutral Base LLC.
+I would welcome a conversation about how this fits what the team needs.
+Yours sincerely,
+Mohammed Isa
+mohdisa233@gmail.com | +61 450 106 807
+```
+
+#### Job 4 (ACH Group) — combined.pdf
+
+```
+Mohammed Isa
++61 450 106 807 | mohdisa233@gmail.com | Adelaide, SA
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+TECHNICAL SKILLS
+TypeScript, JavaScript, Python, Go, Rust, Swift, Dart, SQL, React, Next.js, React Native, Expo, Flutter, Tailwind
+CSS, Node.js, FastAPI, Convex, REST APIs, Clerk, Stripe, AWS EC2, Cloudflare R2/D1, GCP, Supabase,
+PostgreSQL, Vercel, LLM integration, OpenAI & Gemini APIs, GPT-4o Vision, Whisper, RAG pipelines, prompt
+engineering, multi-model orchestration, agentic workflows, MCP, computer vision, OCR, Git, Docker, GitHub Actions,
+Playwright, Testing, Documentation
+EXPERIENCE
+Magain Real Estate Feb 2026 to Present
+Property Manager Adelaide, SA
+• Manage digital property workflows, documentation, records, and system updates.
+• Use PropertyMe and related platforms for operations and reporting.
+• Build internal AI tooling to automate document drafting and record reconciliation.
+Neutral Base LLC Jul 2025 to Dec 2025
+Junior Software Engineer, Contract Remote
+• Architected universal S3 storage component for Convex providers.
+• Integrated Cloudflare R2, GCP uploads, CORS, and Clerk workflows.
+• Contributed macOS app features and Cloudflare database workflows.
+Wemark Real Estate Mar 2024 to Feb 2026
+Property Manager and Systems Support Adelaide, SA
+• Maintained property systems, digital records, documents, and workflow updates.
+• Supported internal IT issues, platform usage, and process improvements.
+• Managed high-volume communications, reporting, invoices, and operational data.
+Vericent Sep 2023 to Feb 2024
+Junior Software Engineer, Contract Remote
+• Built fraud detection software for enterprise real estate operations.
+• Developed SQL pipelines, Python detection logic, and Go services.
+StepSharp Digital May 2023 to Sep 2023
+Web Developer and Project Coordinator Adelaide, SA
+• Built responsive websites with frontend and server-side integrations.
+• Managed deployments, testing, security checks, and client delivery tasks.
+PROJECTS
+Applyable | Next.js, FastAPI, Gemini API, LaTeX, Stripe, AWS EC2 Live, paid
+LLM-powered resume engine that rewrites a resume against a specific job ad, scores it the way an ATS would, and
+drafts the cover letter. Prompt pipeline tuned for factual grounding so the model reshapes real experience instead of
+inventing it. Built solo end to end with subscription billing in production.
+Datavisual Studio | Next.js, FastAPI, PostgreSQL, multi-model LLM, Caddy, EC2 Live
+Upload a messy CSV and get a working dashboard plus a research write-up synthesised from several models at once.
+Multi-model orchestration layer fans a prompt out across providers and reconciles the answers; aggregation stays
+deterministic so the numbers never come from a model.
+Lumo | Expo React Native, Go, Supabase, Clerk, vision models, RevenueCat iOS
+Calorie and gym tracking for iOS. Log a meal by photo and a vision model identifies the food and portion; barcode and
+nutrition-label paths cover the rest. Daily energy balance computed from the published ACSM metabolic equations
+rather than a flat multiplier. Go API, Expo app, 317 tests.
+Motionaire | Tauri v2, Rust, wgpu, React, FFmpeg, LLM agent Open source
+Desktop video editor with a natural-language timeline: describe the cut you want and an LLM agent translates it into
+timeline operations. Rust and wgpu handle compositing, React drives the timeline UI, FFmpeg does the export.
+Mindbase | Next.js, MCP, Tauri v2, PostgreSQL, retrieval Live
+Shared memory layer so AI agents stop re-asking things the team already answered. Ships a Model Context Protocol
+server that any MCP-capable agent can query, a human review console for curating what gets remembered, and a
+macOS companion app.
+VisionExtract | Next.js, TypeScript, GPT-4o Vision, OCR Live
+Computer-vision text extraction from any document or photo across 50+ languages, using GPT-4o Vision where
+classical OCR breaks down on handwriting and poor scans. Privacy-first: pages are processed and discarded rather
+than stored.
+Crawl2AI | Python, FastAPI, Playwright, Next.js, RAG Open source
+RAG ingestion crawler that walks documentation sidebars and pagination links and returns clean, chunk-ready
+Markdown for feeding to an LLM. Playwright handles JavaScript-rendered docs that plain scrapers miss.
+accrual-audit | TypeScript, deterministic engine Open source
+Rent ledger audit engine: coverage-based payment allocation, gap detection, late payment events, and period
+reconciliation. Deliberately deterministic rather than model-driven, so every arrears figure is reproducible and
+defensible in a tribunal.
+Renlio | Next.js, TypeScript, Clerk, Tailwind, shadcn/ui In progress
+Rental management tool built from the property manager side of the desk: listings, tenant applications, and the
+paperwork trail in one place instead of four inboxes.
+X-Finder | Flutter, Dart, Python TestFlight
+Cross-platform mobile app that resolves a single username into public profiles across many online platforms in real
+time. Flutter client, Python aggregation backend, shipped to Apple TestFlight.
+NeutralDrive | Swift, Xcode, File Provider extension macOS
+Native macOS client that surfaces remote object storage in Finder through a file provider extension, so files sync on
+demand rather than downloading a whole bucket.
+Crime Management System | JavaScript, Node.js, SQL Open source
+Web platform for police case reporting and investigation workflows, with role-based access control and full audit
+tracking on every record change.
+EDUCATION
+Performance Education Jan 2026 to Dec 2026
+Professional Year Program, ICT Adelaide, SA
+Torrens University Australia May 2023 to May 2025
+Bachelor of Information Technology Adelaide, SA
+42 Adelaide Piscine Jan 2023
+Intensive Programming Bootcamp Adelaide, SA
+REFERENCES
+Professional references are available upon request.
+Mohammed Isa
+Adelaide, SA
++61 450 106 807 | mohdisa233@gmail.com
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+05 September 2026
+Talent Acquisition Team
+Business Analyst
+ACH Group
+Adelaide SA
+Re: Business Analyst
+Dear Hiring Team,
+My most recent engineering work has been building and shipping data-facing web applications end
+to end, which is the substance of what this role asks for.
+The advertisement describes a team that owns its own reporting and tooling rather than
+outsourcing it, which is the kind of work I have chosen deliberately in every role so far.
+My day to day has been Python, TypeScript and SQL against real production data: pipelines at
+Vericent, reporting and operational data at Wemark Real Estate, and storage and upload
+infrastructure at Neutral Base LLC.
+I would welcome a conversation about how this fits what the team needs.
+Yours sincerely,
+Mohammed Isa
+mohdisa233@gmail.com | +61 450 106 807
+```
+
+#### Job 17 (SA Water) — resume.pdf
+
+```
+Mohammed Isa
++61 450 106 807 | mohdisa233@gmail.com | Adelaide, SA
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+TECHNICAL SKILLS
+TypeScript, JavaScript, Python, Go, Rust, Swift, Dart, SQL, React, Next.js, React Native, Expo, Flutter, Tailwind
+CSS, Node.js, FastAPI, Convex, REST APIs, Clerk, Stripe, AWS EC2, Cloudflare R2/D1, GCP, Supabase,
+PostgreSQL, Vercel, LLM integration, OpenAI & Gemini APIs, GPT-4o Vision, Whisper, RAG pipelines, prompt
+engineering, multi-model orchestration, agentic workflows, MCP, computer vision, OCR, Git, Docker, GitHub Actions,
+Playwright, Testing, Documentation
+EXPERIENCE
+Magain Real Estate Feb 2026 to Present
+Property Manager Adelaide, SA
+• Manage digital property workflows, documentation, records, and system updates.
+• Use PropertyMe and related platforms for operations and reporting.
+• Build internal AI tooling to automate document drafting and record reconciliation.
+Neutral Base LLC Jul 2025 to Dec 2025
+Junior Software Engineer, Contract Remote
+• Architected universal S3 storage component for Convex providers.
+• Integrated Cloudflare R2, GCP uploads, CORS, and Clerk workflows.
+• Contributed macOS app features and Cloudflare database workflows.
+Wemark Real Estate Mar 2024 to Feb 2026
+Property Manager and Systems Support Adelaide, SA
+• Maintained property systems, digital records, documents, and workflow updates.
+• Supported internal IT issues, platform usage, and process improvements.
+• Managed high-volume communications, reporting, invoices, and operational data.
+Vericent Sep 2023 to Feb 2024
+Junior Software Engineer, Contract Remote
+• Built fraud detection software for enterprise real estate operations.
+• Developed SQL pipelines, Python detection logic, and Go services.
+StepSharp Digital May 2023 to Sep 2023
+Web Developer and Project Coordinator Adelaide, SA
+• Built responsive websites with frontend and server-side integrations.
+• Managed deployments, testing, security checks, and client delivery tasks.
+PROJECTS
+Applyable | Next.js, FastAPI, Gemini API, LaTeX, Stripe, AWS EC2 Live, paid
+LLM-powered resume engine that rewrites a resume against a specific job ad, scores it the way an ATS would, and
+drafts the cover letter. Prompt pipeline tuned for factual grounding so the model reshapes real experience instead of
+inventing it. Built solo end to end with subscription billing in production.
+Datavisual Studio | Next.js, FastAPI, PostgreSQL, multi-model LLM, Caddy, EC2 Live
+Upload a messy CSV and get a working dashboard plus a research write-up synthesised from several models at once.
+Multi-model orchestration layer fans a prompt out across providers and reconciles the answers; aggregation stays
+deterministic so the numbers never come from a model.
+Lumo | Expo React Native, Go, Supabase, Clerk, vision models, RevenueCat iOS
+Calorie and gym tracking for iOS. Log a meal by photo and a vision model identifies the food and portion; barcode and
+nutrition-label paths cover the rest. Daily energy balance computed from the published ACSM metabolic equations
+rather than a flat multiplier. Go API, Expo app, 317 tests.
+Motionaire | Tauri v2, Rust, wgpu, React, FFmpeg, LLM agent Open source
+Desktop video editor with a natural-language timeline: describe the cut you want and an LLM agent translates it into
+timeline operations. Rust and wgpu handle compositing, React drives the timeline UI, FFmpeg does the export.
+Mindbase | Next.js, MCP, Tauri v2, PostgreSQL, retrieval Live
+Shared memory layer so AI agents stop re-asking things the team already answered. Ships a Model Context Protocol
+server that any MCP-capable agent can query, a human review console for curating what gets remembered, and a
+macOS companion app.
+VisionExtract | Next.js, TypeScript, GPT-4o Vision, OCR Live
+Computer-vision text extraction from any document or photo across 50+ languages, using GPT-4o Vision where
+classical OCR breaks down on handwriting and poor scans. Privacy-first: pages are processed and discarded rather
+than stored.
+Crawl2AI | Python, FastAPI, Playwright, Next.js, RAG Open source
+RAG ingestion crawler that walks documentation sidebars and pagination links and returns clean, chunk-ready
+Markdown for feeding to an LLM. Playwright handles JavaScript-rendered docs that plain scrapers miss.
+accrual-audit | TypeScript, deterministic engine Open source
+Rent ledger audit engine: coverage-based payment allocation, gap detection, late payment events, and period
+reconciliation. Deliberately deterministic rather than model-driven, so every arrears figure is reproducible and
+defensible in a tribunal.
+Renlio | Next.js, TypeScript, Clerk, Tailwind, shadcn/ui In progress
+Rental management tool built from the property manager side of the desk: listings, tenant applications, and the
+paperwork trail in one place instead of four inboxes.
+X-Finder | Flutter, Dart, Python TestFlight
+Cross-platform mobile app that resolves a single username into public profiles across many online platforms in real
+time. Flutter client, Python aggregation backend, shipped to Apple TestFlight.
+NeutralDrive | Swift, Xcode, File Provider extension macOS
+Native macOS client that surfaces remote object storage in Finder through a file provider extension, so files sync on
+demand rather than downloading a whole bucket.
+Crime Management System | JavaScript, Node.js, SQL Open source
+Web platform for police case reporting and investigation workflows, with role-based access control and full audit
+tracking on every record change.
+EDUCATION
+Performance Education Jan 2026 to Dec 2026
+Professional Year Program, ICT Adelaide, SA
+Torrens University Australia May 2023 to May 2025
+Bachelor of Information Technology Adelaide, SA
+42 Adelaide Piscine Jan 2023
+Intensive Programming Bootcamp Adelaide, SA
+REFERENCES
+Professional references are available upon request.
+```
+
+#### Job 17 (SA Water) — cover_letter.pdf
+
+```
+Mohammed Isa
+Adelaide, SA
++61 450 106 807 | mohdisa233@gmail.com
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+05 September 2026
+Talent Acquisition Team
+Senior Manager Data, AI and Analytics (Chief Data and AI Officer)
+SA Water
+Adelaide SA
+Re: Senior Manager Data, AI and Analytics (Chief Data and AI Officer)
+Dear Hiring Team,
+My most recent engineering work has been building and shipping data-facing web applications end
+to end, which is the substance of what this role asks for.
+The advertisement describes a team that owns its own reporting and tooling rather than
+outsourcing it, which is the kind of work I have chosen deliberately in every role so far.
+My day to day has been Python, TypeScript and SQL against real production data: pipelines at
+Vericent, reporting and operational data at Wemark Real Estate, and storage and upload
+infrastructure at Neutral Base LLC.
+I would welcome a conversation about how this fits what the team needs.
+Yours sincerely,
+Mohammed Isa
+mohdisa233@gmail.com | +61 450 106 807
+```
+
+#### Job 17 (SA Water) — combined.pdf
+
+```
+Mohammed Isa
++61 450 106 807 | mohdisa233@gmail.com | Adelaide, SA
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+TECHNICAL SKILLS
+TypeScript, JavaScript, Python, Go, Rust, Swift, Dart, SQL, React, Next.js, React Native, Expo, Flutter, Tailwind
+CSS, Node.js, FastAPI, Convex, REST APIs, Clerk, Stripe, AWS EC2, Cloudflare R2/D1, GCP, Supabase,
+PostgreSQL, Vercel, LLM integration, OpenAI & Gemini APIs, GPT-4o Vision, Whisper, RAG pipelines, prompt
+engineering, multi-model orchestration, agentic workflows, MCP, computer vision, OCR, Git, Docker, GitHub Actions,
+Playwright, Testing, Documentation
+EXPERIENCE
+Magain Real Estate Feb 2026 to Present
+Property Manager Adelaide, SA
+• Manage digital property workflows, documentation, records, and system updates.
+• Use PropertyMe and related platforms for operations and reporting.
+• Build internal AI tooling to automate document drafting and record reconciliation.
+Neutral Base LLC Jul 2025 to Dec 2025
+Junior Software Engineer, Contract Remote
+• Architected universal S3 storage component for Convex providers.
+• Integrated Cloudflare R2, GCP uploads, CORS, and Clerk workflows.
+• Contributed macOS app features and Cloudflare database workflows.
+Wemark Real Estate Mar 2024 to Feb 2026
+Property Manager and Systems Support Adelaide, SA
+• Maintained property systems, digital records, documents, and workflow updates.
+• Supported internal IT issues, platform usage, and process improvements.
+• Managed high-volume communications, reporting, invoices, and operational data.
+Vericent Sep 2023 to Feb 2024
+Junior Software Engineer, Contract Remote
+• Built fraud detection software for enterprise real estate operations.
+• Developed SQL pipelines, Python detection logic, and Go services.
+StepSharp Digital May 2023 to Sep 2023
+Web Developer and Project Coordinator Adelaide, SA
+• Built responsive websites with frontend and server-side integrations.
+• Managed deployments, testing, security checks, and client delivery tasks.
+PROJECTS
+Applyable | Next.js, FastAPI, Gemini API, LaTeX, Stripe, AWS EC2 Live, paid
+LLM-powered resume engine that rewrites a resume against a specific job ad, scores it the way an ATS would, and
+drafts the cover letter. Prompt pipeline tuned for factual grounding so the model reshapes real experience instead of
+inventing it. Built solo end to end with subscription billing in production.
+Datavisual Studio | Next.js, FastAPI, PostgreSQL, multi-model LLM, Caddy, EC2 Live
+Upload a messy CSV and get a working dashboard plus a research write-up synthesised from several models at once.
+Multi-model orchestration layer fans a prompt out across providers and reconciles the answers; aggregation stays
+deterministic so the numbers never come from a model.
+Lumo | Expo React Native, Go, Supabase, Clerk, vision models, RevenueCat iOS
+Calorie and gym tracking for iOS. Log a meal by photo and a vision model identifies the food and portion; barcode and
+nutrition-label paths cover the rest. Daily energy balance computed from the published ACSM metabolic equations
+rather than a flat multiplier. Go API, Expo app, 317 tests.
+Motionaire | Tauri v2, Rust, wgpu, React, FFmpeg, LLM agent Open source
+Desktop video editor with a natural-language timeline: describe the cut you want and an LLM agent translates it into
+timeline operations. Rust and wgpu handle compositing, React drives the timeline UI, FFmpeg does the export.
+Mindbase | Next.js, MCP, Tauri v2, PostgreSQL, retrieval Live
+Shared memory layer so AI agents stop re-asking things the team already answered. Ships a Model Context Protocol
+server that any MCP-capable agent can query, a human review console for curating what gets remembered, and a
+macOS companion app.
+VisionExtract | Next.js, TypeScript, GPT-4o Vision, OCR Live
+Computer-vision text extraction from any document or photo across 50+ languages, using GPT-4o Vision where
+classical OCR breaks down on handwriting and poor scans. Privacy-first: pages are processed and discarded rather
+than stored.
+Crawl2AI | Python, FastAPI, Playwright, Next.js, RAG Open source
+RAG ingestion crawler that walks documentation sidebars and pagination links and returns clean, chunk-ready
+Markdown for feeding to an LLM. Playwright handles JavaScript-rendered docs that plain scrapers miss.
+accrual-audit | TypeScript, deterministic engine Open source
+Rent ledger audit engine: coverage-based payment allocation, gap detection, late payment events, and period
+reconciliation. Deliberately deterministic rather than model-driven, so every arrears figure is reproducible and
+defensible in a tribunal.
+Renlio | Next.js, TypeScript, Clerk, Tailwind, shadcn/ui In progress
+Rental management tool built from the property manager side of the desk: listings, tenant applications, and the
+paperwork trail in one place instead of four inboxes.
+X-Finder | Flutter, Dart, Python TestFlight
+Cross-platform mobile app that resolves a single username into public profiles across many online platforms in real
+time. Flutter client, Python aggregation backend, shipped to Apple TestFlight.
+NeutralDrive | Swift, Xcode, File Provider extension macOS
+Native macOS client that surfaces remote object storage in Finder through a file provider extension, so files sync on
+demand rather than downloading a whole bucket.
+Crime Management System | JavaScript, Node.js, SQL Open source
+Web platform for police case reporting and investigation workflows, with role-based access control and full audit
+tracking on every record change.
+EDUCATION
+Performance Education Jan 2026 to Dec 2026
+Professional Year Program, ICT Adelaide, SA
+Torrens University Australia May 2023 to May 2025
+Bachelor of Information Technology Adelaide, SA
+42 Adelaide Piscine Jan 2023
+Intensive Programming Bootcamp Adelaide, SA
+REFERENCES
+Professional references are available upon request.
+Mohammed Isa
+Adelaide, SA
++61 450 106 807 | mohdisa233@gmail.com
+linkedin.com/in/4mohdisa | github.com/4mohdisa | isaxcode.com
+05 September 2026
+Talent Acquisition Team
+Senior Manager Data, AI and Analytics (Chief Data and AI Officer)
+SA Water
+Adelaide SA
+Re: Senior Manager Data, AI and Analytics (Chief Data and AI Officer)
+Dear Hiring Team,
+My most recent engineering work has been building and shipping data-facing web applications end
+to end, which is the substance of what this role asks for.
+The advertisement describes a team that owns its own reporting and tooling rather than
+outsourcing it, which is the kind of work I have chosen deliberately in every role so far.
+My day to day has been Python, TypeScript and SQL against real production data: pipelines at
+Vericent, reporting and operational data at Wemark Real Estate, and storage and upload
+infrastructure at Neutral Base LLC.
+I would welcome a conversation about how this fits what the team needs.
+Yours sincerely,
+Mohammed Isa
+mohdisa233@gmail.com | +61 450 106 807
+```

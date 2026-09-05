@@ -1,7 +1,25 @@
 % ---------------------------------------------------------------------------
-% JobSeekr cover letter — single column, A4, pdflatex, ONE page.
-% Same deliberate constraints as resume.tex.j2; see the header there.
-% The parse gate enforces the one-page limit, so the AI slots are word-capped.
+% Mohammed Isa's cover letter, converted from the PDF he supplied into this
+% project's placeholder system. His layout: name, location and contact strip
+% at the top left; the date; the recipient block naming the role and employer;
+% a "Re:" line; four body paragraphs; "Yours sincerely" and a repeat of the
+% contact details underneath the name.
+%
+% Same deliberate constraints as resume.tex.j2 — pdflatex, lmodern + T1,
+% a4paper, single column, contact details in the BODY. See the header there
+% for why each one is not negotiable.
+%
+% THE FACT / NARRATIVE SPLIT
+%
+%   The "profile" and "job" namespaces are substitution. Name, contact details,
+%   employer, role title and location are never written by a model. (A LaTeX
+%   comment is not a Jinja comment, so they are named in prose rather than
+%   written out as placeholders, which would be parsed as real ones.)
+%
+%   The four body paragraphs are the ai slots, in HIS order: the hook, why
+%   this employer, the evidence bridge, the close. Each is word-capped and
+%   validated against the profile before it is allowed into the document, and
+%   the caps are what keep this to the one page the parse gate enforces.
 % ---------------------------------------------------------------------------
 \documentclass[11pt,a4paper]{article}
 
@@ -12,6 +30,13 @@
 \usepackage[hidelinks]{hyperref}
 
 \pagestyle{empty}
+% Ragged right, not justified. Justification lets TeX shrink the interword glue
+% to fit a line, and a shrunk space drops below the 3pt word tolerance that
+% pdfplumber — and every ATS built on a PDF text extractor — uses to decide
+% where one word ends and the next begins. A single squeezed line then extracts
+% as "Theadvertisementdescribesateamthatownsitsownreportingandtooling".
+% Measured: justified body text loses 11%% of its spaces, ragged loses none.
+\raggedright
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{0.8em}
 
@@ -19,23 +44,40 @@
 
 % Contact details in the body, never a header — parsers skip headers.
 {\large\bfseries \VAR{profile.name}}\\
-\VAR{profile.email}
-\BLOCK{if profile.phone} $\cdot$ \VAR{profile.phone}\BLOCK{endif}
-\BLOCK{if profile.location} $\cdot$ \VAR{profile.location}\BLOCK{endif}
+\BLOCK{if profile.location}
+\VAR{profile.location}\\
+\BLOCK{endif}
+% Two lines, not one. Five fields do not fit the measure at 11pt: the last
+% one wraps, and the separator that preceded it is left stranded at the end of
+% the line with nothing after it. An ATS reading the trailing run of the
+% contact line as the location then reads an empty string. The gate's
+% contact_line_not_truncated check exists because this shipped.
+\VAR{profile.phone}
+\BLOCK{if profile.email} $|$ \VAR{profile.email}\BLOCK{endif}
+\BLOCK{if profile.linkedin or profile.github or profile.website}\\
+\BLOCK{endif}
+\BLOCK{if profile.linkedin}\VAR{profile.linkedin}\BLOCK{endif}
+\BLOCK{if profile.github} $|$ \VAR{profile.github}\BLOCK{endif}
+\BLOCK{if profile.website} $|$ \VAR{profile.website}\BLOCK{endif}
 % \par, not a blank line. The engine renders with trim_blocks=True, which eats
 % the newline that follows a block end tag — so a blank line here is consumed
 % and LaTeX joins the date onto the contact paragraph. It then extracts as
 % "... Adelaide SA 01 September 2026", and an ATS reads the location field as
 % having a date stapled to it. \par ends the paragraph whatever the trimming
-% does to the newlines around it.
+% does to the newlines around it. The gate's contact_line_uncontaminated check
+% exists because this happened.
 % (A LaTeX comment is not a Jinja comment: naming a block tag in prose here
 % would be parsed as a real tag, so they are described rather than written.)
 \par
 \VAR{today.long}
 
-\BLOCK{if job.company}
-Hiring Team\\
+Talent Acquisition Team\\
+\VAR{job.title}
+\BLOCK{if job.company}\\
 \VAR{job.company}
+\BLOCK{endif}
+\BLOCK{if job.location}\\
+\VAR{job.location}
 \BLOCK{endif}
 
 \textbf{Re: \VAR{job.title}}
@@ -44,13 +86,14 @@ Dear Hiring Team,
 
 \VAR{ai.opening_hook}
 
-\VAR{ai.skills_bridge}
-
 \VAR{ai.why_company}
+
+\VAR{ai.skills_bridge}
 
 \VAR{ai.closing}
 
-Kind regards,\\
-\VAR{profile.name}
+Yours sincerely,\\
+\VAR{profile.name}\\
+\VAR{profile.email}\BLOCK{if profile.phone} $|$ \VAR{profile.phone}\BLOCK{endif}
 
 \end{document}

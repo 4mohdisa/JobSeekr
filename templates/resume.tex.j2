@@ -1,106 +1,153 @@
 % ---------------------------------------------------------------------------
-% JobSeekr resume template — single column, A4, pdflatex.
+% Mohammed Isa's resume, converted from the LaTeX source he supplied
+% (ISA_RESUME_DEC_2025 / main.tex) into this project's placeholder system.
+%
+% The visual design is his: centred name, one-line contact strip, ruled
+% uppercase section headings, employer/date on one line with title/location
+% beneath, project heading with stack and status, dense 10pt setting.
 %
 % DO NOT "IMPROVE" THE FOLLOWING. Each is a deliberate decision (Claude.md)
 % and every one of them is something an ATS parser breaks on:
 %
 %   * pdflatex, NOT xelatex/lualatex/tectonic. XeTeX output breaks ATS text
 %     extraction. Consequently: no fontspec, no unicode-math.
-%   * lmodern + T1 fontenc. T1 encodes accented characters as single glyphs
-%     and keeps fi/fl ligatures extractable — with the default OT1 encoding
-%     "efficient" can extract as "e cient". The parse gate asserts exactly
-%     that word survives, so changing the font encoding will fail the build.
-%   * a4paper. The LaTeX default is US Letter, which is wrong for Australia.
-%   * ONE COLUMN. Two-column resumes parse catastrophically: extractors read
-%     straight across the page and interleave the columns into nonsense.
+%   * lmodern + T1 fontenc, NOT charter. This is not taste, it is measured.
+%     charter's interword space at 10pt is 2.77pt, and pdfplumber's default
+%     x_tolerance is 3pt — so every space in the document is discarded and
+%     "Magain Real Estate" extracts as "MagainRealEstate". His original PDF
+%     does exactly that on every line. lmodern's space at 10pt is 3.33pt,
+%     which clears the threshold with room. T1 also encodes accented
+%     characters as single glyphs and keeps fi/fl ligatures extractable — with
+%     the default OT1 encoding "efficient" can extract as "e cient".
+%   * a4paper. The source said letterpaper, which is wrong for Australia.
+%   * ONE COLUMN. The source set the skills block in \begin{multicols}{2};
+%     it extracts as two spliced columns ("Languages: TypeScript,...,Dart,
+%     Cloud&Data: AWSEC2,..."). Two-column resumes parse catastrophically.
 %   * Contact details in the BODY, never in a header/footer. Many parsers
-%     skip headers entirely, and a resume whose phone number is invisible to
-%     the ATS is a resume that gets no callback.
-%   * No fontawesome/icons. They extract as garbage or as nothing.
+%     skip headers entirely.
+%   * No fontawesome/marvosym icons. In his original they extract as
+%     "(cid:131)", "#", "(cid:239)", "§" and "(cid:128)" — so his email
+%     extracts as "#mohdisa233@gmail.com", which no ATS will match.
+%   * No \scshape on the NAME. Small caps over mixed-case text split his name
+%     into "M I" / "OHAMMED SA" in the extracted text. Section headings keep
+%     the look because they are typed uppercase, where small caps is a no-op.
 %   * Section headers are plain words on their own line, in source order.
+%
+% THE FACT / NARRATIVE SPLIT — the whole point of this file.
+%
+%   Anything read from the "profile" namespace is deterministic substitution
+%   from the Profile row. Every employer, date, title, institution, project
+%   name, stack, link and contact detail is there and ONLY there. A model never
+%   touches them. Claude.md hard rule 1.
+%
+%   Anything read from the "ai" namespace is generated per job, word-capped and
+%   validated against the profile before it may enter the document. On this
+%   page that is exactly one thing: the experience bullet points, rewritten
+%   toward the specific ad from the user's own highlights. If generation fails
+%   or invents anything, the build falls back to the profile's verbatim
+%   highlights — never to silence, never to a guess.
+%
+%   (A LaTeX comment is not a Jinja comment. Writing a placeholder here in full
+%   would be parsed as a real one, so the namespaces are named in prose.)
+%
+%   Project descriptions are deliberately NOT an ai slot. They are dense with
+%   checkable facts ("317 tests", "the published ACSM metabolic equations",
+%   "50+ languages") and belong on the substitution side.
 % ---------------------------------------------------------------------------
-\documentclass[11pt,a4paper]{article}
+\documentclass[10pt,a4paper]{article}
 
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
 \usepackage{lmodern}
-\usepackage[a4paper,margin=1.8cm]{geometry}
+\usepackage[a4paper,margin=1.3cm]{geometry}
 \usepackage{enumitem}
 \usepackage[hidelinks]{hyperref}
 \usepackage{titlesec}
 
-% Tight, predictable list spacing. label={} keeps bullets as plain text lines
-% so an extractor sees sentences rather than stray glyphs.
-\setlist[itemize]{leftmargin=1.2em, itemsep=1pt, parsep=0pt, topsep=2pt, partopsep=0pt}
-
-% Section headings: uppercase words with a rule. Plain text to the extractor.
-\titleformat{\section}{\large\bfseries\uppercase}{}{0em}{}[\vspace{-0.6em}\rule{\linewidth}{0.6pt}]
-\titlespacing{\section}{0pt}{1.0em}{0.4em}
+% From his source, and worth keeping: it installs the glyph-to-Unicode map so
+% pdftex writes a correct ToUnicode CMap. Plain pdftex, no package needed.
+\input{glyphtounicode}
+\pdfgentounicode=1
 
 \pagestyle{empty}
 \setlength{\parindent}{0pt}
+\raggedbottom
+\raggedright
+
+% His list geometry: a 0.18in indent, tight leading between items.
+\setlist[itemize]{leftmargin=0.18in, itemsep=1pt, parsep=0pt, topsep=2pt, partopsep=0pt}
+
+% His section rule: normal-size bold heading with a full-width rule under it.
+\titleformat{\section}{\normalsize\bfseries\raggedright}{}{0em}{}[\vspace{-4pt}\titlerule\vspace{2pt}]
+\titlespacing{\section}{0pt}{8pt}{4pt}
 
 \begin{document}
 
 % --- Contact block. FIRST thing in the body, never a header. ---------------
-{\LARGE\bfseries \VAR{profile.name}}\\[0.3em]
-\BLOCK{if profile.headline}
-\VAR{profile.headline}\\[0.2em]
-\BLOCK{endif}
-\VAR{profile.email}
-\BLOCK{if profile.phone} $\cdot$ \VAR{profile.phone}\BLOCK{endif}
-\BLOCK{if profile.location} $\cdot$ \VAR{profile.location}\BLOCK{endif}
-\BLOCK{if profile.linkedin} $\cdot$ \href{\VAR{profile.linkedin|url}}{\VAR{profile.linkedin}}\BLOCK{endif}
-\BLOCK{if profile.website} $\cdot$ \href{\VAR{profile.website|url}}{\VAR{profile.website}}\BLOCK{endif}
+\begin{center}
+  {\LARGE \VAR{profile.name}}\\[3pt]
+  \BLOCK{if profile.headline}
+  \VAR{profile.headline}\\[2pt]
+  \BLOCK{endif}
+  \VAR{profile.phone}
+  \BLOCK{if profile.email} $|$ \VAR{profile.email}\BLOCK{endif}
+  \BLOCK{if profile.location} $|$ \VAR{profile.location}\BLOCK{endif}
+  \BLOCK{if profile.linkedin or profile.github or profile.website}\\
+  \BLOCK{endif}
+  \BLOCK{if profile.linkedin}\href{https://\VAR{profile.linkedin|url}}{\VAR{profile.linkedin}}\BLOCK{endif}
+  \BLOCK{if profile.github} $|$ \href{https://\VAR{profile.github|url}}{\VAR{profile.github}}\BLOCK{endif}
+  \BLOCK{if profile.website} $|$ \href{https://\VAR{profile.website|url}}{\VAR{profile.website}}\BLOCK{endif}
+\end{center}
 
 \BLOCK{if profile.summary}
-\section{Summary}
+\section{SUMMARY}
 \VAR{profile.summary}
 \BLOCK{endif}
 
 \BLOCK{if profile.skills}
-\section{Skills}
+\section{TECHNICAL SKILLS}
 \VAR{profile.skills|join_latex(', ')}
 \BLOCK{endif}
 
 \BLOCK{if profile.experience}
-\section{Experience}
+\section{EXPERIENCE}
 \BLOCK{for role in profile.experience}
-\textbf{\VAR{role.title}} \hfill \VAR{role.start} -- \VAR{role.end}\\
-\textit{\VAR{role.company}}\BLOCK{if role.location}, \VAR{role.location}\BLOCK{endif}
-\BLOCK{if role.highlights}
+\BLOCK{set role_index = loop.index0}
+{\large \VAR{role.company} \hfill \VAR{role.start} to \VAR{role.end}}\\
+\textit{\VAR{role.title}} \hfill \textit{\VAR{role.location}}
+\BLOCK{if ai.bullets[role_index]}
 \begin{itemize}
-\BLOCK{for highlight in role.highlights}
-  \item \VAR{highlight}
+\BLOCK{for bullet in ai.bullets[role_index]}
+  \item \VAR{bullet}
 \BLOCK{endfor}
 \end{itemize}
 \BLOCK{endif}
-\vspace{0.5em}
+\par\vspace{4pt}
 \BLOCK{endfor}
 \BLOCK{endif}
 
 \BLOCK{if profile.projects}
-\section{Projects}
+\section{PROJECTS}
 \BLOCK{for project in profile.projects}
-\textbf{\VAR{project.name}}\BLOCK{if project.stack} \textit{(\VAR{project.stack})}\BLOCK{endif}
+\BLOCK{if project.url}{\large \href{\VAR{project.url|url}}{\VAR{project.name}}}\BLOCK{else}{\large \VAR{project.name}}\BLOCK{endif}\BLOCK{if project.stack} $|$ \VAR{project.stack}\BLOCK{endif}\BLOCK{if project.status} \hfill \VAR{project.status}\BLOCK{endif}
 \BLOCK{if project.description}\\
 \VAR{project.description}
 \BLOCK{endif}
-\vspace{0.4em}
+\par\vspace{4pt}
 \BLOCK{endfor}
 \BLOCK{endif}
 
 \BLOCK{if profile.education}
-\section{Education}
+\section{EDUCATION}
 \BLOCK{for entry in profile.education}
-\textbf{\VAR{entry.qualification}} \hfill \VAR{entry.year}\\
-\textit{\VAR{entry.institution}}
-\vspace{0.4em}
+{\large \VAR{entry.institution} \hfill \VAR{entry.year}}\\
+\textit{\VAR{entry.qualification}}\BLOCK{if entry.location} \hfill \textit{\VAR{entry.location}}\BLOCK{endif}
+\par\vspace{4pt}
 \BLOCK{endfor}
 \BLOCK{endif}
 
 \BLOCK{if profile.certifications}
-\section{Certifications}
+\section{CERTIFICATIONS}
 \begin{itemize}
 \BLOCK{for cert in profile.certifications}
   \item \VAR{cert.name}\BLOCK{if cert.issuer} --- \VAR{cert.issuer}\BLOCK{endif}\BLOCK{if cert.year} (\VAR{cert.year})\BLOCK{endif}
@@ -109,8 +156,13 @@
 \BLOCK{endif}
 
 \BLOCK{if profile.work_rights}
-\section{Work Rights}
+\section{WORK RIGHTS}
 \VAR{profile.work_rights}
+\BLOCK{endif}
+
+\BLOCK{if profile.references}
+\section{REFERENCES}
+\VAR{profile.references}
 \BLOCK{endif}
 
 \end{document}

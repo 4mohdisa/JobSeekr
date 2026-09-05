@@ -8,10 +8,16 @@ metrics must fail the build, not produce a confident-looking lie about the user.
 from __future__ import annotations
 
 import pytest
-from sqlmodel import Session, SQLModel, create_engine
+from sqlmodel import Session, SQLModel, create_engine, select
 
 from backend.documents import build as build_module
-from backend.documents.engine import find_ai_slots, render_string, validate_placeholders
+from backend.documents.build import build_documents
+from backend.documents.engine import (
+    find_ai_slots,
+    render_string,
+    template_root,
+    validate_placeholders,
+)
 from backend.documents.fabrication import validate_no_fabrication
 from backend.documents.latex import escape_latex
 from backend.models import (
@@ -271,3 +277,166 @@ def test_aux_files_are_cleaned_up(session, monkeypatch):
         p.name for p in out_dir.iterdir() if p.suffix in {".aux", ".log", ".out"}
     ]
     assert leftovers == [], leftovers
+
+
+# ------------------------------------------------- the fact / narrative split
+#
+# The resume's only generated content is its experience bullet points, and they
+# are generated FROM the user's own bullets. Everything else on the page is
+# substitution. These tests pin that boundary in both directions: the generated
+# half must be generated, and it must never be allowed to invent.
+
+
+def test_the_resume_template_declares_its_generated_slot():
+    """ai.bullets is read from a block expression, not a substitution.
+
+    find_ai_slots originally scanned \\VAR{...} only, so the resume reported
+    itself as using no slots at all — and a slot that is used but not generated
+    is a StrictUndefined failure at render time, on every build.
+    """
+    body = (template_root() / "resume.tex.j2").read_text(encoding="utf-8")
+    assert r"\VAR{ai." not in body, (
+        "the resume reads ai.bullets from a block, not a var"
+    )
+    assert [slot.name for slot in find_ai_slots(body)] == ["bullets"]
+
+
+def test_the_shipped_templates_have_no_placeholder_issues():
+    """What the dashboard's template editor will show the user for each one.
+
+    Loop variables are the reason this is worth asserting: `role`, `project`
+    and `entry` are bound by the template itself, and reporting them as unknown
+    namespaces filled the editor with fourteen errors that were not errors.
+    """
+    for filename in ("resume.tex.j2", "cover_letter.tex.j2", "email.txt.j2"):
+        body = (template_root() / filename).read_text(encoding="utf-8")
+        assert validate_placeholders(body) == [], filename
+
+
+def test_the_resume_expectations_carry_every_record_heading(session, monkeypatch):
+    """Employers and institutions reach the gate as line_starts.
+
+    Without them the record-boundary check has nothing to check, and a resume
+    whose education entries have run together passes silently.
+    """
+    stub_llm(monkeypatch, CLEAN_TEXT)
+    result = build_documents(session, 1)
+    assert result.ok, result.failure_reason
+
+    document = result.documents["resume"]
+    checks = {c["name"] for c in document.parse_report["checks"]}
+    assert "record_headings_start_a_line" in checks, sorted(checks)
+
+    detail = next(
+        c["detail"]
+        for c in document.parse_report["checks"]
+        if c["name"] == "record_headings_start_a_line"
+    )
+    # Two headings: the one employer and the one institution in the fixture.
+    assert "2 record headings" in detail, detail
+
+
+# --------------------------------------------------------------- role bullets
+
+
+def _bullets_for(session, monkeypatch, answer):
+    """Generate the first role's bullets with the model returning ``answer``."""
+    from backend.documents.build import generate_role_bullets
+
+    profile = session.exec(select(Profile).order_by(Profile.version.desc())).first()
+    job = session.get(Job, 1)
+
+    def fake_complete(prompt, *, purpose, **kwargs):
+        if purpose == "document_role_bullets":
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        return ""
+
+    monkeypatch.setattr(build_module.llm, "complete", fake_complete)
+    return generate_role_bullets(profile=profile, job=job), profile
+
+
+VERBATIM_HIGHLIGHTS = [
+    "Identified efficient financial reporting workflow improvements.",
+    "Built qualified candidate certification review tooling.",
+]
+
+
+def test_role_bullets_fall_back_to_the_users_own_words(session, monkeypatch):
+    """No API key is not a failed build — it is the user's own resume.
+
+    Unlike the cover letter's paragraphs, a bullet already has a correct
+    version: the one the user wrote. Falling back to it is the safe answer, and
+    returning nothing would silently delete their work history.
+    """
+    bullets, _ = _bullets_for(session, monkeypatch, RuntimeError("no API key"))
+    assert bullets == [VERBATIM_HIGHLIGHTS]
+
+
+def test_role_bullets_reject_a_changed_bullet_count(session, monkeypatch):
+    """Two bullets in, one bullet out means a fact was dropped or merged."""
+    bullets, _ = _bullets_for(
+        session, monkeypatch, "Merged both bullets into one line."
+    )
+    assert bullets == [VERBATIM_HIGHLIGHTS], (
+        "a model that returned the wrong number of bullets was accepted"
+    )
+
+
+def test_role_bullets_reject_a_fabricated_rewrite(session, monkeypatch):
+    """The count is right and the content is invented. Still refused."""
+    fabricated = (
+        "Led a team of 40 engineers at Acme Corporation since 2019.\n"
+        "Increased revenue 340% as a Certified AWS Solutions Architect."
+    )
+    bullets, profile = _bullets_for(session, monkeypatch, fabricated)
+    assert bullets == [VERBATIM_HIGHLIGHTS], "fabricated bullets reached the document"
+
+    # The premise: those really are fabrications by the project's own validator,
+    # so this test fails for the reason it claims to.
+    assert validate_no_fabrication(fabricated, profile, session.get(Job, 1))
+
+
+def test_role_bullets_accept_an_honest_rewrite(session, monkeypatch):
+    """The control. A truthful rewrite of the same facts is used."""
+    honest = (
+        "Improved efficient financial reporting workflows.\n"
+        "Built certification review tooling for qualified candidates."
+    )
+    bullets, _ = _bullets_for(session, monkeypatch, honest)
+    assert bullets == [honest.splitlines()]
+
+
+def test_bullets_stay_aligned_with_the_rows_the_template_loops_over(session):
+    """ai.bullets is indexed by loop position, so the two lists must agree.
+
+    The template iterates ``_normalise_rows(profile.experience, ...)``, which
+    DROPS anything that is not a dict. Generating bullets straight from
+    ``profile.experience`` kept those rows, and one junk row shifted every
+    later role onto the previous employer's bullet points — a fabrication
+    containing no invented words, which nothing downstream could catch.
+    """
+    from backend.documents.build import (
+        _ROW_DEFAULTS,
+        _normalise_rows,
+        generate_role_bullets,
+    )
+
+    profile = session.exec(select(Profile).order_by(Profile.version.desc())).first()
+    profile.experience = [
+        {"company": "Redgum Analytics", "highlights": ["First employer's bullet."]},
+        "a row that is not a dict at all",
+        {"company": "Wattle Group", "highlights": ["Second employer's bullet."]},
+    ]
+
+    rows = _normalise_rows(profile.experience, _ROW_DEFAULTS["experience"])
+    bullets = generate_role_bullets(profile=profile, job=session.get(Job, 1))
+
+    assert len(bullets) == len(rows), (
+        f"{len(rows)} rows rendered but {len(bullets)} bullet lists generated — "
+        "every role after the junk row gets the wrong employer's bullets"
+    )
+    assert bullets[
+        rows.index(next(r for r in rows if r["company"] == "Wattle Group"))
+    ] == ["Second employer's bullet."]

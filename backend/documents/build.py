@@ -43,6 +43,7 @@ from sqlmodel import Session, select
 from backend.config import settings
 from backend.db import session_scope
 from backend.documents.engine import (
+    BULLETS_SLOT,
     SLOT_SPECS,
     AISlot,
     RawLatex,
@@ -74,6 +75,7 @@ __all__ = [
     "build_documents",
     "expected_verbatim",
     "generate_ai_slots",
+    "generate_role_bullets",
     "render_pdf",
 ]
 
@@ -109,8 +111,8 @@ class BuildResult:
 # field at all, so before this every resume build failed outright.
 _ROW_DEFAULTS: dict[str, tuple[str, ...]] = {
     "experience": ("title", "company", "start", "end", "location", "highlights"),
-    "projects": ("name", "stack", "description"),
-    "education": ("qualification", "institution", "year"),
+    "projects": ("name", "stack", "description", "url", "status"),
+    "education": ("qualification", "institution", "year", "location"),
     "certifications": ("name", "issuer", "year"),
 }
 
@@ -211,8 +213,10 @@ def _profile_context(profile: Profile) -> dict[str, Any]:
         "headline": identity.get("headline", ""),
         "summary": identity.get("summary", ""),
         "linkedin": identity.get("linkedin", ""),
+        "github": identity.get("github", ""),
         "website": identity.get("website", ""),
         "work_rights": work_rights.get("statement", ""),
+        "references": identity.get("references", ""),
         "experience": _normalise_rows(profile.experience, _ROW_DEFAULTS["experience"]),
         "projects": _normalise_rows(profile.projects, _ROW_DEFAULTS["projects"]),
         "education": _normalise_rows(profile.education, _ROW_DEFAULTS["education"]),
@@ -495,6 +499,153 @@ def _pick_best(
 
 
 # --------------------------------------------------------------------------
+# Experience bullets
+# --------------------------------------------------------------------------
+
+_BULLETS_SYSTEM = (
+    "You rewrite a candidate's own resume bullet points so they speak to one "
+    "specific job advertisement.\n"
+    "ABSOLUTE RULE: every fact in your output must already be present in the "
+    "bullets you are given. Reorder, re-emphasise and rephrase freely. Never add "
+    "an employer, a date, a technology, a tool, a metric, a scale or a seniority "
+    "the bullets do not already state, and never drop one either.\n"
+    "Return exactly one rewritten bullet per input bullet, one per line, in the "
+    "same order. No numbering, no bullet characters, no preamble, no blank lines."
+)
+
+
+def _bullets_prompt(
+    highlights: list[str],
+    *,
+    role: dict[str, Any],
+    job: Job,
+    requirements: dict[str, Any] | None,
+) -> str:
+    numbered = "\n".join(f"{index}. {text}" for index, text in enumerate(highlights, 1))
+    return (
+        f"THE CANDIDATE'S OWN BULLETS for {role.get('title', '')} at "
+        f"{role.get('company', '')} — the only facts you may assert:\n{numbered}\n\n"
+        f"THE ROLE THEY ARE APPLYING FOR\n"
+        f"Title: {job.title}\nCompany: {job.company}\n"
+        f"Advertisement:\n{(job.description or '')[: settings.scoring_prompt_char_budget]}\n\n"
+        + _requirements_block(requirements)
+        + f"WRITE: {SLOT_SPECS[BULLETS_SLOT].instruction}\n"
+        f"TONE: {SLOT_SPECS[BULLETS_SLOT].tone}\n"
+        f"HARD LIMIT: {SLOT_SPECS[BULLETS_SLOT].max_words} words per bullet.\n"
+        f"Return exactly {len(highlights)} lines.\n"
+    )
+
+
+def _role_highlights(role: dict[str, Any]) -> list[str]:
+    """The user's own bullet points for one role, blanks dropped."""
+    return [
+        str(highlight).strip()
+        for highlight in (role.get("highlights") or [])
+        if str(highlight).strip()
+    ]
+
+
+def _tailor_one_role(
+    highlights: list[str],
+    *,
+    role: dict[str, Any],
+    profile: Profile,
+    job: Job,
+    requirements: dict[str, Any] | None,
+) -> list[str]:
+    """Rewrite one role's bullets toward this ad, or return them unchanged.
+
+    Unlike the cover letter's slots, an unusable result here is NOT a failed
+    build. The cover letter has nothing truthful to fall back to — its
+    paragraphs exist only because a model wrote them — but a resume bullet
+    already has a correct version: the one the user wrote. Falling back to it is
+    the safe answer, not a degraded one, so a missing API key or a model outage
+    produces the user's own resume rather than no resume.
+
+    Every fallback is logged. Claude.md hard rule 9: never fail silently.
+    """
+    spec = SLOT_SPECS[BULLETS_SLOT]
+
+    def fall_back(reason: str, **fields: Any) -> list[str]:
+        log.warning(
+            "role_bullets_fell_back_to_verbatim",
+            company=role.get("company"),
+            reason=reason,
+            **fields,
+        )
+        return highlights
+
+    try:
+        answer = llm.complete(
+            _bullets_prompt(highlights, role=role, job=job, requirements=requirements),
+            model=settings.llm_model_writing,
+            purpose="document_role_bullets",
+            system=_BULLETS_SYSTEM,
+            job_id=job.id,
+            temperature=0.3,
+        )
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        return fall_back("generation_unavailable", error=str(exc)[:150])
+
+    rewritten = [
+        _truncate_words(line.strip().lstrip("-*\u2022 ").strip(), spec.max_words)
+        for line in (answer or "").splitlines()
+        if line.strip()
+    ]
+
+    # One bullet in, one bullet out. A model that merged two bullets or invented
+    # a third has changed what the resume claims, whatever the words say.
+    if len(rewritten) != len(highlights):
+        return fall_back(
+            "wrong_bullet_count", wanted=len(highlights), got=len(rewritten)
+        )
+
+    violations = validate_no_fabrication(" ".join(rewritten), profile, job)
+    if violations:
+        return fall_back(
+            "fabrication", violations=[str(violation) for violation in violations][:5]
+        )
+
+    return rewritten
+
+
+def generate_role_bullets(
+    *,
+    profile: Profile,
+    job: Job,
+    requirements: dict[str, Any] | None = None,
+) -> list[list[str]]:
+    """One list of bullet points per experience row, in profile order.
+
+    The list is positional: the resume template indexes it by the loop counter,
+    so a row that is skipped still has to occupy its slot.
+    """
+    # THE SAME normalised rows the template iterates, from the same function.
+    # ai.bullets is indexed by loop position, so if this list and the one the
+    # resume loops over disagree about which rows exist, every role after the
+    # disagreement silently gets the previous employer's bullet points — a
+    # fabrication with no invented words in it, which nothing downstream would
+    # catch. _normalise_rows drops non-dict rows; iterating profile.experience
+    # directly kept them, and that one-row offset was the whole bug.
+    out: list[list[str]] = []
+    for role in _normalise_rows(profile.experience, _ROW_DEFAULTS["experience"]):
+        highlights = _role_highlights(role)
+        if not highlights:
+            out.append([])
+            continue
+        out.append(
+            _tailor_one_role(
+                highlights,
+                role=role,
+                profile=profile,
+                job=job,
+                requirements=requirements,
+            )
+        )
+    return out
+
+
+# --------------------------------------------------------------------------
 # LaTeX
 # --------------------------------------------------------------------------
 
@@ -753,7 +904,23 @@ def build_documents(
 
     profile_text = profile_fact_index(profile)[:6000]
 
-    slots = find_ai_slots(letter_body) or list(SLOT_SPECS.values())
+    # Both templates, not just the letter. The resume reads ai.bullets, and a
+    # slot that is used but not generated is a StrictUndefined failure at render
+    # time rather than a missing paragraph.
+    used = {slot.name for slot in find_ai_slots(resume_body)}
+    # The "letter uses no slots at all" fallback generates every prose slot, but
+    # never the bullets: those cost one model call per role and are wasted unless
+    # a template actually reads them.
+    used |= {slot.name for slot in find_ai_slots(letter_body)} or (
+        set(SLOT_SPECS) - {BULLETS_SLOT}
+    )
+    # ai.bullets is a list of lists and has its own generator below; everything
+    # else is a paragraph of prose.
+    slots = [
+        spec
+        for name, spec in SLOT_SPECS.items()
+        if name in used and name != BULLETS_SLOT
+    ]
     # What the employer asked for, extracted during scoring. None when scoring
     # has not run, in which case generation is exactly what it was before — the
     # ad's own text is still in the prompt.
@@ -779,7 +946,16 @@ def build_documents(
 
     # AI text is escaped once here and marked raw so substitution does not
     # double-escape it.
-    ai_ctx = {name: RawLatex(escape_latex(text)) for name, text in ai_values.items()}
+    ai_ctx: dict[str, Any] = {
+        name: RawLatex(escape_latex(text)) for name, text in ai_values.items()
+    }
+    if BULLETS_SLOT in used:
+        ai_ctx[BULLETS_SLOT] = [
+            [RawLatex(escape_latex(bullet)) for bullet in bullets]
+            for bullets in generate_role_bullets(
+                profile=profile, job=job, requirements=requirements
+            )
+        ]
     context = {
         "profile": profile_ctx,
         "job": job_ctx,
@@ -811,6 +987,15 @@ def build_documents(
     ]
     claimed = [str(skill) for skill in (profile.skills or [])][:12]
     verbatim = expected_verbatim(profile)
+    # Every record heading the resume prints, for the gate to confirm each one
+    # still begins its own line. Employers and institutions, because those are
+    # the two things an ATS segments a document by.
+    institutions = [
+        str(row.get("institution"))
+        for row in (profile.education or [])
+        if isinstance(row, dict) and row.get("institution")
+    ]
+    line_starts = list(dict.fromkeys(employers + institutions))
 
     expectations = {
         DocumentKind.RESUME: ParseExpectations(
@@ -820,6 +1005,7 @@ def build_documents(
             employers=employers,
             claimed_keywords=claimed,
             verbatim=verbatim,
+            line_starts=line_starts,
             section_order=["Experience", "Education"],
             source_text=resume_tex,
         ),
@@ -834,6 +1020,10 @@ def build_documents(
             employers=employers,
             claimed_keywords=claimed,
             verbatim=verbatim,
+            # The combined PDF contains the resume, so its record headings must
+            # still be separable there — this is the artifact that gets attached
+            # wherever a form has a single upload slot.
+            line_starts=line_starts,
             source_text=resume_tex + letter_tex,
         ),
     }

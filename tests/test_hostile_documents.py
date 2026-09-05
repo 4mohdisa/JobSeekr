@@ -36,7 +36,11 @@ from backend.documents.build import (
     expected_verbatim,
     render_pdf,
 )
-from backend.documents.engine import render_string, template_root
+from backend.documents.engine import (
+    preview_ai_context,
+    render_string,
+    template_root,
+)
 from backend.documents.latex import escape_latex
 from backend.documents.verify import (
     ParseExpectations,
@@ -222,10 +226,10 @@ def _resume_tex(profile: Profile) -> str:
         "job": _job_context(job),
         "campaign": {"name": "hostile"},
         "today": _today_context(),
-        "ai": {
-            slot: f"[{slot}]"
-            for slot in ("opening_hook", "closing", "why_company", "skills_bridge")
-        },
+        # From the engine, not hand-built: this file exists to render the
+        # SHIPPED template, and a hand-built ai context is free to be a shape
+        # the shipped template never sees.
+        "ai": preview_ai_context(_profile_context(profile)["experience"]),
     }
     source = (template_root() / "resume.tex.j2").read_text(encoding="utf-8")
     return render_string(source, context)

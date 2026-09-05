@@ -13,6 +13,13 @@ corresponds to a real, silent failure mode:
 7. page limits            — length rules are real screening criteria
 8. missing claimed keywords — the generator said it matched; prove it survived
 9. two-column layout      — passes every other check and still parses as mush
+10. merged words          — a squeezed line loses every space on it, so
+                            "cover letter" reaches the ATS as "coverletter"
+11. run-together records  — the next employer flows onto the previous entry's
+                            last line, and the ATS files it under the wrong job
+12. one-extractor facts   — a fact only the friendlier extractor can find
+13. truncated contact line — a field wrapped off the end, leaving a dangling
+                            separator and an empty field where the ATS looks
 
 A corrupt or malformed PDF produces a FAILED REPORT, never an exception. The
 caller's job is to record the failure loudly and stop; it should not have to
@@ -89,6 +96,26 @@ class ParseExpectations(BaseModel):
     coverage no longer depends on anybody remembering.
     """
 
+    line_starts: list[str] = Field(default_factory=list)
+    """Record headings that must each begin an extracted line.
+
+    An ATS segments work history and education by line: the line a heading
+    starts is the record, and everything after it belongs to that record. A
+    heading that lands mid-line is filed under the record before it.
+
+    This is not hypothetical either. ``\\vspace`` does not end a paragraph, so
+    an education block written with ``\\vspace`` between entries and no
+    ``\\par`` extracted as::
+
+        Professional Year Program, ICT Adelaide, SA Torrens University Australia May 2023 to May 2025
+
+    — the second institution glued to the first entry's qualification, with the
+    dates of one attached to the name of the other. Every check passed.
+
+    Only supplied for artifacts that contain a resume; a cover letter names
+    employers inside sentences, where mid-line is exactly right.
+    """
+
     section_order: list[str] = Field(default_factory=list)
     source_text: str | None = None
     """The rendered source, used to know which canary words to expect."""
@@ -155,6 +182,18 @@ _DATE_ON_CONTACT_LINE = re.compile(
 )
 
 
+# Separators a contact strip is built from. A field that wraps off the end of
+# the strip leaves the separator that preceded it stranded, so a leading,
+# trailing or doubled separator is the signature of a truncated contact line —
+# whichever field it was that fell off.
+_CONTACT_SEPARATORS = "|·•–—"
+_DANGLING_SEPARATOR = re.compile(
+    rf"(?:^[{_CONTACT_SEPARATORS}])"
+    rf"|(?:[{_CONTACT_SEPARATORS}]$)"
+    rf"|(?:[{_CONTACT_SEPARATORS}]\s*[{_CONTACT_SEPARATORS}])"
+)
+
+
 def _strip_latex_comments(source: str) -> str:
     """Drop the parts of a .tex that will never appear in the PDF."""
     return _LATEX_COMMENT.sub("", source)
@@ -178,19 +217,78 @@ def _extract_pypdf(path: Path) -> tuple[str, int, str | None]:
         return "", 0, f"{type(exc).__name__}: {exc}"[:200]
 
 
+GLUED_PROBE_TOLERANCE = 1.2
+"""Word-gap tolerance for the second, tighter extraction pass.
+
+pdfplumber starts a new word when the horizontal gap exceeds ``x_tolerance``,
+which defaults to 3pt — and 3pt is not a comfortable margin. At a 10pt base,
+lmodern's interword space is 3.33pt and ``\\small`` makes it 3.0pt, so any line
+TeX has to squeeze drops under the threshold and the extractor silently glues
+that whole line into one token. Extracting a second time at 1.2pt — below any
+kerning gap, above nothing — says which words the default pass lost.
+"""
+
+GLUED_MIN_CHARS = 6
+"""Ignore short splits. A 1.2pt gap inside a short token is more likely an
+italic correction or a thin space than a destroyed word boundary."""
+
+
+def _glued_words(page: Any, default_words: list[dict[str, Any]]) -> list[str]:
+    """Tokens the default extraction merged that a tighter pass separates.
+
+    Each returned string is a run of words an ATS will never match: the profile
+    says "cover letter" and the resume delivers "coverletter".
+
+    A token counts only when the tight pass splits it into at least two pieces
+    of two or more characters each. That is what separates a lost space from a
+    hyphenation artefact or a stray thin space, and it is why a URL — which has
+    no internal gap for either pass to split on — is never reported.
+    """
+    try:
+        tight = page.extract_words(x_tolerance=GLUED_PROBE_TOLERANCE) or []
+    except Exception as exc:  # noqa: BLE001 - a probe must not break the gate
+        log.debug("glued_word_probe_failed", error=str(exc)[:120])
+        return []
+
+    glued: list[str] = []
+    for word in default_words:
+        text = str(word["text"])
+        if len(text) < GLUED_MIN_CHARS:
+            continue
+        # Same line and inside this word's own box. Both, not just the x range:
+        # keying on the horizontal position alone matches words from every other
+        # line of the page that happen to start at the same indent, which makes
+        # every word on the document look glued.
+        top, x0, x1 = float(word["top"]), float(word["x0"]), float(word["x1"])
+        pieces = [
+            piece["text"]
+            for piece in tight
+            if abs(float(piece["top"]) - top) <= 1.0
+            and float(piece["x0"]) >= x0 - 0.2
+            and float(piece["x1"]) <= x1 + 0.2
+            and len(str(piece["text"])) >= 2
+        ]
+        if len(pieces) >= 2:
+            glued.append(text)
+    return glued
+
+
 def _extract_pdfplumber(
     path: Path,
-) -> tuple[str, list[list[dict[str, Any]]], str | None]:
+) -> tuple[str, list[list[dict[str, Any]]], list[str], str | None]:
     try:
         words_per_page: list[list[dict[str, Any]]] = []
         chunks: list[str] = []
+        glued: list[str] = []
         with pdfplumber.open(str(path)) as pdf:
             for page in pdf.pages:
                 chunks.append(page.extract_text() or "")
-                words_per_page.append(page.extract_words() or [])
-        return "\n".join(chunks), words_per_page, None
+                words = page.extract_words() or []
+                words_per_page.append(words)
+                glued.extend(_glued_words(page, words))
+        return "\n".join(chunks), words_per_page, glued, None
     except Exception as exc:  # noqa: BLE001
-        return "", [], f"{type(exc).__name__}: {exc}"[:200]
+        return "", [], [], f"{type(exc).__name__}: {exc}"[:200]
 
 
 MIN_GUTTER_POINTS = 8.0
@@ -402,7 +500,7 @@ def verify_pdf(
         )
 
     pypdf_text, pages, pypdf_error = _extract_pypdf(path)
-    plumber_text, words_per_page, plumber_error = _extract_pdfplumber(path)
+    plumber_text, words_per_page, glued_words, plumber_error = _extract_pdfplumber(path)
 
     if pypdf_error or plumber_error:
         checks.append(
@@ -461,6 +559,26 @@ def verify_pdf(
         )
     )
 
+    # 3b — the spaces survived too
+    #
+    # Ligature corruption loses characters inside a word; this loses the
+    # boundaries between words, which is just as fatal and much harder to see.
+    # The document looks perfect. The extracted text reads
+    # "Promptpipelinetunedforfactualgroundingsothemodelreshapesrealexperience",
+    # and an ATS searching for "prompt pipeline" finds nothing.
+    checks.append(
+        CheckResult(
+            name="word_spacing_survives_extraction",
+            passed=not glued_words,
+            detail=(
+                f"{len(glued_words)} run(s) of words extracted with no space "
+                f"between them: {glued_words[:5]}"
+                if glued_words
+                else "every word boundary survived extraction"
+            ),
+        )
+    )
+
     # 4 — name near the top, sections in source order
     if expect.name:
         head = _normalise(text[:NAME_WITHIN_CHARS])
@@ -481,6 +599,32 @@ def verify_pdf(
                 name="section_order_preserved",
                 passed=ordered and len(found) == len(positions),
                 detail=f"found {[s for s, _ in found]} at {[p for _, p in found]}",
+            )
+        )
+
+    # 4b — each record heading begins its own line
+    #
+    # section_order proves the sections are in the right order; this proves the
+    # records inside them are separable. An employer or institution that lands
+    # mid-line is read as part of the record above it, so a qualification ends
+    # up filed under the wrong university with the wrong dates.
+    if expect.line_starts:
+        starts = [_normalise(line) for line in text.splitlines()]
+        buried = [
+            heading
+            for heading in expect.line_starts
+            if not any(line.startswith(_normalise(heading)) for line in starts if line)
+        ]
+        checks.append(
+            CheckResult(
+                name="record_headings_start_a_line",
+                passed=not buried,
+                detail=(
+                    f"never begins an extracted line, so an ATS files it under the "
+                    f"record above: {buried[:6]}"
+                    if buried
+                    else f"all {len(expect.line_starts)} record headings begin a line"
+                ),
             )
         )
 
@@ -549,6 +693,35 @@ def verify_pdf(
             )
             if match is not None
         ]
+        # 6c — no field wrapped off the end of the contact strip
+        #
+        # The strip is one centred line of phone, email, location and links. Set
+        # one field too wide and TeX wraps it, leaving the separator that
+        # preceded it stranded at the end of the line and an empty field where
+        # an ATS reads the location. Checking for the stranded separator rather
+        # than for a list of expected fields is what keeps a deliberately
+        # two-line contact block, and the cover letter's signature line, legal.
+        truncated = [
+            (line, match)
+            for line, match in (
+                (line, _DANGLING_SEPARATOR.search(line.strip()))
+                for line in contact_lines
+            )
+            if match is not None
+        ]
+        checks.append(
+            CheckResult(
+                name="contact_line_not_truncated",
+                passed=not truncated,
+                detail=(
+                    f"separator {truncated[0][1].group(0)!r} with no field beside it — "
+                    f"something wrapped off the line: {truncated[0][0]!r}"
+                    if truncated
+                    else "no stranded separators on any contact line"
+                ),
+            )
+        )
+
         checks.append(
             CheckResult(
                 name="contact_line_uncontaminated",
@@ -589,6 +762,46 @@ def verify_pdf(
                     f"stated in the profile but not extractable: {missing_verbatim[:12]}"
                     if missing_verbatim
                     else f"all {len(expect.verbatim)} profile facts survived extraction"
+                ),
+            )
+        )
+
+    # 8c — the fact survived BOTH extractors, not just the friendlier one
+    #
+    # Everything above reads `text`, which is whichever of the two extractions
+    # came out longer — in practice always pdfplumber, because it reconstructs
+    # words from glyph positions. pypdf reads the content stream instead and
+    # inserts a space wherever pdfTeX emitted a tightening kern, so lmodern's
+    # BOLD kerning turned "Wemark Real Estate" into "W emark Real Estate",
+    # "Vericent" into "V ericent", "Torrens University Australia" into
+    # "T orrens ..." and "Feb 2026" into "F eb 2026". Two of five employers and
+    # one of three institutions were unfindable by a whole class of parser, and
+    # every check here passed, because the pypdf text was thrown away before
+    # any content check read it.
+    #
+    # Checked against the profile's own facts rather than the whole text: the
+    # two extractors are allowed to disagree about layout (that is what
+    # extractor_agreement's 90% tolerance is for), but not about whether the
+    # user's employer appears in their resume.
+    if expect.verbatim or expect.employers:
+        must_survive = list(dict.fromkeys([*expect.verbatim, *expect.employers]))
+        normalised_pypdf = _normalise(pypdf_text)
+        normalised_plumber = _normalise(plumber_text)
+        one_sided = [
+            fact
+            for fact in must_survive
+            if (_normalise(fact) in normalised_plumber)
+            != (_normalise(fact) in normalised_pypdf)
+        ]
+        checks.append(
+            CheckResult(
+                name="facts_survive_both_extractors",
+                passed=not one_sided,
+                detail=(
+                    f"only one of the two extractors can find these, so a parser "
+                    f"using the other will not: {one_sided[:8]}"
+                    if one_sided
+                    else f"all {len(must_survive)} facts found by both extractors"
                 ),
             )
         )

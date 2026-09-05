@@ -435,6 +435,7 @@ def preview_template(
     from backend.documents.engine import (
         KNOWN_FIELDS,
         find_ai_slots,
+        preview_ai_context,
         render_string,
         validate_placeholders,
     )
@@ -463,15 +464,17 @@ def preview_template(
         )
 
         profile = _current_profile(session)
+        profile_context = _profile_context(profile) if profile else {}
         context = {
-            "profile": _profile_context(profile) if profile else {},
+            "profile": profile_context,
             "job": _job_context(job),
             "campaign": {"name": ""},
             "today": _today_context(),
-            # Preview shows the slot names rather than paying an LLM call.
-            "ai": {
-                name: f"[{name} — generated per job]" for name in KNOWN_FIELDS["ai"]
-            },
+            # Preview shows the slot names rather than paying an LLM call. The
+            # shape comes from the engine: ai.bullets is a list per experience
+            # row, and a dict of strings built here would render as its own
+            # characters.
+            "ai": preview_ai_context(profile_context.get("experience")),
         }
         try:
             rendered = render_string(body, context)

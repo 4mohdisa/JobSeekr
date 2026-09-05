@@ -10,6 +10,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pdfplumber
 import pytest
 
 from backend.documents.verify import ParseExpectations, verify_pdf
@@ -529,3 +530,400 @@ def test_the_contaminated_line_is_found_even_when_a_clean_one_precedes_it(tmp_pa
     )
     assert not report.passed
     assert "contact_line_uncontaminated" in [c.name for c in report.failures]
+
+
+# --------------------------------------------- merged words (blind spot five)
+#
+# Found by reading the extracted text of nine PDFs that had just passed every
+# check the gate had. The document looked perfect and the ATS would have read
+# "Promptpipelinetunedforfactualgroundingsothemodelreshapesrealexperience".
+#
+# The mechanism is arithmetic, not luck: pdfplumber starts a new word when the
+# gap between two characters exceeds x_tolerance, which defaults to 3pt. In
+# lmodern the interword space is 0.333em, so at a 10pt base it is 3.33pt.
+# \small makes it 3.0pt, which does not exceed 3.0 and dies on any line
+# justification squeezes; \footnotesize makes it 2.66pt, which dies on every
+# line. The fixture uses \footnotesize so the failure is arithmetic rather than
+# dependent on where TeX happens to break a line.
+
+SMALL_TEXT_PREAMBLE = r"""
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[a4paper,margin=1.3cm]{geometry}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+"""
+
+
+def _resume_with_summary(summary: str) -> str:
+    """A resume that is correct in every way except the summary block."""
+    return (
+        SMALL_TEXT_PREAMBLE
+        + r"""
+\begin{document}
+{\LARGE\bfseries """
+        + NAME
+        + r"""}\\
+"""
+        + EMAIL
+        + r""" $\cdot$ """
+        + PHONE
+        + r""" $\cdot$ Adelaide SA
+
+\section*{SUMMARY}
+"""
+        + summary
+        + r"""
+
+\section*{EXPERIENCE}
+\textbf{Senior Analyst} \hfill 2021 -- 2026\\
+\textit{"""
+        + EMPLOYER
+        + r"""}, Adelaide
+\begin{itemize}
+  \item """
+        + BODY_WORDS
+        + r"""
+\end{itemize}
+
+\section*{EDUCATION}
+\textbf{BSc Computer Science} \hfill 2020\\
+\textit{University of Adelaide}
+
+\section*{SKILLS}
+Python, SQL, financial modelling
+\end{document}
+"""
+    )
+
+
+def test_words_squeezed_together_by_a_small_font_are_rejected(tmp_path):
+    pdf = compile_tex(
+        tmp_path,
+        "smalltext",
+        _resume_with_summary(r"{\footnotesize " + filler(3) + "}"),
+    )
+    report = verify_pdf(pdf, kind="resume", expect=expectations())
+
+    failures = [c.name for c in report.failures]
+    assert "word_spacing_survives_extraction" in failures, report.summary()
+
+    # It is not failing for some other reason: this is the ONLY thing wrong with
+    # the document. Without this the assertion above would still pass if the
+    # fixture were broken in some entirely different way.
+    assert failures == ["word_spacing_survives_extraction"], failures
+
+    detail = next(
+        c.detail
+        for c in report.failures
+        if c.name == "word_spacing_survives_extraction"
+    )
+    assert "no space between them" in detail
+
+    # And the premise holds: a standard extractor really is losing word
+    # boundaries this one keeps. Asserted on the mechanism rather than on a
+    # particular word, so the test does not quietly stop meaning anything when
+    # TeX breaks a line somewhere else.
+    with pdfplumber.open(str(pdf)) as document:
+        loose = sum(len(page.extract_words()) for page in document.pages)
+        tight = sum(len(page.extract_words(x_tolerance=1.2)) for page in document.pages)
+    assert tight > loose, f"fixture is not actually merging words: {loose} vs {tight}"
+
+
+def test_the_same_resume_at_a_readable_size_is_accepted(tmp_path):
+    """The control. Identical words and layout, one usable font size."""
+    pdf = compile_tex(tmp_path, "readable", _resume_with_summary(filler(3)))
+    report = verify_pdf(pdf, kind="resume", expect=expectations())
+    assert report.passed, report.summary()
+
+
+def test_a_long_url_is_not_mistaken_for_merged_words(tmp_path):
+    """The obvious false positive, checked rather than assumed.
+
+    "github.com/4mohdisa/Crime-Management-System" is a single long token with no
+    interword gap for either extraction pass to split on, so it must never be
+    reported as merged words.
+    """
+    pdf = compile_tex(
+        tmp_path,
+        "withurl",
+        _resume_with_summary(
+            filler(3) + r"\\ github.com/4mohdisa/Crime-Management-System"
+        ),
+    )
+    report = verify_pdf(pdf, kind="resume", expect=expectations())
+    assert report.passed, report.summary()
+    assert "Crime-Management-System" in report.extracted_text
+
+
+# ---------------------------------------- run-together records (blind spot six)
+#
+# Also found by reading text that had passed everything. \vspace does not end a
+# paragraph, so an EDUCATION block written with \vspace between entries and no
+# \par extracted as one run:
+#
+#     Professional Year Program, ICT Adelaide, SA Torrens University Australia
+#
+# An ATS segments work history and education by line. The second institution
+# landing mid-line is filed under the first entry, with the wrong dates.
+
+INSTITUTIONS = ("Torrens University Australia", "Performance Education")
+
+
+def _education_resume(separator: str) -> str:
+    return (
+        PREAMBLE
+        + r"""
+\begin{document}
+{\LARGE\bfseries """
+        + NAME
+        + r"""}\\
+"""
+        + EMAIL
+        + r""" $\cdot$ """
+        + PHONE
+        + r""" $\cdot$ Adelaide SA
+
+\section*{EXPERIENCE}
+\textbf{Senior Analyst} \hfill 2021 -- 2026\\
+\textit{"""
+        + EMPLOYER
+        + r"""}, Adelaide
+\begin{itemize}
+  \item """
+        + BODY_WORDS
+        + r"""
+\end{itemize}
+
+\section*{EDUCATION}
+\textbf{"""
+        + INSTITUTIONS[1]
+        + r"""} \hfill 2026\\
+\textit{Professional Year Program, ICT} Adelaide, SA
+"""
+        + separator
+        + r"""
+\textbf{"""
+        + INSTITUTIONS[0]
+        + r"""} \hfill 2025\\
+\textit{Bachelor of Information Technology} Adelaide, SA
+
+\section*{SKILLS}
+Python, SQL, financial modelling
+\end{document}
+"""
+    )
+
+
+def test_a_record_heading_buried_mid_line_is_rejected(tmp_path):
+    """\\vspace alone does not break the paragraph, so the records run together."""
+    pdf = compile_tex(tmp_path, "runtogether", _education_resume(r"\vspace{4pt}"))
+    report = verify_pdf(
+        pdf, kind="resume", expect=expectations(line_starts=list(INSTITUTIONS))
+    )
+
+    failures = [c.name for c in report.failures]
+    assert "record_headings_start_a_line" in failures, report.summary()
+    assert failures == ["record_headings_start_a_line"], failures
+
+    detail = next(
+        c.detail for c in report.failures if c.name == "record_headings_start_a_line"
+    )
+    assert INSTITUTIONS[0] in detail
+
+    # The premise: the two records really are on one extracted line. Without
+    # this the test would still pass if the fixture had simply omitted the
+    # second institution, which is a different bug entirely.
+    assert any(
+        INSTITUTIONS[0] in line and "Adelaide, SA" in line
+        for line in report.extracted_text.splitlines()
+    ), report.extracted_text
+
+
+def test_the_same_records_separated_by_par_are_accepted(tmp_path):
+    """The control. One \\par is the whole difference."""
+    pdf = compile_tex(tmp_path, "separated", _education_resume(r"\par\vspace{4pt}"))
+    report = verify_pdf(
+        pdf, kind="resume", expect=expectations(line_starts=list(INSTITUTIONS))
+    )
+    assert report.passed, report.summary()
+
+
+# --------------------------------------- one-extractor facts (blind spot seven)
+#
+# Every content check above reads whichever of the two extractions came out
+# longer, which is always pdfplumber — it rebuilds words from glyph positions.
+# pypdf reads the content stream instead and inserts a space wherever pdfTeX
+# emitted a tightening kern, so in lmodern BOLD:
+#
+#     Wemark Real Estate  ->  W emark Real Estate
+#     Vericent            ->  V ericent
+#     Feb 2026            ->  F eb 2026
+#
+# Two of five employers and one of three institutions were unfindable by a
+# whole class of parser, on a document that passed all fifteen checks — because
+# the pypdf text was discarded before any content check read it.
+
+
+def _kerned_resume(wrap: str) -> str:
+    """A resume whose employer name is set with ``wrap`` applied."""
+    return (
+        PREAMBLE
+        + r"""
+\begin{document}
+{\LARGE """
+        + NAME
+        + r"""}\\
+"""
+        + EMAIL
+        + r""" $\cdot$ """
+        + PHONE
+        + r""" $\cdot$ Adelaide SA
+
+\section*{EXPERIENCE}
+"""
+        + wrap % "Wemark Real Estate"
+        + r""" \hfill 2021 -- 2026\\
+\textit{Senior Analyst}, Adelaide
+\begin{itemize}
+  \item """
+        + BODY_WORDS
+        + r"""
+\end{itemize}
+
+\section*{EDUCATION}
+BSc Computer Science \hfill 2020\\
+\textit{University of Adelaide}
+
+\section*{SKILLS}
+Python, SQL, financial modelling
+\end{document}
+"""
+    )
+
+
+def test_a_fact_only_one_extractor_can_find_is_rejected(tmp_path):
+    """Bold splits "Wemark" into "W emark" for pypdf and nothing else notices."""
+    pdf = compile_tex(tmp_path, "kerned", _kerned_resume(r"\textbf{%s}"))
+    report = verify_pdf(
+        pdf,
+        kind="resume",
+        expect=expectations(employers=["Wemark Real Estate"]),
+    )
+
+    failures = [c.name for c in report.failures]
+    assert "facts_survive_both_extractors" in failures, report.summary()
+    assert failures == ["facts_survive_both_extractors"], failures
+
+    detail = next(
+        c.detail for c in report.failures if c.name == "facts_survive_both_extractors"
+    )
+    assert "Wemark Real Estate" in detail
+
+    # The premise, asserted rather than assumed: pdfplumber CAN find it, pypdf
+    # cannot, and it is that disagreement the check exists for.
+    from backend.documents.verify import _extract_pdfplumber, _extract_pypdf
+
+    assert "Wemark Real Estate" in _extract_pdfplumber(pdf)[0]
+    assert "Wemark Real Estate" not in _extract_pypdf(pdf)[0]
+
+
+def test_the_same_name_unbolded_is_accepted(tmp_path):
+    """The control. Same word, same line, same font — one weight lighter."""
+    pdf = compile_tex(tmp_path, "unkerned", _kerned_resume("%s"))
+    report = verify_pdf(
+        pdf,
+        kind="resume",
+        expect=expectations(employers=["Wemark Real Estate"]),
+    )
+    assert report.passed, report.summary()
+
+
+# ------------------------------- truncated contact line (blind spot eight)
+#
+# The contact strip is one centred line of phone, email, location and links.
+# Make one field too wide and TeX wraps it, stranding the separator that
+# preceded it at the end of the line — so an ATS reading the trailing run of
+# the contact line as the location reads an empty string instead.
+
+
+def _contact_resume(contact: str) -> str:
+    return (
+        PREAMBLE
+        + r"""
+\begin{document}
+\begin{center}
+{\LARGE """
+        + NAME
+        + r"""}\\
+"""
+        + contact
+        + r"""
+\end{center}
+
+\section*{EXPERIENCE}
+"""
+        + EMPLOYER
+        + r""" \hfill 2021 -- 2026\\
+\textit{Senior Analyst}, Adelaide
+\begin{itemize}
+  \item """
+        + BODY_WORDS
+        + r"""
+\end{itemize}
+
+\section*{EDUCATION}
+BSc Computer Science \hfill 2020\\
+\textit{University of Adelaide}
+
+\section*{SKILLS}
+Python, SQL, financial modelling
+\end{document}
+"""
+    )
+
+
+OVERFLOWING_CONTACT = (
+    PHONE
+    + r""" $|$ """
+    + EMAIL
+    + r""" $|$ Adelaide SA 5000 $|$ linkedin.com/in/jordan-fitzgerald-analytics
+$|$ github.com/jordan-fitzgerald-analytics $|$ jordanfitzgeraldanalytics.example.com"""
+)
+
+FITTING_CONTACT = (
+    PHONE
+    + r""" $|$ """
+    + EMAIL
+    + r""" $|$ Adelaide SA 5000\\
+linkedin.com/in/jordan-fitzgerald-analytics $|$ github.com/jordan-fitzgerald-analytics"""
+)
+
+
+def test_a_contact_line_with_a_field_wrapped_off_it_is_rejected(tmp_path):
+    pdf = compile_tex(tmp_path, "overflow", _contact_resume(OVERFLOWING_CONTACT))
+    report = verify_pdf(pdf, kind="resume", expect=expectations())
+
+    failures = [c.name for c in report.failures]
+    assert "contact_line_not_truncated" in failures, report.summary()
+    assert failures == ["contact_line_not_truncated"], failures
+
+    # The premise: the contact line really does end on a stranded separator.
+    contact_line = next(
+        line for line in report.extracted_text.splitlines() if EMAIL in line
+    )
+    assert contact_line.rstrip().endswith("|"), repr(contact_line)
+
+
+def test_a_contact_block_deliberately_split_over_two_lines_is_accepted(tmp_path):
+    """The control, and the false positive that matters.
+
+    A two-line contact block is a completely ordinary Australian resume header.
+    The check must key on the stranded separator, not on which fields it can
+    find, or it rejects this.
+    """
+    pdf = compile_tex(tmp_path, "twoline", _contact_resume(FITTING_CONTACT))
+    report = verify_pdf(pdf, kind="resume", expect=expectations())
+    assert report.passed, report.summary()
