@@ -56,12 +56,12 @@ log = get_logger(__name__)
 __all__ = [
     "CoveragePoint",
     "QuestionCluster",
+    "QuestionReport",
     "clusters",
     "coverage",
     "digest_lines",
-    "frequency",
-    "friction",
     "record",
+    "report",
 ]
 
 
@@ -246,30 +246,38 @@ def _build_cluster(
     )
 
 
-def frequency(
-    session: Session, *, hours: int | None = None, limit: int = 20
-) -> list[QuestionCluster]:
-    """Questions by reach — how many employers ask them. Already the sort order."""
-    return clusters(session, hours=hours, limit=limit)
+@dataclass
+class QuestionReport:
+    """The two orderings of one clustering pass.
 
-
-def friction(
-    session: Session, *, hours: int | None = None, limit: int = 20
-) -> list[QuestionCluster]:
-    """Questions that parked jobs, most expensive first.
-
-    Ranked by jobs parked rather than by abstentions, because the cost of a
-    question is the applications it stopped, and it is what to pre-answer next.
-    Questions that never parked anything are excluded: a complete list sorted by
-    a mostly-zero column buries the five rows worth acting on.
+    Both in one call because clustering is the expensive part and the two views
+    are the same clusters sorted differently — computing them separately meant
+    reading the ledger twice and clustering it twice per dashboard load.
     """
-    ranked = [
-        cluster
-        for cluster in clusters(session, hours=hours, limit=MAX_CLUSTER_MEMBERS)
-        if cluster.jobs_parked
-    ]
-    ranked.sort(key=lambda c: (c.jobs_parked, c.abstained), reverse=True)
-    return ranked[:limit]
+
+    frequency: list[QuestionCluster] = field(default_factory=list)
+    """By reach: how many distinct employers ask. What is common."""
+
+    friction: list[QuestionCluster] = field(default_factory=list)
+    """By jobs parked: what stopped applications. What to answer next."""
+
+
+def report(
+    session: Session, *, hours: int | None = None, limit: int = 20
+) -> QuestionReport:
+    """Both rankings, from one pass over the ledger.
+
+    Friction is ranked by jobs parked rather than by abstentions, because the
+    cost of a question is the applications it stopped. Questions that never
+    parked anything are excluded from it: a complete list sorted by a
+    mostly-zero column buries the five rows worth acting on.
+    """
+    ranked = clusters(session, hours=hours, limit=MAX_CLUSTER_MEMBERS)
+
+    costly = [cluster for cluster in ranked if cluster.jobs_parked]
+    costly.sort(key=lambda c: (c.jobs_parked, c.abstained), reverse=True)
+
+    return QuestionReport(frequency=ranked[:limit], friction=costly[:limit])
 
 
 # --------------------------------------------------------------------------
@@ -356,7 +364,7 @@ def digest_lines(session: Session, *, hours: int = 168) -> list[str]:
     ``failures.digest_lines`` gives: a section that appears every time saying
     nothing is a section that stops being read.
     """
-    worklist = friction(session, hours=hours, limit=5)
+    worklist = report(session, hours=hours, limit=5).friction
     trend = coverage(session, weeks=2)
     if not worklist and not trend:
         return []

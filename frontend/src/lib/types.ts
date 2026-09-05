@@ -274,6 +274,59 @@ export interface QuestionIntelligence {
   fact_leverage: FactLeverage[];
 }
 
+export interface StageStat {
+  stage: string;
+  observations: number;
+  total_ms: number;
+  mean_ms: number;
+  median_ms: number;
+  slowest_ms: number;
+}
+
+export interface StageProfile {
+  work: StageStat[];
+  /** Never an entry in `work`. The wait between submissions is a safety
+   *  property, not latency — see Analytics.tsx. */
+  pacing: StageStat | null;
+  slowest_stage: string | null;
+  work_total_ms: number;
+}
+
+export interface RunProfile {
+  run_id: number;
+  started_at: string;
+  ended_at: string | null;
+  applications: number;
+  work_ms: number;
+  pacing_ms: number;
+  slowest_stage: string | null;
+  slowest_stage_ms: number;
+}
+
+export interface CacheRate {
+  cache: string;
+  /** What one lookup counts. The denominators differ per cache on purpose. */
+  unit: string;
+  week: string;
+  lookups: number;
+  hits: number;
+  rate: number;
+}
+
+export interface CostPoint {
+  week: string;
+  applications: number;
+  total_usd: number;
+  per_application_usd: number;
+}
+
+export interface PerformanceTelemetry {
+  stages: StageProfile;
+  runs: RunProfile[];
+  caches: CacheRate[];
+  cost: CostPoint[];
+}
+
 export interface Analytics {
   minimum_sample: number;
   total_applied: number;
@@ -284,6 +337,7 @@ export interface Analytics {
   by_rubric_version: AnalyticsBucket[];
   campaign_funnels: CampaignFunnel[];
   questions: QuestionIntelligence;
+  performance: PerformanceTelemetry;
 }
 
 export interface AppSettings {

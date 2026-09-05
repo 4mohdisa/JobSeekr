@@ -17,14 +17,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlmodel import Session, col, select
 
-from backend import facts, questions
+from backend import facts, questions, telemetry
 from backend.api.schemas import (
     AnalyticsBucket,
     AnalyticsResponse,
     ApplicationOut,
     ApplicationPatch,
+    CacheRateOut,
     CampaignFunnel,
     CopyableAnswer,
+    CostPointOut,
     CoveragePointOut,
     DocumentOut,
     FactLeverageOut,
@@ -32,10 +34,14 @@ from backend.api.schemas import (
     JobDetail,
     JobOut,
     Page,
+    PerformanceTelemetry,
     QuestionClusterOut,
     QuestionIntelligence,
     QueueCard,
+    RunProfileOut,
     ScoreOut,
+    StageProfileOut,
+    StageStatOut,
 )
 from backend.config import settings
 from backend.db import get_session
@@ -544,6 +550,67 @@ def get_analytics(session: Session = Depends(get_session)) -> AnalyticsResponse:
         by_rubric_version=buckets(by_rubric),
         campaign_funnels=_campaign_funnels(session, applications, jobs, minimum),
         questions=_question_intelligence(session),
+        performance=_performance(session),
+    )
+
+
+def _performance(session: Session) -> PerformanceTelemetry:
+    """Speed, cache hit rates and cost. Aggregation lives in backend/telemetry.py."""
+    profile = telemetry.stage_profile(session)
+    slowest = profile.slowest
+    return PerformanceTelemetry(
+        stages=StageProfileOut(
+            work=[_stage_out(stat) for stat in profile.work],
+            # Kept out of `work` all the way to the wire, so no chart can add a
+            # deliberate safety delay into a latency total.
+            pacing=_stage_out(profile.pacing) if profile.pacing else None,
+            slowest_stage=slowest.stage if slowest else None,
+            work_total_ms=profile.work_total_ms,
+        ),
+        runs=[
+            RunProfileOut(
+                run_id=run.run_id,
+                started_at=run.started_at,
+                ended_at=run.ended_at,
+                applications=run.applications,
+                work_ms=run.work_ms,
+                pacing_ms=run.pacing_ms,
+                slowest_stage=run.slowest_stage,
+                slowest_stage_ms=run.slowest_stage_ms,
+            )
+            for run in telemetry.run_profiles(session)
+        ],
+        caches=[
+            CacheRateOut(
+                cache=rate.cache,
+                unit=rate.unit,
+                week=rate.week,
+                lookups=rate.lookups,
+                hits=rate.hits,
+                rate=rate.rate,
+            )
+            for rate in telemetry.cache_rates(session)
+        ],
+        cost=[
+            CostPointOut(
+                week=point.week,
+                applications=point.applications,
+                total_usd=point.total_usd,
+                per_application_usd=point.per_application_usd,
+            )
+            for point in telemetry.cost_per_application(session)
+        ],
+    )
+
+
+def _stage_out(stat: telemetry.StageStat) -> StageStatOut:
+    return StageStatOut(
+        stage=stat.stage,
+        observations=stat.observations,
+        total_ms=stat.total_ms,
+        mean_ms=stat.mean_ms,
+        median_ms=stat.median_ms,
+        slowest_ms=stat.slowest_ms,
     )
 
 
@@ -626,13 +693,10 @@ def _campaign_funnels(
 
 def _question_intelligence(session: Session) -> QuestionIntelligence:
     """The question ledger, shaped for the wire. Aggregation lives in the module."""
+    ranked = questions.report(session, limit=15)
     return QuestionIntelligence(
-        frequency=[
-            _cluster_out(cluster) for cluster in questions.frequency(session, limit=15)
-        ],
-        friction=[
-            _cluster_out(cluster) for cluster in questions.friction(session, limit=15)
-        ],
+        frequency=[_cluster_out(cluster) for cluster in ranked.frequency],
+        friction=[_cluster_out(cluster) for cluster in ranked.friction],
         coverage=[
             CoveragePointOut(
                 week=point.week,

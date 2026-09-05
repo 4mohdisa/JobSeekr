@@ -23,7 +23,7 @@ from typing import Any
 
 from sqlmodel import Session, select
 
-from backend import preferences
+from backend import preferences, telemetry
 from backend.apply import guardrails
 from backend.apply.flow import RestrictionDetected, run_apply
 from backend.apply.pacing import sleep_between_submits
@@ -54,6 +54,7 @@ from backend.models import (
     Run,
     RunPhase,
     Score,
+    Stage,
 )
 
 log = get_logger(__name__)
@@ -149,7 +150,11 @@ def eligible_jobs(
     if platform is not None:
         query = query.where(Job.source == platform)
 
-    applied = {row.job_id for row in session.exec(select(Application)).all()}
+    # The job ids only. This hydrated every Application row — JSON columns,
+    # enums and all — to read one integer off each. Kept as a set rather than
+    # folded into the status filter above: an application whose job status was
+    # reset by hand is still an application, and hard rule 5 is one per job ever.
+    applied = set(session.exec(select(Application.job_id)).all())
 
     out: list[tuple[Job, Campaign | None, float | None]] = []
     for job in session.exec(query).all():
@@ -337,7 +342,18 @@ def run_apply_pass(
                 # page open across it is exactly the accumulation this whole
                 # lifecycle exists to prevent.
                 if index > 0 and not dry_run:
-                    sleep_between_submits(rng)
+                    # Timed as PACING, which is deliberately not a work stage.
+                    # An unmeasured wait is indistinguishable from a hang, so it
+                    # is recorded — and it can never be added to a work total,
+                    # because Stage.PACING is not in WORK_STAGES and the profile
+                    # hands the two back as separate fields.
+                    with telemetry.time_stage(
+                        session,
+                        Stage.PACING,
+                        job_id=job.id,
+                        platform=applier.platform if applier else None,
+                    ):
+                        sleep_between_submits(rng)
 
                 # Between applications: the anchor page and nothing else. Placed
                 # here rather than after the previous iteration's body because

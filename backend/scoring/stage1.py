@@ -24,10 +24,11 @@ from collections.abc import Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
+from backend import telemetry
 from backend.config import settings
 from backend.llm.client import llm
 from backend.logging_setup import get_logger
-from backend.models import Job
+from backend.models import CacheName, Job
 
 log = get_logger(__name__)
 
@@ -172,7 +173,11 @@ class EmbeddingCache:
 
 
 def _embed_with_cache(
-    texts: list[str], *, cache: EmbeddingCache, purpose: str
+    texts: list[str],
+    *,
+    cache: EmbeddingCache,
+    purpose: str,
+    session: Any = None,
 ) -> list[list[float]]:
     """Embed only what is not cached, in batches, preserving input order."""
     model = settings.llm_model_embedding
@@ -197,6 +202,14 @@ def _embed_with_cache(
         embedded=len(pending),
         batches=math.ceil(len(pending) / batch_size) if pending else 0,
     )
+    if session is not None:
+        # Recorded in bulk, not one row per vector: a batch of ninety-six
+        # reports "eighty hits, sixteen misses", and writing a row per vector
+        # would make measuring the cheapest cache the most expensive thing here.
+        telemetry.record_cache(session, CacheName.EMBEDDING, hit=True, count=hits)
+        telemetry.record_cache(
+            session, CacheName.EMBEDDING, hit=False, count=len(pending)
+        )
     return [vector or [] for vector in vectors]
 
 
@@ -206,6 +219,7 @@ def rank_jobs(
     summary: str,
     top_n: int | None = None,
     cache: EmbeddingCache | None = None,
+    session: Any = None,
 ) -> list[tuple[Job, float]]:
     """Rank jobs against the campaign summary, best first.
 
@@ -221,10 +235,12 @@ def rank_jobs(
     top_n = top_n or settings.scoring_stage1_top_n
 
     texts = [embedding_text(job) for job in jobs]
-    query_vector = _embed_with_cache([summary], cache=cache, purpose="stage1_summary")[
-        0
-    ]
-    job_vectors = _embed_with_cache(texts, cache=cache, purpose="stage1_jobs")
+    query_vector = _embed_with_cache(
+        [summary], cache=cache, purpose="stage1_summary", session=session
+    )[0]
+    job_vectors = _embed_with_cache(
+        texts, cache=cache, purpose="stage1_jobs", session=session
+    )
 
     ranked = [
         (job, cosine(query_vector, vector))

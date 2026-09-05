@@ -11,10 +11,14 @@ import { formatPercent, useAsync } from "../lib/hooks";
 import { Card, Empty, ErrorNote, Spinner, Stat, cx } from "../components/ui";
 import type {
   AnalyticsBucket,
+  CacheRate,
   CampaignFunnel,
+  CostPoint,
   CoveragePoint,
   FactLeverage,
+  PerformanceTelemetry,
   QuestionCluster,
+  RunProfile,
 } from "../lib/types";
 
 function BucketTable({
@@ -381,6 +385,228 @@ function FactLeverageTable({ rows }: { rows: FactLeverage[] }) {
   );
 }
 
+function seconds(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${(ms / 60_000).toFixed(1)}m`;
+}
+
+// Work stages only. `pacing` arrives as its own field and is rendered below the
+// table, outside the total — the wait between submissions protects the account
+// and must never read as latency someone could shave.
+function StageTable({ stages }: { stages: PerformanceTelemetry["stages"] }) {
+  if (stages.work.length === 0) {
+    return (
+      <Card title="Where the time goes">
+        <Empty>Nothing timed yet — run an apply pass.</Empty>
+      </Card>
+    );
+  }
+
+  return (
+    <Card title="Where the time goes">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-ink-800 text-left text-xs tracking-wide text-ink-400 uppercase">
+            <th className="py-1.5">Stage</th>
+            <th className="py-1.5 text-right">Median</th>
+            <th className="py-1.5 text-right">Slowest</th>
+            <th className="py-1.5 text-right">Total</th>
+            <th className="py-1.5 text-right">n</th>
+          </tr>
+        </thead>
+        <tbody>
+          {stages.work.map((stat) => (
+            <tr key={stat.stage} className="border-b border-ink-800 last:border-0">
+              <td className="py-1.5">
+                {stat.stage.replace(/_/g, " ")}
+                {stat.stage === stages.slowest_stage && (
+                  <span className="ml-2 rounded bg-warn/15 px-1.5 py-0.5 text-xs text-warn">
+                    slowest
+                  </span>
+                )}
+              </td>
+              <td className="tnum py-1.5 text-right">{seconds(stat.median_ms)}</td>
+              <td className="tnum py-1.5 text-right">{seconds(stat.slowest_ms)}</td>
+              <td className="tnum py-1.5 text-right">{seconds(stat.total_ms)}</td>
+              <td className="tnum py-1.5 text-right text-ink-400">
+                {stat.observations}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <div className="mt-3 border-t border-ink-800 pt-3 text-xs">
+        <div className="flex justify-between">
+          <span className="text-ink-300">work total</span>
+          <span className="tnum text-ink-100">{seconds(stages.work_total_ms)}</span>
+        </div>
+        {stages.pacing && (
+          <div className="mt-1 flex justify-between text-ink-400">
+            <span>pacing — deliberate, not work</span>
+            <span className="tnum">
+              {seconds(stages.pacing.total_ms)} over {stages.pacing.observations} waits
+            </span>
+          </div>
+        )}
+      </div>
+      <p className="mt-3 text-xs text-ink-600">
+        Pacing is the randomised delay between submissions. It protects the LinkedIn
+        account, so it is measured separately and never added to the work total —
+        it is not latency to optimise.
+      </p>
+    </Card>
+  );
+}
+
+function RunTable({ runs }: { runs: RunProfile[] }) {
+  if (runs.length === 0) {
+    return (
+      <Card title="Per run">
+        <Empty>No apply passes recorded yet.</Empty>
+      </Card>
+    );
+  }
+
+  return (
+    <Card title="Per run — slowest stage">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-ink-800 text-left text-xs tracking-wide text-ink-400 uppercase">
+            <th className="py-1.5">Run</th>
+            <th className="py-1.5 text-right">Jobs</th>
+            <th className="py-1.5">Slowest stage</th>
+            <th className="py-1.5 text-right">Work</th>
+            <th className="py-1.5 text-right">Pacing</th>
+          </tr>
+        </thead>
+        <tbody>
+          {runs.map((run) => (
+            <tr key={run.run_id} className="border-b border-ink-800 last:border-0">
+              <td className="py-1.5 text-ink-400">
+                {new Date(run.started_at).toLocaleString()}
+              </td>
+              <td className="tnum py-1.5 text-right">{run.applications}</td>
+              <td className="py-1.5">
+                {run.slowest_stage ? (
+                  <>
+                    {run.slowest_stage.replace(/_/g, " ")}
+                    <span className="ml-1 text-ink-600">
+                      ({seconds(run.slowest_stage_ms)})
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-ink-600">nothing timed</span>
+                )}
+              </td>
+              <td className="tnum py-1.5 text-right">{seconds(run.work_ms)}</td>
+              <td className="tnum py-1.5 text-right text-ink-600">
+                {seconds(run.pacing_ms)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Card>
+  );
+}
+
+function CacheRates({ rates }: { rates: CacheRate[] }) {
+  if (rates.length === 0) {
+    return (
+      <Card title="Cache hit rates">
+        <Empty>No cache lookups recorded yet.</Empty>
+      </Card>
+    );
+  }
+
+  const byCache = new Map<string, CacheRate[]>();
+  for (const rate of rates) {
+    const existing = byCache.get(rate.cache);
+    if (existing) existing.push(rate);
+    else byCache.set(rate.cache, [rate]);
+  }
+
+  return (
+    <Card title="Cache hit rates — each should climb">
+      <div className="space-y-4">
+        {[...byCache.entries()].map(([cache, points]) => (
+          <div key={cache}>
+            <div className="mb-1 flex items-baseline justify-between">
+              <span className="text-sm text-ink-100">{cache.replace(/_/g, " ")}</span>
+              <span className="text-xs text-ink-600">{points[0].unit}</span>
+            </div>
+            <div className="flex items-end gap-1">
+              {points.map((point) => (
+                <div
+                  key={point.week}
+                  className="flex-1"
+                  title={`week of ${point.week}: ${point.hits}/${point.lookups}`}
+                >
+                  <div className="flex h-12 items-end">
+                    <div
+                      className="w-full rounded-t bg-accent"
+                      style={{ height: `${Math.max(3, point.rate * 100)}%` }}
+                    />
+                  </div>
+                  <div className="tnum mt-0.5 text-center text-xs text-ink-600">
+                    {(point.rate * 100).toFixed(0)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-ink-600">
+        The denominators differ per cache and are labelled: the answer bank is asked
+        every screening question, the facts layer only the ones the bank missed, so a
+        falling facts rate can mean the bank got better.
+      </p>
+    </Card>
+  );
+}
+
+function CostTrend({ points }: { points: CostPoint[] }) {
+  if (points.length === 0) {
+    return (
+      <Card title="Cost per application">
+        <Empty>No submitted applications yet.</Empty>
+      </Card>
+    );
+  }
+  const peak = Math.max(...points.map((p) => p.per_application_usd), 0.0001);
+
+  return (
+    <Card title="Cost per application — should fall">
+      <div className="space-y-2">
+        {points.map((point) => (
+          <div key={point.week}>
+            <div className="mb-0.5 flex justify-between text-xs">
+              <span className="text-ink-300">week of {point.week}</span>
+              <span className="tnum text-ink-400">
+                ${point.per_application_usd.toFixed(3)}
+                <span className="ml-1 text-ink-600">({point.applications})</span>
+              </span>
+            </div>
+            <div className="h-2 overflow-hidden rounded bg-ink-850">
+              <div
+                className="h-full rounded bg-accent"
+                style={{ width: `${Math.max(2, (point.per_application_usd / peak) * 100)}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-3 text-xs text-ink-600">
+        Model spend attributable to each submitted application. Spend with no job —
+        the per-campaign summary embedding — is real and is not in this number.
+      </p>
+    </Card>
+  );
+}
+
 export function Analytics() {
   const { data, error, loading } = useAsync(() => api.getAnalytics(), []);
 
@@ -483,6 +709,14 @@ export function Analytics() {
         />
         <Coverage points={data.questions.coverage} minimum={data.minimum_sample} />
         <FactLeverageTable rows={data.questions.fact_leverage} />
+      </div>
+
+      <h2 className="mt-6 mb-3 text-base font-semibold">Performance</h2>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <StageTable stages={data.performance.stages} />
+        <RunTable runs={data.performance.runs} />
+        <CacheRates rates={data.performance.caches} />
+        <CostTrend points={data.performance.cost} />
       </div>
     </div>
   );

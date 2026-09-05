@@ -24,7 +24,7 @@ from typing import Any
 
 from sqlmodel import select
 
-from backend import facts, failures, preferences, questions, sessions
+from backend import facts, failures, preferences, questions, sessions, telemetry
 from backend.config import settings
 from backend.db import session_scope
 from backend.integrations.notify import Priority, set_sender
@@ -493,8 +493,11 @@ def build_weekly_digest(*, hours: int = 168) -> str:
 
     with session_scope() as session:
         lines.extend(questions.digest_lines(session, hours=hours))
+        lines.extend(telemetry.digest_lines(session, hours=hours))
 
-        leverage = [row for row in facts.leverage(session) if row.confirmed]
+        # One call, two readings. It was two calls with no write between them.
+        all_leverage = facts.leverage(session)
+        leverage = [row for row in all_leverage if row.confirmed]
         if leverage:
             lines.append("\n*Facts doing the work*")
             for row in leverage[:5]:
@@ -504,7 +507,7 @@ def build_weekly_digest(*, hours: int = 168) -> str:
                     f"question{'s' if row.confirmed != 1 else ''}{stale}"
                 )
 
-        idle = [row for row in facts.leverage(session) if not row.derived]
+        idle = [row for row in all_leverage if not row.derived]
         if idle:
             lines.append(
                 f"\n_{len(idle)} fact{'s' if len(idle) != 1 else ''} answering "

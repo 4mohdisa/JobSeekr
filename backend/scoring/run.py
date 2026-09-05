@@ -290,6 +290,7 @@ def score_campaign(
         # problem this setting exists to remove.
         top_n=settings.scoring_stage2_max or len(filtered.kept) or None,
         cache=cache,
+        session=session,
     )
     counts["ranked"] = len(ranked)
 

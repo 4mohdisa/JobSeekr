@@ -18,6 +18,7 @@ import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from backend.apply import flow, guardrails
+from backend.apply.run import eligible_jobs
 from backend.apply.draft import FormField
 from backend.base import ApplyOutcome
 from backend.config import settings
@@ -342,3 +343,26 @@ def test_the_apply_layer_has_no_hardcoded_sleep_outside_pacing():
             if "time.sleep(" in line and not line.strip().startswith("#"):
                 offenders.append(f"{path.relative_to(REPO)}:{number}")
     assert offenders == [], offenders
+
+
+def test_a_job_that_already_has_an_application_is_never_eligible_again(perfect):
+    """Hard rule 5, at the selection step rather than at the submit.
+
+    ``UNIQUE(job_id)`` on ``applications`` is the last line, and ``_run_apply``
+    checks for an existing row too — but both of those fire after a browser tab
+    has opened on the employer's site. This is the check that stops the job
+    being picked up at all, and nothing covered it: emptying the set entirely
+    left the whole suite green.
+
+    Deliberately not folded into the status filter. A job whose status was reset
+    by hand — from the dashboard, or by a re-queue — is still a job that has
+    been applied to once.
+    """
+    session = perfect
+    [(job, _campaign, _score)] = eligible_jobs(session)
+
+    session.add(Application(job_id=job.id, outcome=ApplicationOutcome.SUBMITTED))
+    job.status = JobStatus.DOCUMENTS_READY
+    session.flush()
+
+    assert eligible_jobs(session) == []
