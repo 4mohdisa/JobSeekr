@@ -320,3 +320,20 @@ export interface SessionHealth {
   last_verified_at: string | null;
   consecutive_failures: number;
 }
+
+
+export type OutboundStatus = "drafted" | "sent" | "skipped";
+
+export interface OutboundMessage {
+  id: number;
+  job_id: number;
+  /** From the ad. Never editable — the API has no field for it. */
+  to_address: string;
+  subject: string;
+  body: string;
+  attachments: string[];
+  status: OutboundStatus;
+  approved_by: string | null;
+  created_at: string;
+  sent_at: string | null;
+}

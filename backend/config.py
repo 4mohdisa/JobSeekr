@@ -218,6 +218,16 @@ class Settings(BaseSettings):
     latex_timeout_seconds: int = 180
 
     # -------------------------------------------------------------- telegram
+    # Outbound follow-up email. Same shape as ALLOW_LIVE_SUBMIT: built, tested
+    # and OFF until the user turns it on.
+    #
+    # Separate from ALLOW_LIVE_SUBMIT rather than folded into it because they
+    # authorise different things. Submitting an application puts a document on
+    # a form the employer asked to be filled in; sending an email puts a
+    # message in a stranger's inbox, and the Spam Act treats those differently.
+    # Someone may reasonably want the first and not the second.
+    outbound_enabled: bool = False
+
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
 

@@ -194,6 +194,18 @@ class Region(str, Enum):
     NZ = "NZ"
 
 
+class OutboundStatus(str, Enum):
+    """Where a follow-up email is in its life. Never auto-advances."""
+
+    DRAFTED = "drafted"
+    """Written and waiting. The only state that can become SENT."""
+
+    SENT = "sent"
+    SKIPPED = "skipped"
+    """The user declined. Terminal — one message per job means a skipped job
+    does not get a second draft."""
+
+
 class SessionStatus(str, Enum):
     """What the last check found for one site's stored session.
 
@@ -1001,6 +1013,49 @@ class SessionHealth(SQLModel, table=True):
 
     consecutive_failures: int = 0
     """Resets on a LIVE check. Used to alert once rather than on every pass."""
+
+
+class OutboundMessage(SQLModel, table=True):
+    """One follow-up email per job, ever. The record that makes that true.
+
+    The module docstring in integrations/outbound.py has always said "one
+    message per job, ever" as one of the three properties that make this
+    defensible under the Spam Act. It was documented and not enforced: nothing
+    recorded what had been sent, so nothing could refuse a second.
+
+    UNIQUE(job_id) is that enforcement, and it deliberately mirrors
+    UNIQUE(job_id) on applications — the same rule, for the same reason, spelled
+    the same way.
+
+    A SKIPPED row occupies the slot exactly as a SENT one does. Declining to
+    write to an employer is a decision, and offering the same draft again next
+    week would quietly overturn it.
+    """
+
+    __tablename__ = "outbound_message"
+    __table_args__ = (UniqueConstraint("job_id", name="uq_outbound_message_job"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    job_id: int = Field(foreign_key="job.id", index=True)
+
+    to_address: str
+    """From the ad, never from a parameter. See the outbound module docstring."""
+
+    subject: str
+    body: str
+    attachments: list[Any] = Field(
+        default_factory=list, sa_column=Column(JSON, nullable=False)
+    )
+    """Filenames only. The files themselves live in data/documents/."""
+
+    status: OutboundStatus = Field(sa_column=_enum_column(OutboundStatus))
+
+    approved_by: str | None = None
+    """Who approved it, recorded on the row that was actually sent. NULL on a
+    draft, because a draft has not been approved by anyone."""
+
+    created_at: datetime = Field(default_factory=utcnow)
+    sent_at: datetime | None = None
 
 
 class LLMSpend(SQLModel, table=True):

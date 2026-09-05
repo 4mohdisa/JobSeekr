@@ -45,6 +45,7 @@ log = get_logger(__name__)
 __all__ = [
     "build_application",
     "escalate_question",
+    "notify_followup_draft",
     "request_derivation_confirmation",
     "request_form_approval",
     "send_digest",
@@ -167,6 +168,43 @@ def request_derivation_confirmation(
         ]
     )
     return send_message(body, Priority.NORMAL)
+
+
+def notify_followup_draft(
+    message_id: int,
+    job_id: int,
+    to_address: str,
+    subject: str,
+    body: str,
+    attachments: list[str],
+) -> bool:
+    """Show a drafted follow-up. The decision happens in the UI, not here.
+
+    Deliberately not actionable over Telegram. Send / Skip / Edit needs the
+    whole draft in front of you and an edit box, and a message that could send
+    an email with one tap is a message one mistap sends an email from.
+
+    Names both PDFs rather than attaching them: the point is to see what would
+    go out, and the files are already on disk where the dashboard can show them.
+    """
+    lines = [
+        "*Follow-up drafted* — nothing sent",
+        "",
+        f"*To:* {to_address}",
+        f"*Subject:* {subject[:150]}",
+        "",
+        body.strip()[:700] + ("…" if len(body.strip()) > 700 else ""),
+        "",
+        f"*Attachments:* {', '.join(attachments) if attachments else 'none'}",
+        "",
+        (
+            f"Review it on the Outbound page (job {job_id}, draft {message_id}): "
+            "Send, Skip or Edit there."
+        ),
+    ]
+    if not settings.outbound_enabled:
+        lines.append("_OUTBOUND_ENABLED is off — nothing can be sent yet._")
+    return send_message("\n".join(lines), Priority.NORMAL)
 
 
 def request_form_approval(

@@ -42,6 +42,9 @@ __all__ = [
     "FunnelStage",
     "JobDetail",
     "JobOut",
+    "OutboundEditIn",
+    "OutboundMessageOut",
+    "OutboundSendIn",
     "Page",
     "PreferenceIn",
     "PreferenceOut",
@@ -478,3 +481,38 @@ class SessionHealthOut(BaseModel):
     last_checked_at: datetime | None
     last_verified_at: datetime | None
     consecutive_failures: int
+
+
+class OutboundMessageOut(BaseModel):
+    """A drafted or sent follow-up, as the Outbound page shows it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    job_id: int
+    to_address: str
+    subject: str
+    body: str
+    attachments: list[Any]
+    status: str
+    approved_by: str | None
+    created_at: datetime
+    sent_at: datetime | None
+
+
+class OutboundEditIn(BaseModel):
+    """An edited subject and body. The recipient is deliberately absent.
+
+    Not an oversight: the address comes from the ad and from nowhere else, and
+    accepting one here would make this endpoint the recipient parameter the
+    module refuses to have.
+    """
+
+    subject: str = Field(min_length=1, max_length=300)
+    body: str = Field(min_length=1, max_length=20000)
+
+
+class OutboundSendIn(BaseModel):
+    """Who approved it. There is no auto-send path."""
+
+    approved_by: str = Field(min_length=1, max_length=120)

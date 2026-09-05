@@ -25,6 +25,9 @@ from backend.api.schemas import (
     DerivedAnswerOut,
     FactIn,
     FactOut,
+    OutboundEditIn,
+    OutboundMessageOut,
+    OutboundSendIn,
     PlaceholderIssueOut,
     PreferenceIn,
     PreferenceOut,
@@ -49,6 +52,8 @@ from backend.models import (
     Fact,
     Job,
     JobStatus,
+    OutboundMessage,
+    OutboundStatus,
     Preference,
     PreferenceSource,
     Profile,
@@ -69,6 +74,7 @@ control_router = APIRouter(prefix="/control", tags=["control"])
 preferences_router = APIRouter(prefix="/preferences", tags=["preferences"])
 facts_router = APIRouter(prefix="/facts", tags=["facts"])
 sessions_router = APIRouter(prefix="/sessions", tags=["sessions"])
+outbound_router = APIRouter(prefix="/outbound", tags=["outbound"])
 
 
 # ==========================================================================
@@ -778,3 +784,86 @@ def list_sessions(session: Session = Depends(get_session)) -> list[SessionHealth
     }
     rows = list(session.exec(select(SessionHealth)).all())
     return sorted(rows, key=lambda row: (rank.get(row.status, 9), row.site))
+
+
+# ==========================================================================
+# Outbound — drafted follow-ups, and the only path that sends one
+# ==========================================================================
+
+
+@outbound_router.get("", response_model=list[OutboundMessageOut])
+def list_outbound(session: Session = Depends(get_session)) -> list[OutboundMessage]:
+    """Every follow-up, drafts first. Sent and skipped stay visible.
+
+    A sent message is the record that this job has had its one email; hiding it
+    would make the one-per-job rule invisible at exactly the moment someone
+    wonders why a job has no Send button.
+    """
+    rank = {
+        OutboundStatus.DRAFTED: 0,
+        OutboundStatus.SENT: 1,
+        OutboundStatus.SKIPPED: 2,
+    }
+    rows = list(session.exec(select(OutboundMessage)).all())
+    return sorted(rows, key=lambda row: (rank.get(row.status, 9), -(row.id or 0)))
+
+
+@outbound_router.put("/{message_id}", response_model=OutboundMessageOut)
+def edit_outbound(
+    message_id: int, payload: OutboundEditIn, session: Session = Depends(get_session)
+) -> OutboundMessage:
+    """Edit a draft's subject and body. Not the recipient — see OutboundEditIn."""
+    row = session.get(OutboundMessage, message_id)
+    if row is None:
+        raise HTTPException(404, "no such message")
+    if row.status is not OutboundStatus.DRAFTED:
+        raise HTTPException(409, f"that message is {row.status.value}")
+
+    row.subject = payload.subject
+    row.body = payload.body
+    session.add(row)
+    session.commit()
+    session.refresh(row)
+    return row
+
+
+@outbound_router.post("/{message_id}/send", response_model=OutboundMessageOut)
+def send_outbound(
+    message_id: int, payload: OutboundSendIn, session: Session = Depends(get_session)
+) -> OutboundMessage:
+    """Send a draft. The only path from DRAFTED to SENT, and it needs approval.
+
+    The 403 for a disabled switch rather than a silent no-op: the user pressed
+    Send and is owed an answer about why nothing left.
+    """
+    from backend.integrations.outbound import OutboundRefused, approve_and_send
+
+    try:
+        sent = approve_and_send(session, message_id, approved_by=payload.approved_by)
+    except OutboundRefused as exc:
+        raise HTTPException(403, str(exc)) from exc
+
+    if not sent:
+        raise HTTPException(502, "the mail server rejected it; the draft is unchanged")
+
+    session.commit()
+    row = session.get(OutboundMessage, message_id)
+    assert row is not None
+    return row
+
+
+@outbound_router.post("/{message_id}/skip", response_model=OutboundMessageOut)
+def skip_outbound(
+    message_id: int, session: Session = Depends(get_session)
+) -> OutboundMessage:
+    """Decline. Terminal, and it keeps the job's one slot."""
+    from backend.integrations.outbound import OutboundRefused, skip_message
+
+    try:
+        row = skip_message(session, message_id)
+    except OutboundRefused as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    session.commit()
+    session.refresh(row)
+    return row

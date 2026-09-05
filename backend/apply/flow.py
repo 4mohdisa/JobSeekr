@@ -84,6 +84,7 @@ MAX_STEPS = 12
 # Set by the integrations layer, same convention as ``canary.on_drift``.
 on_element_unresolvable: Any = None
 on_form_approval_needed: Any = None
+on_followup_drafted: Any = None
 
 
 class RestrictionDetected(RuntimeError):
@@ -881,6 +882,7 @@ def _run_apply(
         status=JobStatus.APPLIED,
     )
     _remember_observed_fields(session, draft)
+    _draft_followup(session, job)
     log.info(
         "application_submitted",
         job_id=job.id,
@@ -901,6 +903,51 @@ def _run_apply(
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
+
+
+def _draft_followup(session: Session, job: Job) -> None:
+    """Write a follow-up draft for the user to approve, if the ad published an
+    address.
+
+    Only after a CONFIRMED submission: a follow-up to an application that never
+    landed is a cold email, which is the thing this project is not allowed to
+    send. Drafting only — nothing here can send, and OUTBOUND_ENABLED gates the
+    send path separately.
+
+    Silent when the ad published no address. That is the common case and it is
+    not a failure: addresses are never guessed or looked up.
+    """
+    from backend.integrations.outbound import (
+        OutboundRefused,
+        draft_for_job,
+        record_draft,
+    )
+
+    if not getattr(job, "ad_contact_email", None):
+        return
+
+    try:
+        row = record_draft(session, draft_for_job(session, job.id))
+    except OutboundRefused as exc:
+        log.info("followup_not_drafted", job_id=job.id, reason=str(exc)[:200])
+        return
+    except Exception as exc:  # noqa: BLE001 - never fail a sent application
+        log.warning("followup_draft_failed", job_id=job.id, error=str(exc)[:200])
+        return
+
+    session.flush()
+    if on_followup_drafted is not None and row.id is not None:
+        try:
+            on_followup_drafted(
+                row.id,
+                job.id,
+                row.to_address,
+                row.subject,
+                row.body,
+                list(row.attachments),
+            )
+        except Exception as exc:  # noqa: BLE001 - telling the user is best effort
+            log.warning("followup_notify_failed", error=str(exc)[:150])
 
 
 def _remember_observed_fields(session: Session, draft: ApplicationDraft) -> None:
