@@ -114,7 +114,7 @@ def register_hooks() -> None:
     Called once at startup. Each hook is a plain callable on the target module
     so that module never imports an integration.
     """
-    from backend import facts, siteknowledge
+    from backend import facts, sessions, siteknowledge
     from backend.apply import canary, flow, guardrails, session
 
     guardrails.on_notify = lambda title, body: notify(title, body, Priority.IMMEDIATE)
@@ -139,6 +139,20 @@ def register_hooks() -> None:
         lambda job_id, fingerprint, platform, screenshot, answers: (
             _request_form_approval(job_id, fingerprint, platform, screenshot, answers)
         )
+    )
+
+    sessions.on_session_dead = lambda site, detail, last_good: notify(
+        f"Signed out of {site}",
+        f"{detail or 'the stored session has expired'}.\n"
+        + (
+            f"Last confirmed good: {last_good:%d %b %H:%M} UTC.\n"
+            if last_good
+            else "It has never been confirmed good.\n"
+        )
+        + f"\nNothing will be submitted to {site} until you sign in:\n"
+        f"`uv run python -m backend.apply.session login --platform {site}`\n\n"
+        "No attempt is made to sign in automatically.",
+        Priority.IMMEDIATE,
     )
 
     facts.on_confirmation_needed = (

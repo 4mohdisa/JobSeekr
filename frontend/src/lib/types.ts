@@ -305,3 +305,18 @@ export interface DerivedAnswer {
   /** The source fact was edited, so this no longer applies. */
   stale: boolean;
 }
+
+
+export type SessionStatus = "live" | "dead" | "unknown" | "no_session" | "unreachable";
+
+export interface SessionHealth {
+  id: number;
+  site: string;
+  status: SessionStatus;
+  detail: string | null;
+  cookie_count: number;
+  last_checked_at: string | null;
+  /** Last time the session was confirmed LIVE — not merely checked. */
+  last_verified_at: string | null;
+  consecutive_failures: number;
+}

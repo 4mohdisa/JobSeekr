@@ -20,6 +20,7 @@ import type {
   Preference,
   Profile,
   QueueCard,
+  SessionHealth,
   Template,
   TemplatePreview,
 } from "./types";
@@ -148,6 +149,9 @@ export const api = {
     request<DerivedAnswer>(`/facts/derived/${id}/confirm`, { method: "POST" }),
   rejectDerived: (id: number) =>
     request<void>(`/facts/derived/${id}`, { method: "DELETE" }),
+
+  // --------------------------------------------------------------- sessions
+  listSessions: () => request<SessionHealth[]>("/sessions"),
 
   // -------------------------------------------------------------- templates
   listTemplates: () => request<Template[]>("/templates"),

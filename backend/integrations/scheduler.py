@@ -70,6 +70,28 @@ def _canary_job() -> None:
     run_canary()
 
 
+def _session_health_job() -> None:
+    """Check every stored session once a day, before the morning apply pass.
+
+    Separate from the apply pass's own check so a dead session is named in the
+    morning rather than discovered at 10:00 when there is work queued behind it.
+    """
+    from backend.apply.session import launch_context
+    from backend.db import session_scope
+    from backend.sessions import check_all
+
+    from playwright.sync_api import sync_playwright
+
+    with sync_playwright() as playwright:
+        context = launch_context(playwright)
+        try:
+            page = context.pages[0] if context.pages else context.new_page()
+            with session_scope() as session:
+                check_all(session, context, page)
+        finally:
+            context.close()
+
+
 def _backup_job() -> None:
     """Copy the SQLite file using the online backup API.
 
@@ -152,6 +174,15 @@ SCHEDULE: tuple[dict[str, Any], ...] = (
     {"id": "backup", "func": _backup_job, "trigger": "cron", "hour": 2, "minute": 0},
     {"id": "digest", "func": _digest_job, "trigger": "cron", "hour": 19, "minute": 0},
     {"id": "canary", "func": _canary_job, "trigger": "cron", "hour": 8, "minute": 0},
+    # 09:00, an hour before the morning apply pass, so a dead session is named
+    # while there is still time to sign in before anything is attempted.
+    {
+        "id": "session_health",
+        "func": _session_health_job,
+        "trigger": "cron",
+        "hour": 9,
+        "minute": 0,
+    },
     {
         "id": "rubric_review",
         "func": _rubric_review_job,
