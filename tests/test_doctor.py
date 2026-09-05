@@ -55,15 +55,37 @@ def test_both_keys_present_is_ok(monkeypatch):
     assert doctor.check_llm_keys().status == OK
 
 
-@pytest.mark.parametrize("without", ["llm_model_scoring", "llm_model_embedding"])
-def test_a_key_missing_for_either_model_blocks(monkeypatch, without):
-    """Both models need a key, and it is not enough that one of them has it.
+@pytest.mark.parametrize(
+    "without",
+    [
+        "llm_model_scoring",
+        "llm_model_embedding",
+        "llm_model_writing",
+        "llm_model_formmap",
+    ],
+)
+def test_a_key_missing_for_any_configured_model_blocks(monkeypatch, without):
+    """All four need a key, and it is not enough that some of them have one.
 
     Parametrised over which model is keyless rather than over provider names:
-    the two used to be OpenAI and Gemini, and a test that made one keyless by
-    matching "gemini" in the model id silently stopped making ANY of them
-    keyless the day both moved to Gemini — and passed.
+    scoring and embeddings used to be OpenAI and Gemini, and a test that made
+    one keyless by matching "gemini" in the model id silently stopped making
+    ANY of them keyless the day both moved to Gemini — and passed.
+
+    Writing and form mapping were not checked at all until this session, so a
+    machine with a Gemini key and no Anthropic key was told "API keys OK" while
+    being unable to build a single document.
+
+    Each setting is first pointed at a DISTINCT model id. Two of them ship
+    pointing at the same one (writing and formmap are both claude-opus-5), so
+    without this the case that drops the writing model from the check passed
+    anyway — the formmap entry named the same id and satisfied the assertion.
+    That is the shape this project keeps hitting: a different guard answering
+    for the one under test.
     """
+    for index, (field, _purpose) in enumerate(doctor._REQUIRED_MODELS):
+        monkeypatch.setattr(settings, field, f"gemini/distinct-model-{index}")
+
     keyless = getattr(settings, without)
     monkeypatch.setattr(
         "backend.llm.client._api_key_for",
@@ -72,7 +94,7 @@ def test_a_key_missing_for_either_model_blocks(monkeypatch, without):
     finding = doctor.check_llm_keys()
 
     assert finding.status == BLOCK
-    assert keyless in finding.detail or "scoring or embeddings" in finding.detail
+    assert keyless in finding.detail, "the report must name the model that is stuck"
 
 
 def test_the_remedy_names_the_setting_to_fill_in(monkeypatch):

@@ -4866,3 +4866,499 @@ Everything the previous sessions listed, unchanged, plus:
 - The nine "not worth fixing" performance findings were left alone rather than
   optimised on speculation. The measurements are in the table above so the
   question does not have to be reopened from scratch.
+
+# Session — 2026-09-06 (macOS, unattended, four phases)
+
+Gemini configuration, exact dropdown options in escalation, a full verification
+sweep, and this record. `ALLOW_LIVE_SUBMIT` and `OUTBOUND_ENABLED` were not
+touched and are still false. Nothing was submitted and no email was sent.
+
+**Main is at `a1cc30e`: 1106 tests.** Three stacked PRs sit on top of it —
+[#26](https://github.com/4mohdisa/JobSeekr/pull/26),
+[#27](https://github.com/4mohdisa/JobSeekr/pull/27),
+[#28](https://github.com/4mohdisa/JobSeekr/pull/28) — ending at **1187 tests**.
+
+## The PR stack
+
+| PR | Branch | Base |
+|---|---|---|
+| [#26](https://github.com/4mohdisa/JobSeekr/pull/26) | `fix/gemini-config` | `main` |
+| [#27](https://github.com/4mohdisa/JobSeekr/pull/27) | `feat/choice-questions` | `fix/gemini-config` |
+| [#28](https://github.com/4mohdisa/JobSeekr/pull/28) | `chore/full-verification` | `feat/choice-questions` |
+
+Stacked because #27 changes what #26 changed (the same call sites carry both a
+pinned temperature and an option set) and #28 adds tests for code #27
+introduced. **Merge #26 → #27 → #28, retargeting each next PR to its new base
+BEFORE deleting the merged branch.** Deleting a base auto-closes the PRs
+targeting it and GitHub will not reopen them.
+
+## Phase 1 — Gemini configuration (#26)
+
+### Temperature is fixed in the one door, not at nine call sites
+
+LiteLLM warns that a temperature below 1.0 on a Gemini 3 model causes infinite
+loops and degraded reasoning, and that temperature, top_p and top_k are
+deprecated from Gemini 3 on. Nine call sites pass a temperature — scoring,
+writing, classify, formmap, derivation, the variant judge, the fabrication
+self-check, the role-bullet rewrite and smoke — and **all nine route through
+`LLMGateway._completion`**, so that is where the rule lives. Nine copies of a
+provider rule is nine places for it to go stale.
+
+Matched on the major version (`^gemini/gemini-(\d+)` ≥ 3), not a list of model
+ids: `gemini-3.1-flash-lite` and a future `gemini-4-*` are both covered and
+`gemini-2.5-flash-lite` is correctly left alone. Anthropic is untouched.
+
+### The pin throws the caller's intent away, so the intent moved channel
+
+Every explicit temperature in this codebase is *below* the 0.2 default and
+means "be deterministic". Pinning to 1.0 discards that silently. So when the
+pin overrides a caller, a determinism sentence is appended to the system
+message — appended, never replacing, or every rule the call site set would go
+with it. A caller already at 1.0 gets nothing added, because nothing was taken.
+
+The one place temperature meant something else was the document **variant
+ladder** (`0.4 + 0.2 * index`), which existed so three drafts were not three
+phrasings of one sentence. Under the pin that ladder collapses into three
+samples at one setting — silently, because a variant cannot report that it had
+nothing to differ from. It is asked for in the prompt now ("this is draft 2 of
+3, open on a different part of the fit"), which survives the pin and works on
+providers that never had a ladder. The old expression is gone from the source,
+not merely unused: left in place it reads as the live mechanism to the next
+person, who would then tune a number Gemini discards.
+
+### Embeddings moved to Gemini, and it costs 7.5x per token
+
+`openai/text-embedding-3-small` → `gemini/gemini-embedding-001`, so the whole
+pipeline runs on one key. The reason is the failure mode, not the tidiness:
+**stage 1 does not fail loudly without its key — it silently stops ranking.**
+Every job scores, none is prefiltered, and nothing says so.
+
+The honest cost, since it is a real regression on one axis:
+
+| | OpenAI small | Gemini embedding-001 |
+|---|---|---|
+| per 1M input tokens | $0.02 | $0.15 |
+| stage 1, 200 jobs | $0.0015 | $0.0114 |
+| **total, 200 jobs** | **$0.1200** | **$0.1299** |
+| headroom under the $0.15 target | 20% | 13% |
+
+Verified live: 3072 dimensions returned, $0.000001 for one vector. The
+embedding cache is keyed on `(model, text)`, so the switch re-embeds rather
+than mixing 1536- and 3072-dimension vectors — no migration needed.
+
+`gemini-embedding-001` caps input at 2048 tokens; `scoring_embedding_char_budget`
+is 1400 characters (~350 tokens), so there is no truncation risk. Batch size 96
+is under Gemini's 100-per-batch limit.
+
+### smoke.tex
+
+`render_pdf` keeps the `.tex` beside the PDF on purpose — for a real build that
+is how you see what was typeset. The smoke check has no reader for it, so it
+now clears its own source, and `aux_files_left` means "render_pdf failed to
+clean up" instead of listing the source on every run. It reports `[]` now.
+
+### A test that could not fail
+
+`test_one_missing_key_still_blocks` made a model keyless by matching `"gemini"`
+in its id, on the premise that scoring and embeddings were different providers.
+The moment both moved to Gemini it made **none** of them keyless — and passed.
+Parametrised over *which model* is keyless instead. Fifth session running that
+this exact shape has appeared: a different condition satisfying the assertion
+instead of the one under test.
+
+The `doctor` remedy it guards was wrong too ("set GEMINI_API_KEY and
+OPENAI_API_KEY"), and now derives the setting name from the gateway's own
+provider map.
+
+**16 mutations, 16 killed.** Two survived first time, both the tests' fault:
+- *"embeddings go back to a second provider"* survived because the test asserted
+  on `settings.llm_model_embedding`, which reads this machine's `.env` — so it
+  was testing the developer's machine, not the shipped default. Now asserts on
+  `Settings.model_fields[...].default`.
+- *"stage 1 is priced at zero"* survived because the cost assertion was an upper
+  bound only, and zero satisfies it — which is exactly what a mispriced model
+  projects. Both bounds now.
+
+## Phase 2 — exact dropdown options in escalation (#27)
+
+### What was actually broken
+
+A closed-list field accepts exactly the strings it lists. Escalation sent the
+question as free text, so a reply of "two weeks" to a form offering "2 weeks"
+was stored, replayed, and then either failed at submit or submitted blank —
+with nothing anywhere saying so.
+
+### CAPTURE
+
+`formdom` reads every option's **label** and its **submitted value**, off the
+same element. They differ constantly; an option with no `value` attribute falls
+back to its own text, which is what the browser does.
+
+The bigger find was underneath: **radios and checkboxes were enumerated one
+field per element.** A three-way radio group arrived as three fields, each
+labelled with one of the *answers*, and the question itself was nowhere. That is
+how a closed list reached the answer bank as several unanswerable free-text
+questions. They are grouped by `name` now — by `name` specifically, not by
+whichever identifier attribute the adapter preferred, because a group's members
+share `name` and have different `id`s. A lone checkbox stays a consent tick, not
+a one-option list.
+
+Datalists are read (as the site's expected values, not as a closed list —
+a datalist still accepts free text). Single vs multi is recorded. An
+"Other (please specify)" option is marked as needing typed detail the answer
+bank cannot supply.
+
+Read through **locators, not one `evaluate()`**. The first version used a single
+JS expression per control so label and value came off the same element — and it
+broke the offline snapshot harness that replays captured HAR markup, which runs
+no JavaScript. That harness is the only way any of this is testable against real
+markup, and it caught the regression immediately. Per-option locators read both
+attributes off the same locator anyway.
+
+### CARRY, across a process boundary
+
+The abstention carries the option set **whatever the reason it abstained** —
+including `NO_MATCH`, which is the most common way a choice question is first
+seen and the branch that carried nothing at all. `resolve_answer` attaches them
+once, in a wrapper, rather than at six `Abstain(...)` construction sites.
+
+The parked job persists them (`job.needs_answer_choices`, `needs_answer_multi`,
+migration `69618fa3f706`). The pass that asks and the process that receives the
+reply are different ones; an in-memory list does not survive that gap, and
+without the options the bot cannot tell a valid reply from an invalid one.
+`run.py` deliberately no longer passes them alongside — `escalate_question`
+reads them back off the job, so the message and the reply validation look at the
+same list rather than two copies that can disagree.
+
+### ASK
+
+Inline keyboard, one button per option. Above 8 options, a numbered list that
+accepts the number. Multi-select accumulates taps and finishes on Done, with the
+selection travelling **in the callback data** (`c:<job>:<index>:<selection>`)
+rather than in a new table — the bot restarts, and a half-made selection that
+survives a restart is not worth a schema change.
+
+The message is sent **without Markdown**. This is not cosmetic: an option
+reading `3+ years_of_experience` renders as `3+ yearsofexperience` under
+Markdown, and the user would then reply with a string that matches no option.
+
+### STORE
+
+The answer bank's existing `choices` column — NULL on every seeded row since it
+was added — holds the full option set as `{label, value, is_free_text}`. The
+**value** goes in `answer_value`, so the value, the label and the option set are
+all on the row and cannot drift apart. Multi-select values join with `\x1f`
+(ASCII unit separator): a control character cannot appear in rendered option
+text, so it can never collide with a real value the way a comma or a pipe would.
+
+### REPLAY, and how often it will re-ask
+
+A stored answer that is not one of *this* form's options abstains and asks
+again. **The substring tier is gone.** It mapped an answer contained in exactly
+one option — so a stored "2 weeks" would have won against "1 - 2 weeks", and a
+one-to-two-week range is not two weeks. Yes/no synonyms still map, because
+exactly one option meaning yes is a normalisation, not a nearest-match guess.
+
+**How often this re-asks, as asked for.** There is no live data to measure
+against — 21 answer-bank rows, all blank, none with a recorded option set, and
+zero applications ever submitted. So this is reasoning, not measurement:
+
+- **Yes/no questions — near zero extra re-asks.** They are the bulk of
+  Australian screening questions, the option labels are near-universally
+  "Yes"/"No", and the yes/no tier covers case and synonym differences.
+- **Bounded ranges (notice period, years of experience, salary bands) — expect
+  a re-ask on most new employers.** These are exactly where wording varies
+  ("1-2 weeks" / "1 - 2 weeks" / "Two weeks or less" / "2 weeks"), and they are
+  also where a wrong answer is a false statement rather than a formatting slip.
+  Rough guess: **one re-ask per distinct wording**, so a handful over the first
+  weeks and then a long tail as new ATS vendors appear.
+- **Enumerations (state, citizenship status, how did you hear about us) — one
+  re-ask per employer family.** PageUp, Workday and Greenhouse each phrase these
+  differently.
+
+The cost of a re-ask is one Telegram tap. The cost of the alternative is a
+false statement about notice period or work rights on a real application, which
+is unrecoverable. That trade is why the substring tier is gone rather than
+tuned. If the re-ask rate turns out to be annoying in practice, the honest
+lever is a **per-question alias list on the bank row** — "these option sets are
+the same question" confirmed once by the user — not a similarity threshold.
+
+### DERIVE
+
+Already partly built: `facts.derive` took `choices` and abstained on an
+out-of-set answer. Two gaps closed.
+
+1. The model now sees the exact option strings one per line and is told it may
+   not invent a value outside the list, and the returned answer is resolved to
+   the option's **submitted value** rather than the label it echoed back.
+2. **A CONFIRMED derivation was not rechecked.** `DerivedAnswer` is cached by
+   question key, and different employers offer different lists, so a confirmed
+   "Yes" was being replayed verbatim onto a form offering
+   [Full, Provisional, None]. It abstains now — the same rule as the answer
+   bank's, in the one place it was missing.
+
+### Tests that could not fail
+
+**36 mutations, 36 killed.** Three reported NOT APPLIED first time (a target
+string I had written from memory rather than from the file, an em-dash, and a
+prompt line that had been reflowed). Each was re-targeted and re-run rather than
+assumed caught — a mutation that does not apply is indistinguishable from a
+test that killed it, which is the trap this project keeps hitting from the other
+direction.
+
+**`enumerate_form_fields` had no direct test of any kind** before this. It is
+the function that decides what the answer bank is asked about. It has 12 now,
+against a small fake DOM.
+
+## Phase 3 — full verification sweep (#28)
+
+| Check | Result |
+|---|---|
+| `uv run pytest` | **1187 passed**, 0 failed, **0 skipped** |
+| `uv run python -m backend.rehearsal` | **14/14 stages pass** (the doc says 12; telemetry and the question ledger added two last session) |
+| `uv run ruff check backend tests` | clean |
+| `uv run ruff format --check` | 128 files already formatted |
+| `uv run alembic check` | no new upgrade operations |
+| `alembic upgrade head` on a fresh database | 14 revisions applied, then `check` clean |
+| `npx tsc --noEmit` | clean |
+| `npm run build` | built, 322 kB / 95.8 kB gzipped |
+| `npx oxlint src` | exit 0; 8 warnings, all pre-existing (`set-state-in-effect` ×6, `purity` ×1) and none in a file this session touched |
+| `uv run python -m backend.smoke` | **5 passed, 0 failed, 1 skipped** |
+| `uv run python -m backend.doctor` | **2 blocking, 3 warnings** — see below |
+
+### Skips, and why
+
+**Zero skipped tests.** There is exactly one conditional skip marker in the
+suite — `needs_pdflatex` in `conftest.py`, on 16 tests — and pdflatex resolves
+here, so all 16 ran. That marker resolves `settings.pdflatex_path` rather than
+`shutil.which("pdflatex")`, which is the fix for the Windows session where the
+entire document suite skipped silently and the suite reported green.
+
+The one smoke skip is `session cookies`: **the browser profile holds no
+cookies** — nothing has ever signed in. Stated reason, correct behaviour.
+
+### What `doctor` says still blocks you
+
+```
+[BLOCK] API keys        no key for resume and cover letter prose
+                        (anthropic/claude-opus-5), reading unknown application
+                        forms (anthropic/claude-opus-5)
+[BLOCK] Facts           all 11 are blank — every screening question will park
+[WARN ] Campaign        'Adelaide starter' is active on the seeded placeholder terms
+[WARN ] Sessions        never checked — run an apply pass or wait for the 09:00 check
+[WARN ] Site knowledge  2 platform(s) still on shipped defaults
+```
+
+Two things improved since the last handoff without being mentioned anywhere:
+**a Profile now exists** (v2, Mohammed Isa) and **Chrome and the Playwright
+browsers are installed** — the smoke browser check launches real headful Chrome
+and loads a page. Both were listed as blockers in `HANDOFF.md` §5.
+
+Database as it stands: 235 jobs, 2 profile versions, 1 campaign, 21 answer-bank
+rows (**all blank**), 11 facts (**all blank**), 0 applications, 0 stage timings,
+0 question events, 10 LLM spend rows.
+
+### Safety-critical paths with no coverage — three found, three fixed
+
+The instruction was to assume there are more after `eligible_jobs`. There were.
+
+1. **`formdom.fill` had no test of any kind.** It is the last few inches — the
+   one place a resolved answer becomes something an employer receives. A wrong
+   string there is invisible everywhere upstream: the answer bank is right, the
+   escalation was right, and the form still gets the label where it wanted the
+   value. Six tests now, covering select-by-value, the label fallback,
+   multi-select, radio groups, checkbox groups and plain text.
+2. **`guardrails` campaign target goal had no test.** A campaign configured to
+   stop at N kept submitting past N, and the only sign would have been the
+   dashboard count going up. Two tests, including the off-by-one.
+3. **`guardrails` auth-check exception path had no test.** A predicate that
+   throws — expired context, closed browser — must read as "not signed in".
+   Untested, and the failure direction is the whole point: treating an exception
+   as anything else submits into a dead session, which on LinkedIn means a
+   silently discarded application.
+
+### One thing fixed rather than reported: `doctor` said "API keys OK"
+
+`check_llm_keys` inspected `llm_model_scoring` and `llm_model_embedding` only.
+Both are on the one Gemini key now, so both passed — while `llm_model_writing`
+and `llm_model_formmap` point at `anthropic/claude-opus-5` with no
+`ANTHROPIC_API_KEY` set. The setup report said **`[OK] API keys`** for a machine
+that cannot build a single document.
+
+A setup check that misses the thing blocking you is worse than no setup check,
+so this is a fix rather than a finding. All four configured models are checked
+now, each named with what it does, and the report has gone from
+"1 blocking: Facts" to "2 blocking: API keys, Facts" — which is the truth.
+
+**15 further mutations on those four, 15 killed** (after replacing one
+equivalent mutant — `values[0] if values else value` on a text field is
+behaviourally identical to `value` for every input a text field can carry, so
+its survival was not evidence of a missing test; recorded here rather than
+papered over with a contrived assertion).
+
+Coverage of the two modules: `formdom` 78% → 88%, `guardrails` 92% → 94%.
+Whole-backend line coverage is **81%**. The genuinely thin modules are all
+browser- or credential-bound and cannot be covered without a live session:
+`apply/har.py` 26%, `integrations/gmail.py` 28%, `integrations/scheduler.py`
+32%, `ats/adapters.py` 35%, `apply/canary.py` 36%, `apply/seek.py` 40%,
+`apply/session.py` 42%. `discovery/verify_seek.py` and `siteknowledge/__main__.py`
+are 0% and are both CLI entry points.
+
+### Frontend dead surface
+
+**No unreachable pages.** All 13 files in `pages/` have a route in `App.tsx`
+and a matching nav entry; the two lists are exact mirrors.
+
+**No unrendered components.** All 18 exported components across the five files
+in `components/` are rendered somewhere.
+
+**Nine API client methods are defined and never called**, and two backend
+routes have no client method at all. Verified by grepping each name across
+`frontend/src` — `api` is imported as a namespace object everywhere and never
+destructured, so the grep is exhaustive.
+
+| `api.ts` method | backend route |
+|---|---|
+| `profileVersions` | `GET /profile/versions` |
+| `getCampaign` | `GET /campaigns/{id}` |
+| `deleteCampaign` | `DELETE /campaigns/{id}` |
+| `createAnswer` | `POST /answers` |
+| `deleteAnswer` | `DELETE /answers/{id}` |
+| `deleteTemplate` | `DELETE /templates/{id}` |
+| `setJobStatus` | `POST /jobs/{id}/status` |
+| `healthSummary` | `GET /settings/health-summary` |
+| `jobDocuments` | `GET /documents/job/{id}` |
+
+Backend routes with no client method: `GET /settings/spend` (redundant — the
+same data is nested in `GET /settings`, which the Settings page does read) and
+`GET /documents/{id}` (the JSON metadata one; only `/file` is used).
+
+The pattern worth noticing: **the UI can create and edit campaigns, answers and
+templates but cannot delete any of them**, and cannot change a job's status.
+Those four look like affordances that were dropped, not endpoints nobody
+needed. Reported rather than built — adding nine UI features unasked is not a
+verification sweep.
+
+## Decisions taken without asking
+
+- **Enforced the Gemini temperature rule in `llm/client.py` rather than at the
+  nine call sites named in the brief.** Every one of them routes through that
+  function; nine copies of a provider rule is nine places for it to go stale.
+  The call sites that needed changing are the ones where temperature carried
+  meaning the pin destroys — which was exactly one, the variant ladder.
+- **`gemini/gemini-embedding-001`, not `gemini-embedding-2`.** The `-2` model is
+  $0.20 vs $0.15 per 1M and takes 8192 input tokens instead of 2048; neither
+  matters at a 1400-character budget, and `-001` is the GA id.
+- **Introduced a `Choice(label, value, is_free_text)` type** rather than a
+  parallel `choice_values` dict alongside the existing `choices: list[str]`.
+  Two lists for one concept is how they drift, and the value is the half that
+  reaches the employer. `as_choices()` reads all three shapes that exist in the
+  wild — `Choice` objects, stored dicts, and the bare strings every row written
+  before this holds — so no data migration was needed for the answer bank.
+- **Multi-select values join with `\x1f`.** A comma or a pipe can appear in an
+  option label; a control character cannot survive rendering. Marked with a
+  `ponytail:` comment naming the ceiling (store as JSON if a form ever submits
+  control characters).
+- **Eight options is the button/numbered-list threshold.** Telegram renders
+  twenty buttons; a phone does not render them readably, and an option the user
+  cannot read is one they cannot pick correctly.
+- **`AnswerOut` normalises stored option sets in a validator** rather than
+  migrating the column. A legacy row of bare strings still renders instead of
+  500ing the answer bank page, and a bare string is not lossy — a form with no
+  `value` attribute submits its own text, which is exactly what it expands to.
+- **The answer bank page edits a choice row as a dropdown of its own options.**
+  Out of scope strictly, but leaving a free-text box there is the same failure
+  the whole phase is about, one layer up.
+- **Reported the nine unused API client methods rather than wiring them.**
+
+## What broke, and what found it
+
+- **The offline snapshot harness caught the `evaluate()` regression instantly.**
+  The first version of the option reader used one JS expression per control;
+  `SnapshotPage` runs no JavaScript and refuses to fake a result, so the HAR
+  replay test failed rather than silently returning no options. That refusal is
+  why the bug was found in the same minute it was written.
+- **A test asserting on `settings.*` was testing this machine's `.env`.** It
+  passed against a mutation that reverted the shipped default, because the local
+  `.env` had already been updated. Same shape as the four previous sessions.
+- **An upper-bound-only cost assertion was satisfied by zero** — the exact value
+  an unpriced model projects.
+- **Nine unused API client methods and four missing delete affordances**, found
+  by an exhaustive grep rather than by any test. Nothing in the suite runs the
+  frontend.
+- **`doctor` reported "API keys OK" for a machine that cannot write a
+  document.** Found by writing down a claim about the code in this file and then
+  going back to check it was true before shipping it.
+- **A mutation survived because two settings ship pointing at the same model
+  id.** Dropping `llm_model_writing` from the doctor's check left the test green,
+  because `llm_model_formmap` names the same `claude-opus-5` and satisfied the
+  assertion instead. The test now pins four distinct ids first. Sixth instance
+  of this shape.
+
+## Still unverified
+
+Everything the previous sessions listed, unchanged, plus:
+
+- **No real dropdown has ever been enumerated.** Every option set in this
+  session's tests is a fixture or the captured Seek markup. Whether a live
+  Workday radio group exposes its legend where `_group_question` looks for it is
+  a question only a browser can answer.
+- **No inline keyboard has ever been rendered by Telegram.** `escalate_question`
+  builds the payload and the tests assert on it; `send_message` has never been
+  called with a `reply_markup` against the real API. The smoke test sends a
+  plain message, which does not exercise it.
+- **`handle_callback` has never been reached from a real button tap.**
+  `build_application` now registers a `CallbackQueryHandler`, and the bot has
+  never been run.
+- **The `\x1f` multi-select round trip has never touched a real form.**
+- **The determinism instruction has never been measured.** Whether saying "be
+  deterministic" to a Gemini 3 model at temperature 1.0 actually produces
+  stable output is an empirical question and this only makes the ask.
+- **The variant diversity prompt has never produced real variants.**
+  `llm_model_writing` is `anthropic/claude-opus-5` and there is no Anthropic key,
+  so every document variant in the rehearsal is a deterministic stub.
+
+## Needs you
+
+1. **Your facts.** All 11 fact rows are blank,
+   so every screening question parks — and now that escalation asks properly,
+   the loop will work the moment there is anything to derive from. The Facts
+   page, then `uv run python -m backend.facts preview`.
+
+2. **`LLM_MODEL_WRITING` and `LLM_MODEL_FORMMAP` point at Anthropic and there is
+   no Anthropic key.** Scoring, classification, derivation and embeddings all
+   run on the one Gemini key now; document writing and form mapping do not, and
+   would have failed on the first real attempt. **`doctor` reports this now** —
+   it did not before, and that is the one thing in this list I fixed rather than
+   reported (below). Either add `ANTHROPIC_API_KEY` or move those two settings
+   to Gemini; the second is a two-line `.env` edit, and the cost note in
+   `config.py` explains why writing is on the strong model.
+
+3. **`scoring_stage1_top_n` still does nothing.** Read once at `stage1.py:235`,
+   assigned to a local, never used again — while exposed as an editable setting
+   in the API and the dashboard. Unchanged from the last session because it is
+   your call whether a control disappears from your own dashboard. Either:
+   *delete* — drop it from `config.py`, `schemas.py` (two places) and
+   `core.py:519`; or *wire* — `return ranked[:top_n] if top_n else ranked` at
+   `stage1.py:249`. Three lines each way, one word from you.
+
+4. **The combined PDF's third fabrication self-check**, unchanged from last
+   session. Still ~$0.001 per job, still touches hard rule 3, still not safe as
+   the one-expression fix it looks like.
+
+5. **The HAR capture, still.** It now unblocks more than it did: every option
+   value, every group legend, and every derived selector in every knowledge file
+   is an unverified guess until a real page has been recorded.
+
+6. **Four things the dashboard cannot do**: delete a campaign, delete an answer,
+   delete a template, change a job's status. The endpoints exist and the client
+   methods exist; nothing calls them. Say the word and they are small.
+
+## Explicitly not done
+
+- `ALLOW_LIVE_SUBMIT` and `OUTBOUND_ENABLED` were not touched.
+- No recurring check-in, timer or poll was scheduled.
+- Pacing was not touched.
+- The nine unused API client methods were reported, not wired.
+- `scoring_stage1_top_n` was left exactly as it was, for the second session
+  running, because deleting a control from the dashboard is not mine to decide.

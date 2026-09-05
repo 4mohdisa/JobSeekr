@@ -819,3 +819,138 @@ def test_a_free_text_question_is_still_answered_as_free_text():
     reply = telegram.handle_command(f"/answer {job_id} 95000")
 
     assert "Job re-queued." in reply
+
+
+# =========================================================================
+# FILL — the last few inches, where the value actually lands on the form
+# =========================================================================
+#
+# This function had no test of any kind. It is the one place a resolved answer
+# becomes something an employer receives, so a wrong string here is invisible
+# everywhere upstream: the answer bank is right, the escalation was right, and
+# the form still gets the label where it wanted the value.
+
+
+class RecordingLocator:
+    """Records what was asked of it. ``fails`` makes select_option raise."""
+
+    def __init__(self, selector: str, page: RecordingPage) -> None:
+        self.selector = selector
+        self.page = page
+
+    @property
+    def first(self) -> RecordingLocator:
+        return self
+
+    def select_option(self, value=None, label=None, **kwargs):
+        if self.page.value_selection_fails and value is not None:
+            raise RuntimeError("no option with that value")
+        self.page.selected.append((self.selector, {"value": value, "label": label}))
+
+    def check(self) -> None:
+        self.page.checked.append(self.selector)
+
+    def fill(self, text: str) -> None:
+        self.page.filled.append((self.selector, text))
+
+
+class RecordingPage:
+    def __init__(self, *, value_selection_fails: bool = False) -> None:
+        self.value_selection_fails = value_selection_fails
+        self.selected: list[tuple[str, dict]] = []
+        self.checked: list[str] = []
+        self.filled: list[tuple[str, str]] = []
+
+    def locator(self, selector: str) -> RecordingLocator:
+        return RecordingLocator(selector, self)
+
+
+def test_a_dropdown_is_filled_by_the_submitted_value_not_the_label():
+    """The whole chain exists to get this one string right."""
+    from backend.apply.formdom import fill
+
+    page = RecordingPage()
+    field = FormField(
+        identifier="notice",
+        label="Notice period",
+        kind="select",
+        choices=choices(("1 - 2 weeks", "2")),
+    )
+
+    fill(page, field, "2")
+
+    assert page.selected == [
+        ("[name='notice'], [id='notice']", {"value": "2", "label": None})
+    ]
+
+
+def test_a_dropdown_falls_back_to_the_label_when_no_option_has_that_value():
+    """For an answer stored before option values were captured.
+
+    The fallback is the OLD behaviour, kept for old rows — not a second guess:
+    it still asks the browser for an exact option, it just asks by visible text.
+    """
+    from backend.apply.formdom import fill
+
+    page = RecordingPage(value_selection_fails=True)
+    field = FormField(identifier="notice", label="Notice", kind="select")
+
+    fill(page, field, "1 - 2 weeks")
+
+    assert page.selected == [
+        ("[name='notice'], [id='notice']", {"value": None, "label": "1 - 2 weeks"})
+    ]
+
+
+def test_a_multi_select_dropdown_is_filled_with_every_chosen_value():
+    from backend.apply.formdom import fill
+
+    page = RecordingPage()
+    field = FormField(
+        identifier="langs", label="Languages", kind="select", multi_select=True
+    )
+
+    fill(page, field, MULTI_VALUE_SEPARATOR.join(["py", "sql"]))
+
+    assert page.selected[0][1]["value"] == ["py", "sql"]
+
+
+def test_a_radio_group_checks_the_member_carrying_that_value():
+    from backend.apply.formdom import fill
+
+    page = RecordingPage()
+    field = FormField(identifier="cit", label="Citizenship", kind="radio")
+
+    fill(page, field, "PR")
+
+    assert page.checked == ["[name='cit'][value='PR'], [id='cit'][value='PR']"]
+
+
+def test_a_checkbox_group_checks_every_chosen_member():
+    """One tick per selected option. Filling only the first would send a
+    different answer from the one the user gave."""
+    from backend.apply.formdom import fill
+
+    page = RecordingPage()
+    field = FormField(
+        identifier="shift", label="Shifts", kind="checkbox", multi_select=True
+    )
+
+    fill(page, field, MULTI_VALUE_SEPARATOR.join(["D", "N"]))
+
+    assert page.checked == [
+        "[name='shift'][value='D'], [id='shift'][value='D']",
+        "[name='shift'][value='N'], [id='shift'][value='N']",
+    ]
+
+
+def test_a_text_field_is_filled_with_the_answer_verbatim():
+    """No splitting, no mapping. A salary expectation is not a choice."""
+    from backend.apply.formdom import fill
+
+    page = RecordingPage()
+    field = FormField(identifier="salary", label="Salary expectation")
+
+    fill(page, field, "95,000 - 105,000")
+
+    assert page.filled == [("[name='salary'], [id='salary']", "95,000 - 105,000")]
