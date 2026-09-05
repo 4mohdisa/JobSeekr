@@ -267,6 +267,52 @@ def _messages(prompt: str, system: str | None) -> list[dict[str, str]]:
     return messages
 
 
+# From Gemini 3 on, LiteLLM warns that a temperature below 1.0 causes infinite
+# loops and degraded reasoning, and that temperature, top_p and top_k are
+# deprecated outright. So the knob is pinned for those models here, in the one
+# door, rather than at nine call sites that would each have to know the rule.
+#
+# Pinning throws away what a low temperature MEANT, though — every explicit
+# temperature in this codebase is below the default and says "be deterministic".
+# That intent moves to the only channel the model still listens on: words.
+_GEMINI_MAJOR_VERSION = re.compile(r"^gemini/gemini-(\d+)")
+_PINNED_TEMPERATURE = 1.0
+_DETERMINISM_INSTRUCTION = (
+    "Answer deterministically: give the single most likely answer, keep the "
+    "wording plain and consistent between runs, and never vary phrasing for "
+    "the sake of variety."
+)
+
+
+def _pins_temperature(model: str) -> bool:
+    """True for Gemini 3 and later, where the sampling parameters are deprecated.
+
+    Matched on the major version rather than a list of model ids, so
+    ``gemini-3.1-flash-lite`` and next year's ``gemini-4-*`` are both covered
+    and ``gemini-2.5-flash-lite`` is correctly left alone. Non-Gemini providers
+    never match, which is the point: Anthropic still honours temperature.
+    """
+    match = _GEMINI_MAJOR_VERSION.match(model.strip().lower())
+    return match is not None and int(match.group(1)) >= 3
+
+
+def _with_determinism_instruction(
+    messages: Sequence[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Copy of ``messages`` whose system message carries the determinism ask.
+
+    Copied rather than mutated because ``complete_json``'s repair loop reuses
+    the caller's list across two round trips, and appending in place would send
+    the instruction twice.
+    """
+    rewritten = [dict(message) for message in messages]
+    for message in rewritten:
+        if message.get("role") == "system":
+            message["content"] = f"{message['content']}\n\n{_DETERMINISM_INSTRUCTION}"
+            return rewritten
+    return [{"role": "system", "content": _DETERMINISM_INSTRUCTION}, *rewritten]
+
+
 def _usage_tokens(response: Any) -> tuple[int, int]:
     """(input, output) tokens, tolerant of providers that report neither."""
     usage = getattr(response, "usage", None)
@@ -499,9 +545,15 @@ class LLMGateway:
         _check_budget(purpose)
         _warn_if_unconfigured_model(model)
 
+        sent = list(messages)
+        if _pins_temperature(model):
+            if temperature < _PINNED_TEMPERATURE:
+                sent = _with_determinism_instruction(sent)
+            temperature = _PINNED_TEMPERATURE
+
         kwargs: dict[str, Any] = {
             "model": model,
-            "messages": list(messages),
+            "messages": sent,
             "temperature": temperature,
             "timeout": settings.llm_timeout_seconds,
         }

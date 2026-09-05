@@ -55,17 +55,31 @@ def test_both_keys_present_is_ok(monkeypatch):
     assert doctor.check_llm_keys().status == OK
 
 
-def test_one_missing_key_still_blocks(monkeypatch):
-    """Scoring and embeddings are different providers.
+@pytest.mark.parametrize("without", ["llm_model_scoring", "llm_model_embedding"])
+def test_a_key_missing_for_either_model_blocks(monkeypatch, without):
+    """Both models need a key, and it is not enough that one of them has it.
 
-    One key working says nothing about the other, and stage 1 failing is a
-    silent total loss of ranking rather than a visible error.
+    Parametrised over which model is keyless rather than over provider names:
+    the two used to be OpenAI and Gemini, and a test that made one keyless by
+    matching "gemini" in the model id silently stopped making ANY of them
+    keyless the day both moved to Gemini — and passed.
     """
+    keyless = getattr(settings, without)
     monkeypatch.setattr(
         "backend.llm.client._api_key_for",
-        lambda model: "key" if "gemini" in model else None,
+        lambda model: None if model == keyless else "key",
     )
-    assert doctor.check_llm_keys().status == BLOCK
+    finding = doctor.check_llm_keys()
+
+    assert finding.status == BLOCK
+    assert keyless in finding.detail or "scoring or embeddings" in finding.detail
+
+
+def test_the_remedy_names_the_setting_to_fill_in(monkeypatch):
+    """ "Set the matching key" is not an instruction anyone can follow."""
+    monkeypatch.setattr("backend.llm.client._api_key_for", lambda model: None)
+
+    assert "GEMINI_API_KEY" in doctor.check_llm_keys().fix
 
 
 def test_no_telegram_warns_rather_than_blocks(monkeypatch):

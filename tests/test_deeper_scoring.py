@@ -307,6 +307,77 @@ def test_all_variants_fabricating_still_fails_the_build(monkeypatch):
 
 
 # =========================================================================
+# Variant diversity, asked for in words
+# =========================================================================
+
+
+def _prompts_for_variants(monkeypatch, count: int) -> list[str]:
+    """Generate one slot and return the prompt each variant was given."""
+    from backend.documents import build as build_module
+
+    seen: list[str] = []
+
+    def spy(prompt, **kwargs):
+        seen.append(prompt)
+        return f"Draft {len(seen)}."
+
+    monkeypatch.setattr(build_module.llm, "complete", spy)
+    monkeypatch.setattr(build_module, "validate_no_fabrication", lambda *a, **k: [])
+    monkeypatch.setattr(
+        build_module, "_pick_best", lambda candidates, **k: candidates[0]
+    )
+    monkeypatch.setattr(settings, "document_variants", count)
+
+    build_module.generate_ai_slots(
+        [slot()], profile=object(), job=FakeJob(), profile_text="SQL at Acme"
+    )
+    return seen
+
+
+def test_each_draft_is_told_which_draft_it_is(monkeypatch):
+    """Diversity across the variants used to be a rising temperature.
+
+    Gemini 3 pins temperature to 1.0, which would collapse the ladder into three
+    samples of one setting — silently, because a variant cannot report that it
+    had nothing to differ from. Asked for in the prompt it survives the pin and
+    works on providers that never had the ladder.
+    """
+    prompts = _prompts_for_variants(monkeypatch, 3)
+
+    assert len(prompts) == 3
+    assert "draft 1 of 3" in prompts[0]
+    assert "draft 2 of 3" in prompts[1]
+    assert "draft 3 of 3" in prompts[2]
+
+
+def test_the_drafts_are_not_given_identical_prompts(monkeypatch):
+    """Three identical prompts at one temperature is the thing being fixed."""
+    prompts = _prompts_for_variants(monkeypatch, 3)
+
+    assert len(set(prompts)) == 3
+
+
+def test_a_single_draft_is_not_asked_to_differ_from_anything(monkeypatch):
+    """document_variants=1 disables the comparison; there is nothing to vary from."""
+    prompts = _prompts_for_variants(monkeypatch, 1)
+
+    assert len(prompts) == 1
+    assert "draft 1 of 1" not in prompts[0]
+
+
+def test_no_call_site_still_ladders_the_temperature():
+    """The ladder is gone from the source, not merely unused at runtime.
+
+    Left in place it would read as the live mechanism to the next person, who
+    would then tune a number that Gemini discards.
+    """
+    from pathlib import Path
+
+    source = Path("backend/documents/build.py").read_text(encoding="utf-8")
+    assert "0.2 * index" not in source
+
+
+# =========================================================================
 # The fabrication self-check in the parse gate
 # =========================================================================
 

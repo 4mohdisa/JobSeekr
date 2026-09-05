@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     llm_model_classify: str = "gemini/gemini-3.1-flash-lite"
     llm_model_writing: str = "anthropic/claude-opus-5"
     llm_model_formmap: str = "anthropic/claude-opus-5"
-    llm_model_embedding: str = "openai/text-embedding-3-small"
+    llm_model_embedding: str = "gemini/gemini-embedding-001"
 
     llm_monthly_cap_usd: float = 25.0
     # Warn (Telegram) once spend crosses this fraction of the cap.
@@ -176,6 +176,12 @@ class Settings(BaseSettings):
         # switching to it for a saving that expires.
         "gemini/gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40},
         "gemini/gemini-3.1-flash": {"input": 0.50, "output": 3.00},
+        # Default for stage-1 prefiltering. Dearer per token than OpenAI's
+        # small model, and chosen anyway so the whole pipeline runs on one key:
+        # a second provider is a second thing to be unset, and stage 1 silently
+        # not running is the most expensive failure here — it does not error,
+        # it just stops ranking.
+        "gemini/gemini-embedding-001": {"input": 0.15, "output": 0.0},
         "openai/text-embedding-3-small": {"input": 0.02, "output": 0.0},
         "openai/text-embedding-3-large": {"input": 0.13, "output": 0.0},
     }

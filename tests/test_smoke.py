@@ -239,6 +239,61 @@ def test_the_module_never_submits_anything():
         assert forbidden not in code, f"smoke.py references {forbidden}"
 
 
+# =========================================================================
+# The pdflatex check tidies up after itself
+# =========================================================================
+
+
+def _stub_render(monkeypatch, tmp_path, *, extra: tuple[str, ...] = ()):
+    """Run check_pdflatex against a directory that survives the call."""
+    import contextlib
+    import pathlib
+    import tempfile
+
+    from backend.documents import build as build_module
+
+    @contextlib.contextmanager
+    def fixed_directory(*args, **kwargs):
+        yield str(tmp_path)
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", fixed_directory)
+
+    def fake_render(source, out_dir, stem):
+        directory = pathlib.Path(out_dir)
+        (directory / f"{stem}.tex").write_text(source, encoding="utf-8")
+        for suffix in extra:
+            (directory / f"{stem}{suffix}").write_text("x", encoding="utf-8")
+        pdf = directory / f"{stem}.pdf"
+        pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
+        return pdf
+
+    monkeypatch.setattr(build_module, "render_pdf", fake_render)
+    return smoke.check_pdflatex()
+
+
+def test_the_pdflatex_check_deletes_the_source_it_wrote(monkeypatch, tmp_path):
+    """render_pdf keeps the .tex beside the PDF, which is right for a real build.
+
+    A smoke test has no reader for it, so it clears its own source rather than
+    reporting it as a leftover on every run.
+    """
+    result = _stub_render(monkeypatch, tmp_path)
+
+    assert result.status == "pass"
+    assert not (tmp_path / "smoke.tex").exists(), "the source was left on disk"
+
+
+def test_a_real_leftover_is_still_reported(monkeypatch, tmp_path):
+    """The list has to keep meaning "render_pdf failed to clean up".
+
+    Suppressing the .tex from the report rather than deleting it would pass the
+    test above and quietly blind this one.
+    """
+    result = _stub_render(monkeypatch, tmp_path, extra=(".aux",))
+
+    assert result.facts["aux_files_left"] == ["smoke.aux"]
+
+
 def test_the_browser_check_loads_a_blank_page_not_a_job_board():
     """Loading a real board from a smoke test puts an unexplained hit in their logs.
 
