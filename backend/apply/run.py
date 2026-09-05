@@ -150,7 +150,11 @@ def eligible_jobs(
     if platform is not None:
         query = query.where(Job.source == platform)
 
-    applied = {row.job_id for row in session.exec(select(Application)).all()}
+    # The job ids only. This hydrated every Application row — JSON columns,
+    # enums and all — to read one integer off each. Kept as a set rather than
+    # folded into the status filter above: an application whose job status was
+    # reset by hand is still an application, and hard rule 5 is one per job ever.
+    applied = set(session.exec(select(Application.job_id)).all())
 
     out: list[tuple[Job, Campaign | None, float | None]] = []
     for job in session.exec(query).all():

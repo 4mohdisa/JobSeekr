@@ -534,3 +534,30 @@ def test_draining_resets_the_tally() -> None:
 
     assert drain_resolutions() == (1, 0)
     assert drain_resolutions() == (0, 0)
+
+
+# --------------------------------------------------------------------------
+# Waste found by measuring, and fixed
+# --------------------------------------------------------------------------
+
+
+def test_a_blank_fact_is_not_a_candidate(session: Session) -> None:
+    """It is not evidence, and offering it costs a model call to be told so.
+
+    The filter existed in the dry-run preview only, so the preview said "the
+    fact is blank" while the live path paid to rediscover it.
+    """
+    from backend import facts
+    from backend.models import FactCategory
+
+    facts.set_fact(session, key="licence", text="   ", category=FactCategory.LICENCE)
+    facts.set_fact(
+        session,
+        key="police_check",
+        text="Cleared March 2025",
+        category=FactCategory.CHECKS,
+    )
+    session.flush()
+
+    assert facts.facts_for(session, FactCategory.LICENCE) == []
+    assert len(facts.facts_for(session, FactCategory.CHECKS)) == 1

@@ -161,7 +161,11 @@ def facts_for(
     return [
         row
         for row in rows
-        if row.jurisdiction is None or region is None or row.jurisdiction == region
+        # A blank fact is not evidence. The filter was in preview_all only, so
+        # the dry-run preview said "the fact is blank" while the live path spent
+        # a model call per blank row to be told the same thing.
+        if row.text.strip()
+        and (row.jurisdiction is None or region is None or row.jurisdiction == region)
     ]
 
 
@@ -639,11 +643,7 @@ def preview_all(
             previews.append(entry)
             continue
 
-        candidates = [
-            fact
-            for fact in facts_for(session, row.fact_category, region=region)
-            if fact.text.strip()
-        ]
+        candidates = facts_for(session, row.fact_category, region=region)
         if not candidates:
             entry.reason = f"the {row.fact_category.value} fact is blank"
             previews.append(entry)
