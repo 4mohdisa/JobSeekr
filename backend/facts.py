@@ -49,6 +49,7 @@ from typing import Any
 from sqlmodel import Session, select
 
 from backend.config import settings
+from backend.llm.client import llm
 from backend.logging_setup import get_logger
 from backend.models import (
     AnswerType,
@@ -62,12 +63,15 @@ log = get_logger(__name__)
 
 __all__ = [
     "Derivation",
+    "Preview",
     "derive",
     "fact_hash",
     "facts_for",
     "invalidated_by",
     "on_confirmation_needed",
     "pending_confirmations",
+    "preview_all",
+    "render_preview",
     "resolve_from_facts",
     "set_fact",
     "stale_derivations",
@@ -269,8 +273,6 @@ def derive(
     None is the common and correct outcome. The caller abstains on it, which
     parks the job and asks — the existing loop, unchanged.
     """
-    from backend.llm.client import complete_json
-
     prompt = "\n".join(
         [
             f"FACT (the applicant's own words, verbatim):\n{fact.text}",
@@ -282,7 +284,11 @@ def derive(
     )
 
     try:
-        result = complete_json(
+        # Through the module-level `llm`, not an inline import. That object is
+        # the seam the rehearsal and the tests replace with a stub; an inline
+        # import bypasses it and makes a real call. The same mistake in
+        # documents/verify.py took the suite from 27 seconds to 3.5 minutes.
+        result = llm.complete_json(
             prompt,
             model=settings.llm_model_classify,
             purpose="fact_derivation",
@@ -498,3 +504,193 @@ def pending_confirmations(session: Session) -> list[DerivedAnswer]:
             select(DerivedAnswer).where(DerivedAnswer.confirmed_at.is_(None))  # type: ignore[union-attr]
         ).all()
     )
+
+
+# --------------------------------------------------------------------------
+# Preview — read all 21 at once, before any of them is cached
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class Preview:
+    """What the derivation would do for one question. Nothing is written."""
+
+    question: str
+    category: FactCategory | None
+    fact_key: str | None = None
+    answer: str | None = None
+    reasoning: str = ""
+    abstained: bool = True
+    reason: str = ""
+
+    @property
+    def status(self) -> str:
+        return "ANSWER" if not self.abstained else "ABSTAIN"
+
+
+def preview_all(
+    session: Session, *, region: Region | None = None, limit: int | None = None
+) -> list[Preview]:
+    """Run the real derivation against every seeded question. Writes nothing.
+
+    WHY THIS EXISTS
+        A derivation is confirmed once and then cached forever, which is the
+        point — the user is asked at most once per question. It also means a
+        wrong confirmation is durable: a plausible misreading of a licence
+        becomes a legal declaration on every later application, and the moment
+        it would be caught is the moment it is least likely to be read
+        carefully, one question at a time over Telegram.
+
+        This shows all of them at once, before any is cached, so a bad reading
+        is caught by comparing it against its neighbours rather than in
+        isolation.
+
+    Deliberately does NOT write a DerivedAnswer row. A entry that left
+    proposals behind would be indistinguishable from the real path, and running
+    it twice would double them.
+    """
+    from backend.models import AnswerBank
+    from backend.seed import ANSWER_BANK_SEEDS
+
+    # A REGEX row's question_pattern is a regex, not a question. The real flow
+    # never has this problem — the question comes from the form field's own
+    # label and the bank row is used only for routing — but a entry has no
+    # form, and handing a regex to the model produces nonsense delivered with
+    # the confidence of an answer. The seeds carry a plain-English rendering
+    # for exactly this.
+    examples = {
+        seed.question_pattern: seed.example_question
+        for seed in ANSWER_BANK_SEEDS
+        if seed.example_question
+    }
+
+    rows = [
+        row for row in session.exec(select(AnswerBank)).all() if row.campaign_id is None
+    ]
+    rows.sort(key=lambda row: row.fact_category.value if row.fact_category else "zz")
+    if limit:
+        rows = rows[:limit]
+
+    previews: list[Preview] = []
+    for row in rows:
+        question = examples.get(row.question_pattern) or row.question_pattern
+        entry = Preview(question=question, category=row.fact_category)
+
+        if row.fact_category is None:
+            entry.reason = "no fact category — nothing to consult"
+            previews.append(entry)
+            continue
+
+        candidates = [
+            fact
+            for fact in facts_for(session, row.fact_category, region=region)
+            if fact.text.strip()
+        ]
+        if not candidates:
+            entry.reason = f"the {row.fact_category.value} fact is blank"
+            previews.append(entry)
+            continue
+
+        for fact in candidates:
+            derivation = derive(
+                fact,
+                question,
+                choices=list(row.choices or []) or None,
+                answer_type=row.answer_type,
+            )
+            if derivation is not None:
+                entry.fact_key = fact.key
+                entry.answer = derivation.answer
+                entry.reasoning = derivation.reasoning
+                entry.abstained = False
+                break
+        else:
+            entry.fact_key = candidates[0].key
+            entry.reason = "no fact supports an answer"
+
+        previews.append(entry)
+
+    log.info(
+        "derivation_preview",
+        questions=len(previews),
+        answered=sum(1 for p in previews if not p.abstained),
+        abstained=sum(1 for p in previews if p.abstained),
+        note="nothing was written",
+    )
+    return previews
+
+
+def render_preview(previews: list[Preview]) -> str:
+    """The table. Abstentions are shown with their reason, not omitted.
+
+    An abstention is the more important row: it is a screening question no
+    application can answer, and the reason says whether that is a blank fact or
+    a fact that genuinely does not cover it.
+    """
+    lines = [
+        "",
+        "DERIVATION PREVIEW — nothing written, nothing confirmed",
+        "=" * 76,
+    ]
+    for entry in previews:
+        lines.append("")
+        lines.append(f"  [{entry.status}] {entry.question[:68]}")
+        if entry.category:
+            source = f"{entry.category.value}"
+            if entry.fact_key:
+                source += f" -> {entry.fact_key}"
+            lines.append(f"           from: {source}")
+        if entry.answer:
+            lines.append(f"           answer: {entry.answer}")
+        if entry.reasoning:
+            lines.append(f"           because: {entry.reasoning[:200]}")
+        if entry.reason:
+            lines.append(f"           reason: {entry.reason}")
+
+    answered = sum(1 for p in previews if not p.abstained)
+    lines.append("")
+    lines.append("=" * 76)
+    lines.append(
+        f"{answered} of {len(previews)} would be answered; "
+        f"{len(previews) - answered} would abstain and ask."
+    )
+    lines.append("Read each answer against the fact it came from before confirming.")
+    lines.append("Nothing here has been written or cached.")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI wiring
+    import argparse
+
+    from backend.db import session_scope
+    from backend.logging_setup import configure_logging
+
+    parser = argparse.ArgumentParser(prog="python -m backend.facts")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    preview_parser = sub.add_parser(
+        "preview", help="dry-run the derivation against every seeded question"
+    )
+    preview_parser.add_argument(
+        "--region",
+        default=None,
+        choices=["AU", "NZ"],
+        help="jurisdiction to derive for",
+    )
+    preview_parser.add_argument("--limit", type=int, default=None)
+
+    args = parser.parse_args(argv)
+    configure_logging()
+
+    with session_scope() as session:
+        previews = preview_all(
+            session,
+            region=Region(args.region) if args.region else None,
+            limit=args.limit,
+        )
+    print(render_preview(previews))
+    return 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())

@@ -112,7 +112,8 @@ def test_a_specific_fact_can_answer_no_for_what_it_excludes(
 ):
     """Class C is not MR. The fact states the class, so No is supported."""
     monkeypatch.setattr(
-        "backend.llm.client.complete_json",
+        facts.llm,
+        "complete_json",
         lambda *a, **k: {
             "supported": True,
             "answer": "No",
@@ -132,7 +133,8 @@ def test_a_specific_fact_can_answer_no_for_what_it_excludes(
 def test_a_silent_fact_abstains_rather_than_answering_no(session, licence, monkeypatch):
     """THE rule. Silence is not denial, and a wrong No costs an interview."""
     monkeypatch.setattr(
-        "backend.llm.client.complete_json",
+        facts.llm,
+        "complete_json",
         lambda *a, **k: {
             "supported": False,
             "answer": "",
@@ -166,7 +168,8 @@ def test_an_unsupported_result_is_ignored_even_when_it_carries_an_answer(
     # and the uncertainty check all pass — so the `supported` flag is the only
     # thing standing between this and "No" on a real application.
     monkeypatch.setattr(
-        "backend.llm.client.complete_json",
+        facts.llm,
+        "complete_json",
         lambda *a, **k: {
             "supported": False,
             "answer": "No",
@@ -190,7 +193,8 @@ def test_any_stated_uncertainty_abstains(session, licence, monkeypatch):
     uncertainty — using the answer anyway would be guessing with extra steps.
     """
     monkeypatch.setattr(
-        "backend.llm.client.complete_json",
+        facts.llm,
+        "complete_json",
         lambda *a, **k: {
             "supported": True,
             "answer": "Yes",
@@ -207,7 +211,8 @@ def test_any_stated_uncertainty_abstains(session, licence, monkeypatch):
 def test_an_answer_outside_the_offered_choices_abstains(session, licence, monkeypatch):
     """Coercing it would be guessing which option the model meant."""
     monkeypatch.setattr(
-        "backend.llm.client.complete_json",
+        facts.llm,
+        "complete_json",
         lambda *a, **k: {
             "supported": True,
             "answer": "Class C",
@@ -225,7 +230,7 @@ def test_a_model_failure_is_an_abstention_not_a_crash(session, licence, monkeypa
     def boom(*a, **k):
         raise RuntimeError("gateway down")
 
-    monkeypatch.setattr("backend.llm.client.complete_json", boom)
+    monkeypatch.setattr(facts.llm, "complete_json", boom)
     assert facts.derive(licence, "Do you hold a licence?") is None
 
 
@@ -236,7 +241,8 @@ def test_a_model_failure_is_an_abstention_not_a_crash(session, licence, monkeypa
 
 def confirmable(monkeypatch, answer="Yes"):
     monkeypatch.setattr(
-        "backend.llm.client.complete_json",
+        facts.llm,
+        "complete_json",
         lambda *a, **k: {
             "supported": True,
             "answer": answer,
