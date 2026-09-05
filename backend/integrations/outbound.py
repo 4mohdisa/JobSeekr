@@ -39,7 +39,14 @@ from backend.models import Campaign, Document, Job, Profile, Template, TemplateK
 
 log = get_logger(__name__)
 
-__all__ = ["OutboundDraft", "draft_for_job", "send_draft"]
+__all__ = [
+    "OutboundDraft",
+    "approve_and_send",
+    "draft_for_job",
+    "record_draft",
+    "send_draft",
+    "skip_message",
+]
 
 
 class OutboundRefused(RuntimeError):
@@ -200,6 +207,16 @@ def send_draft(draft: OutboundDraft, *, approved_by: str) -> bool:
             "send_draft requires an explicit approval; there is no auto-send"
         )
 
+    # The master switch, checked here rather than at the call site so there is
+    # exactly one place that can send and exactly one place that can be off.
+    # Same shape as ALLOW_LIVE_SUBMIT and for the same reason: an approval
+    # given before the feature was enabled must not become a send afterwards.
+    if not settings.outbound_enabled:
+        raise OutboundRefused(
+            "OUTBOUND_ENABLED is false — this system cannot send email until "
+            "you turn it on"
+        )
+
     if not settings.gmail_address or not settings.gmail_app_password:
         raise OutboundRefused(
             "GMAIL_ADDRESS and GMAIL_APP_PASSWORD are required to send"
@@ -244,3 +261,127 @@ def send_draft(draft: OutboundDraft, *, approved_by: str) -> bool:
         attachments=[p.name for p in draft.attachments],
     )
     return True
+
+
+# --------------------------------------------------------------------------
+# One message per job, enforced
+# --------------------------------------------------------------------------
+
+
+def record_draft(session: Session, draft: OutboundDraft) -> Any:
+    """Store a draft, or return the existing row for this job.
+
+    "One message per job, ever" was one of the three properties this module
+    rests on and the only one that was documented rather than enforced —
+    nothing recorded what had been sent, so nothing could refuse a second.
+    UNIQUE(job_id) is the enforcement, mirroring UNIQUE(job_id) on applications.
+
+    Returns the existing row unchanged when there is one, whatever its status.
+    A SENT job must not be re-drafted, and neither must a SKIPPED one: declining
+    to write to an employer is a decision, and re-offering the draft next week
+    would quietly overturn it.
+    """
+    from backend.models import OutboundMessage, OutboundStatus
+
+    existing = session.exec(
+        select(OutboundMessage).where(OutboundMessage.job_id == draft.job_id)
+    ).first()
+    if existing is not None:
+        log.info(
+            "outbound_already_exists",
+            job_id=draft.job_id,
+            status=existing.status.value,
+            note="one message per job; not re-drafting",
+        )
+        return existing
+
+    row = OutboundMessage(
+        job_id=draft.job_id,
+        to_address=draft.to_address,
+        subject=draft.subject,
+        body=draft.body,
+        attachments=[path.name for path in draft.attachments],
+        status=OutboundStatus.DRAFTED,
+    )
+    session.add(row)
+    log.info("outbound_drafted", job_id=draft.job_id, to=draft.to_address)
+    return row
+
+
+def approve_and_send(session: Session, message_id: int, *, approved_by: str) -> bool:
+    """Send a stored draft. The only path from DRAFTED to SENT.
+
+    Rebuilds the draft from the stored row rather than trusting a caller to
+    hand one over, so the recipient that gets used is the one recorded when the
+    ad was read — not something an API request supplied.
+    """
+    from backend.models import OutboundMessage, OutboundStatus
+
+    row = session.get(OutboundMessage, message_id)
+    if row is None:
+        raise OutboundRefused(f"no outbound message {message_id}")
+    if row.status is not OutboundStatus.DRAFTED:
+        raise OutboundRefused(
+            f"message {message_id} is {row.status.value}; one message per job"
+        )
+
+    documents = _attachment_paths(session, row.job_id, row.attachments)
+
+    sent = send_draft(
+        OutboundDraft(
+            job_id=row.job_id,
+            to_address=row.to_address,
+            subject=row.subject,
+            body=row.body,
+            attachments=documents,
+        ),
+        approved_by=approved_by,
+    )
+    if not sent:
+        # Left DRAFTED on purpose: a transport failure is not a decision, and
+        # the user may retry. Marking it SENT would consume the one slot this
+        # job gets without anything having arrived.
+        return False
+
+    row.status = OutboundStatus.SENT
+    row.approved_by = approved_by
+    row.sent_at = datetime.now(UTC)
+    session.add(row)
+    return True
+
+
+def skip_message(session: Session, message_id: int) -> Any:
+    """The user declined. Terminal, and it keeps the job's one slot."""
+    from backend.models import OutboundMessage, OutboundStatus
+
+    row = session.get(OutboundMessage, message_id)
+    if row is None:
+        raise OutboundRefused(f"no outbound message {message_id}")
+    if row.status is OutboundStatus.SENT:
+        raise OutboundRefused("that message has already been sent")
+
+    row.status = OutboundStatus.SKIPPED
+    session.add(row)
+    log.info("outbound_skipped", job_id=row.job_id)
+    return row
+
+
+def _attachment_paths(session: Session, job_id: int, names: list[Any]) -> list[Path]:
+    """Resolve stored filenames back to gated documents on disk.
+
+    Re-checks the parse gate rather than trusting that it passed when the draft
+    was written. A document can be rebuilt between drafting and approval, and
+    hard rule 3 is about what is attached at send time, not what was attached
+    when someone first looked at it.
+    """
+    wanted = {str(name) for name in names}
+    paths: list[Path] = []
+    for document in session.exec(
+        select(Document).where(Document.job_id == job_id)
+    ).all():
+        if not document.parse_check_passed:
+            continue
+        path = Path(document.path)
+        if path.name in wanted:
+            paths.append(path)
+    return paths

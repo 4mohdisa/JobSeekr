@@ -16,6 +16,7 @@ import type {
   Fact,
   Job,
   JobDetail,
+  OutboundMessage,
   Page,
   Preference,
   Profile,
@@ -152,6 +153,18 @@ export const api = {
 
   // --------------------------------------------------------------- sessions
   listSessions: () => request<SessionHealth[]>("/sessions"),
+
+  // --------------------------------------------------------------- outbound
+  listOutbound: () => request<OutboundMessage[]>("/outbound"),
+  editOutbound: (id: number, payload: { subject: string; body: string }) =>
+    request<OutboundMessage>(`/outbound/${id}`, { method: "PUT", body: body(payload) }),
+  sendOutbound: (id: number, approvedBy: string) =>
+    request<OutboundMessage>(`/outbound/${id}/send`, {
+      method: "POST",
+      body: body({ approved_by: approvedBy }),
+    }),
+  skipOutbound: (id: number) =>
+    request<OutboundMessage>(`/outbound/${id}/skip`, { method: "POST" }),
 
   // -------------------------------------------------------------- templates
   listTemplates: () => request<Template[]>("/templates"),

@@ -44,17 +44,11 @@ KNOWN_UNREACHABLE: dict[str, str] = {
     # Wiring it is one call in apply/run.py after a submitted application, plus
     # the approval token send_draft already requires. Reviewed 2026-09-03 and
     # left off on purpose.
-    "draft_for_job": (
-        "integrations/outbound.py. Builds a follow-up email. Unwired pending "
-        "the user's decision on whether this system sends mail at all."
-    ),
     "preview": (
-        "integrations/outbound.py. Renders a draft for review without sending. "
-        "Reachable the moment the outbound path is turned on."
-    ),
-    "send_draft": (
-        "integrations/outbound.py. Sends mail as the user and requires an "
-        "explicit approval token; wiring it is the user's call, not a default."
+        "integrations/outbound.py. OutboundDraft.preview renders a draft as "
+        "text. The dashboard shows the subject and body as separate fields "
+        "instead, so nothing calls it — kept because it is the readable form "
+        "for a log line or a console check."
     ),
     "replay": (
         "apply/har.py. Replay needs recorded HAR captures and an installed "

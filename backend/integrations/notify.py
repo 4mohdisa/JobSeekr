@@ -111,6 +111,13 @@ def _confirm_derivation(
     )
 
 
+def _notify_followup(message_id, job_id, to, subject, body, attachments) -> None:
+    """Show a drafted follow-up email. Never sends one."""
+    from backend.integrations.telegram import notify_followup_draft
+
+    notify_followup_draft(message_id, job_id, to, subject, body, attachments)
+
+
 def register_hooks() -> None:
     """Wire the safety layers' notification hooks to this module.
 
@@ -156,6 +163,12 @@ def register_hooks() -> None:
         f"`uv run python -m backend.apply.session login --platform {site}`\n\n"
         "No attempt is made to sign in automatically.",
         Priority.IMMEDIATE,
+    )
+
+    flow.on_followup_drafted = (
+        lambda message_id, job_id, to, subject, body, attachments: _notify_followup(
+            message_id, job_id, to, subject, body, attachments
+        )
     )
 
     facts.on_confirmation_needed = (
