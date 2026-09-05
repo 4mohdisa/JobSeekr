@@ -5,6 +5,7 @@ import { useAsync } from "./lib/hooks";
 import { Button, cx } from "./components/ui";
 
 import { AnswerBank } from "./pages/AnswerBank";
+import { Facts } from "./pages/Facts";
 import { Preferences } from "./pages/Preferences";
 import { Analytics } from "./pages/Analytics";
 import { Applications } from "./pages/Applications";
@@ -21,6 +22,7 @@ const NAV = [
   { to: "/applications", label: "Applications" },
   { to: "/analytics", label: "Analytics" },
   { to: "/campaigns", label: "Campaigns" },
+  { to: "/facts", label: "Facts" },
   { to: "/answers", label: "Answer bank" },
   { to: "/preferences", label: "Preferences" },
   { to: "/templates", label: "Templates" },
@@ -143,6 +145,7 @@ export default function App() {
             <Route path="/applications" element={<Applications />} />
             <Route path="/analytics" element={<Analytics />} />
             <Route path="/campaigns" element={<Campaigns />} />
+            <Route path="/facts" element={<Facts />} />
             <Route path="/answers" element={<AnswerBank />} />
             <Route path="/preferences" element={<Preferences />} />
             <Route path="/templates" element={<Templates />} />

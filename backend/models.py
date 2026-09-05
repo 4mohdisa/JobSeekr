@@ -194,6 +194,37 @@ class Region(str, Enum):
     NZ = "NZ"
 
 
+class FactCategory(str, Enum):
+    """What area of the user's situation a fact describes.
+
+    Coarse and closed. The categories exist so a screening question can be
+    routed to the handful of facts that could possibly answer it, not to
+    describe the user exhaustively — a taxonomy fine enough to need its own
+    documentation would put every fact in a category of one.
+    """
+
+    WORK_RIGHTS = "work_rights"
+    LICENCE = "licence"
+    CHECKS = "checks"
+    """Police checks, working-with-children, clearances."""
+
+    EDUCATION = "education"
+    EXPERIENCE = "experience"
+    AVAILABILITY = "availability"
+    """Notice period, start date, shift work, relocation, travel."""
+
+    COMPENSATION = "compensation"
+    TRANSPORT = "transport"
+    REFEREES = "referees"
+    HEALTH = "health"
+    """Medicals, drug tests, vaccination status."""
+
+    BUSINESS = "business"
+    """ABN, contracting arrangements."""
+
+    OTHER = "other"
+
+
 class PreferenceScope(str, Enum):
     """How widely a preference applies."""
 
@@ -388,6 +419,21 @@ class AnswerBank(SQLModel, table=True):
     answer_value: str
     answer_type: AnswerType = Field(sa_column=_enum_column(AnswerType))
     campaign_id: int | None = Field(default=None, foreign_key="campaign.id", index=True)
+
+    fact_category: FactCategory | None = Field(
+        sa_column=Column(
+            SAEnum(FactCategory, values_callable=_enum_values), nullable=True
+        ),
+        default=None,
+    )
+    """Which category of fact can answer this question, when the row is blank.
+
+    Routing, not an answer. The bank's pattern matching already knows how to
+    recognise "do you hold a driver's licence?" in all its spellings; this says
+    which fact to consult once it has. Without it the derivation layer would
+    need a second question matcher, and two matchers disagreeing about what a
+    question is asking is how the wrong fact answers it.
+    """
 
     region: Region | None = Field(
         sa_column=Column(SAEnum(Region, values_callable=_enum_values), nullable=True),
@@ -775,6 +821,109 @@ class Preference(SQLModel, table=True):
     learned_at: datetime = Field(default_factory=utcnow)
     last_asked_at: datetime | None = None
     confirmed_at: datetime | None = None
+
+
+class Fact(SQLModel, table=True):
+    """Layer 1: something true about the user, in their own words. VERBATIM.
+
+    THE TEXT IS NEVER ALTERED
+        Not normalised, not summarised, not "cleaned up". This is the same rule
+        as hard rule 1 applied to storage: the user wrote "Full SA driver's
+        licence, class C, held since 2019, no restrictions" and that exact
+        sentence is what every derived answer is checked against. A paraphrase
+        would quietly become the source of truth for a legal declaration.
+
+    WHY FREE TEXT AND NOT STRUCTURED FIELDS
+        A licence is not a boolean. It has a state, a class, an issue date and
+        possibly conditions, and the useful shape differs per person and per
+        category. Structured fields would force a schema decision for every
+        category up front, and the first form asking something the schema did
+        not anticipate would have nowhere to put the answer. Prose holds
+        everything; the derivation layer is what turns it into a Yes.
+
+    JURISDICTION
+        NULL means the fact holds everywhere. Set, it means the fact is only
+        evidence about that country — an SA driver's licence answers an
+        Australian question and says nothing about a New Zealand one.
+    """
+
+    __tablename__ = "fact"
+    __table_args__ = (UniqueConstraint("key", name="uq_fact_key"),)
+
+    id: int | None = Field(default=None, primary_key=True)
+    key: str = Field(index=True)
+    """Stable identifier, e.g. "licence" or "work_rights". One fact per key."""
+
+    text: str
+    """The user's own words. Stored verbatim; never rewritten."""
+
+    category: FactCategory = Field(sa_column=_enum_column(FactCategory))
+    jurisdiction: Region | None = Field(
+        sa_column=Column(SAEnum(Region, values_callable=_enum_values), nullable=True),
+        default=None,
+    )
+
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class DerivedAnswer(SQLModel, table=True):
+    """Layer 2: an answer worked out from a fact, then confirmed once.
+
+    The point is that the user is asked at most once per question. "Do you hold
+    a current driver's licence? Yes/No" is derivable from the licence fact, but
+    deriving it is a judgement, so the first derivation goes to Telegram for
+    confirmation. After that it is cached and never asked again.
+
+    STALENESS IS BY CONTENT, NOT TIME
+        ``fact_text_hash`` is the hash of the fact text this was derived from.
+        Editing the fact changes the hash, which invalidates every derivation
+        that came from it — because "class C" becoming "class MR" changes the
+        answer to questions nobody thought to revisit. A timestamp would not
+        catch that; only the content can.
+    """
+
+    __tablename__ = "derived_answer"
+    __table_args__ = (
+        UniqueConstraint(
+            "question_key", "region", name="uq_derived_answer_question_region"
+        ),
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    question_key: str = Field(index=True)
+    """The normalised question this answers. Same normalisation as the bank."""
+
+    question_text: str
+    """The question as the form asked it, for the confirmation message."""
+
+    answer_value: str
+    answer_type: AnswerType = Field(sa_column=_enum_column(AnswerType))
+
+    fact_id: int | None = Field(
+        default=None,
+        sa_column=Column(
+            Integer, ForeignKey("fact.id", ondelete="CASCADE"), nullable=True, index=True
+        ),
+    )
+    """Which fact this came from. CASCADE: a deleted fact takes its derivations
+    with it, because an answer whose evidence no longer exists is not an answer."""
+
+    fact_text_hash: str
+    """Content hash of the fact text at derivation time. See the docstring."""
+
+    region: Region | None = Field(
+        sa_column=Column(SAEnum(Region, values_callable=_enum_values), nullable=True),
+        default=None,
+    )
+
+    reasoning: str | None = None
+    """Why the fact supports this answer, shown when asking for confirmation."""
+
+    confirmed_at: datetime | None = None
+    """NULL until the user says yes. An unconfirmed derivation never answers."""
+
+    created_at: datetime = Field(default_factory=utcnow)
 
 
 class LLMSpend(SQLModel, table=True):
